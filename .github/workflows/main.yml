@@ -36,7 +36,7 @@ jobs:
         for file in posts/*.tex; do
           echo "Processing $file"
           pandoc "$file" --pdf-engine=xelatex -s -o "_site/$(basename ${file%.tex}.html)"
-          echo "<link rel='stylesheet' href='styles/bernoulli-bauhaus.css'>" | cat - "_site/$(basename ${file%.tex}.html)" > temp && mv temp "_site/$(basename ${file%.tex}.html)"
+          echo "<link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'>" | cat - "_site/$(basename ${file%.tex}.html)" > temp && mv temp "_site/$(basename ${file%.tex}.html)"
           if [ $? -ne 0 ]; then
             echo "Error processing $file"
             exit 1
@@ -46,11 +46,11 @@ jobs:
 
     - name: Generate Index Page
       run: |
-        echo "<html><head><title>Blog Index</title><link rel='stylesheet' href='styles/bernoulli-bauhaus.css'></head><body><h1>Blog Posts</h1><ul>" > _site/index.html
+        echo "<html><head><title>Blog Index</title><link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'></head><body><h1>Blog Posts</h1><ul>" > _site/index.html
         for file in _site/*.html; do
           if [ $(basename "$file") != "index.html" ]; then
             title=$(basename "$file" .html)
-            echo "<li><a href='/$file'>$title</a></li>" >> _site/index.html
+            echo "<li><a href='/${title}.html'>$title</a></li>" >> _site/index.html
           fi
         done
         echo "</ul></body></html>" >> _site/index.html
