@@ -1,45 +1,52 @@
-\documentclass[12pt,a4paper]{article}
+\documentclass{article}
+\usepackage{amsmath, amsthm}
 
-% Packages for font and layout
-\usepackage[utf8]{inputenc}
-\usepackage{lipsum} % Package to generate dummy text
-\usepackage{times} % Times font
-\usepackage{geometry} % For easier page size and margin settings
-\usepackage{titlesec} % For customizing sections
-\usepackage{fancyhdr} % Fancy headers and footers
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}[theorem]
+\newtheorem{lemma}[theorem]{Lemma}
 
-% Page geometry setup
-\geometry{a4paper, portrait, margin=1in}
-
-% Header and footer setup
-\pagestyle{fancy}
-\fancyhf{} % clear all header and footer fields
-\fancyhead[L]{\slshape \MakeUppercase{Beautiful Lorem Ipsum}}
-\fancyhead[R]{\slshape \leftmark}
-\fancyfoot[C]{\thepage}
-
-% Section title formatting
-\titleformat{\section}[block]{\Large\bfseries}{\thesection}{1em}{}
-\titleformat{\subsection}[block]{\large\bfseries}{\thesubsection}{1em}{}
+\title{Proof of the Weak Law of Large Numbers}
+\author{Your Name}
+\date{\today}
 
 \begin{document}
 
-\title{Beautiful Lorem Ipsum Article}
-\author{Author Name}
-\date{\today}
 \maketitle
 
+\begin{abstract}
+    In this article, we present a proof of the Weak Law of Large Numbers (WLLN), a fundamental theorem in probability theory.
+\end{abstract}
+
 \section{Introduction}
-\lipsum[1-2]
 
-\section{Main Body}
-\subsection{Background}
-\lipsum[3-4]
+The Weak Law of Large Numbers (WLLN) is a fundamental result in probability theory, which states that the sample mean of a sequence of independent and identically distributed (i.i.d.) random variables converges in probability to the population mean. In this article, we provide a proof of the WLLN.
 
-\subsection{Analysis}
-\lipsum[5-6]
+\section{Theorem Statement}
+
+\begin{theorem}[Weak Law of Large Numbers]
+    Let $X_1, X_2, \ldots, X_n$ be i.i.d. random variables with mean $\mu$ and finite variance $\sigma^2$. Then, for any $\epsilon > 0$, we have
+    \[
+        \lim_{n \to \infty} \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) = 0,
+    \]
+    where $\bar{X}_n = \frac{1}{n} \sum_{i=1}^{n} X_i$ is the sample mean.
+\end{theorem}
+
+\section{Proof}
+
+\begin{proof}
+    Let $\epsilon > 0$ be given. By Chebyshev's inequality,
+    \begin{align*}
+        \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) &\leq \frac{\mathrm{E}[(\bar{X}_n - \mu)^2]}{\epsilon^2} \\
+        &= \frac{\mathrm{Var}(\bar{X}_n)}{\epsilon^2} \\
+        &= \frac{\sigma^2/n}{\epsilon^2} \\
+        &= \frac{\sigma^2}{n\epsilon^2}.
+    \end{align*}
+    
+    As $n \to \infty$, $\frac{\sigma^2}{n\epsilon^2} \to 0$. Therefore, $\lim_{n \to \infty} \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) = 0$, which completes the proof.
+\end{proof}
 
 \section{Conclusion}
-\lipsum[7-8]
+
+The Weak Law of Large Numbers ensures that the sample mean converges to the population mean in probability as the sample size increases. This fundamental result has numerous applications in statistics and probability theory.
 
 \end{document}
