@@ -1,0 +1,31 @@
+name: Build LaTeX Blog
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'posts/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install Pandoc
+      run: sudo apt-get install pandoc
+
+    - name: Convert LaTeX to HTML
+      run: |
+        mkdir _site
+        for file in posts/*.tex; do
+          pandoc "$file" -s -o "_site/$(basename ${file%.tex}.html)"
+        done
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./_site
