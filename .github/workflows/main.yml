@@ -14,20 +14,29 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Install Full TeX Live
+    - name: Cache LaTeX and Pandoc
+      uses: actions/cache@v2
+      with:
+        path: |
+          /usr/share/texlive
+          /usr/share/pandoc
+        key: ${{ runner.os }}-texlive-pandoc-${{ hashFiles('**/*.tex') }}
+
+    - name: Install TeX Live and Pandoc
       run: |
         sudo apt-get update
-        sudo apt-get install -y texlive-full
-
-    - name: Install Pandoc
-      run: sudo apt-get install -y pandoc
+        sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
 
     - name: Convert LaTeX to HTML
       run: |
-        mkdir _site
+        mkdir -p _site
         for file in posts/*.tex; do
           echo "Processing $file"
           pandoc "$file" --pdf-engine=xelatex -s -o "_site/$(basename ${file%.tex}.html)"
+          if [ $? -ne 0 ]; then
+            echo "Error processing $file"
+            exit 1
+          fi
           echo "Generated HTML for $(basename ${file%.tex}.html)"
         done
 
