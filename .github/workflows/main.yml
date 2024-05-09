@@ -37,3 +37,20 @@ jobs:
             echo "Error processing $file"
             exit 1
           fi
+          echo "Generated HTML for $(basename ${file%.tex}.html)"
+        done
+
+    - name: Generate Index Page
+      run: |
+        echo "<html><head><title>Blog Index</title></head><body><h1>Blog Posts</h1><ul>" > _site/index.html
+        for file in _site/*.html; do
+          title=$(basename "$file" .html)
+          echo "<li><a href='$file'>$title</a></li>" >> _site/index.html
+        done
+        echo "</ul></body></html>" >> _site/index.html
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./_site
