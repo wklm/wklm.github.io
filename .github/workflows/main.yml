@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'posts/**'
+      - 'tex_posts/**'
 
 jobs:
   build:
@@ -14,14 +14,19 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
+    - name: Install Full TeX Live
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y texlive-full
+
     - name: Install Pandoc
-      run: sudo apt-get install pandoc
+      run: sudo apt-get install -y pandoc
 
     - name: Convert LaTeX to HTML
       run: |
         mkdir _site
-        for file in posts/*.tex; do
-          pandoc "$file" -s -o "_site/$(basename ${file%.tex}.html)"
+        for file in tex_posts/*.tex; do
+          pandoc "$file" --pdf-engine=xelatex -s -o "_site/$(basename ${file%.tex}.html)"
         done
 
     - name: Deploy to GitHub Pages
