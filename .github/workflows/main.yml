@@ -26,7 +26,9 @@ jobs:
       run: |
         mkdir _site
         for file in posts/*.tex; do
+          echo "Processing $file"
           pandoc "$file" --pdf-engine=xelatex -s -o "_site/$(basename ${file%.tex}.html)"
+          echo "Generated HTML for $(basename ${file%.tex}.html)"
         done
 
     - name: Deploy to GitHub Pages
