@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'tex_posts/**'
+      - 'posts/**'
 
 jobs:
   build:
@@ -25,7 +25,7 @@ jobs:
     - name: Convert LaTeX to HTML
       run: |
         mkdir _site
-        for file in tex_posts/*.tex; do
+        for file in posts/*.tex; do
           pandoc "$file" --pdf-engine=xelatex -s -o "_site/$(basename ${file%.tex}.html)"
         done
 
