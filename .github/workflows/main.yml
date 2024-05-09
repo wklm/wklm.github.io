@@ -23,10 +23,11 @@ jobs:
           /usr/share/pandoc
         key: ${{ runner.os }}-texlive-pandoc-${{ hashFiles('**/*.tex') }}
 
-    - name: Install TeX Live and Pandoc
+    - name: Install TeX Live, Pandoc, and KaTeX
       run: |
         sudo apt-get update
         sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
+        npm install katex --save
 
     - name: Convert LaTeX to HTML
       run: |
