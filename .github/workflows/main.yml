@@ -1,4 +1,4 @@
-name: Build LaTeX Blog with MathJax
+name: Build LaTeX Blog with Dynamic Index
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'posts/**'
-      - 'styles/**'
       - '.github/workflows/main.yml'
 
 jobs:
@@ -21,26 +20,32 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
 
-    - name: Convert LaTeX to HTML
+    - name: Generate Dynamic Index.tex
+      run: |
+        echo "\\documentclass{article}" > index.tex
+        echo "\\usepackage{hyperref}" >> index.tex
+        echo "\\title{Blog Index}" >> index.tex
+        echo "\\begin{document}" >> index.tex
+        echo "\\maketitle" >> index.tex
+        echo "\\section{Blog Posts}" >> index.tex
+        for file in posts/*.tex; do
+          title=$(basename "$file" .tex)
+          date=$(git log -1 --format=%ad --date=short -- "$file")
+          echo "\\subsection*{$date: $title}" >> index.tex
+          echo "\\href{./$(basename "$file" .tex).html}{$title}" >> index.tex
+          echo "" >> index.tex
+        done
+        echo "\\end{document}" >> index.tex
+
+    - name: Convert LaTeX Documents to HTML
       run: |
         mkdir -p output
-        for file in posts/*.tex; do
+        for file in posts/*.tex index.tex; do
           pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
-          # Adjust the HTML to include the MathJax script and ensure proper HTML structure
-          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><link rel="stylesheet" href="../styles/bernoulli-bauhaus.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js"></script>|' output/$(basename "${file%.tex}.html")
-          echo '</head><body>' | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
+          # Add MathJax for LaTeX rendering
+          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js"></script></head><body>|' output/$(basename "${file%.tex}.html")
+          echo '</body></html>' | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
         done
-
-    - name: Generate Index Page
-      run: |
-        echo "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>Blog Index</title><link rel='stylesheet' href='styles/bernoulli-bauhaus.css'></head><body><h1>Blog Posts</h1><ul>" > output/index.html
-        for file in output/*.html; do
-          if [ $(basename "$file") != "index.html" ]; then
-            title=$(basename "$file" .html)
-            echo "<li><a href='${title}.html'>$title</a></li>" >> output/index.html
-          fi
-        done
-        echo "</ul></body></html>" >> output/index.html
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
