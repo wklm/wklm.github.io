@@ -7,7 +7,7 @@ on:
     paths:
       - 'posts/**'
       - 'index_template.tex'
-      - '.github/workflows/**'
+      - '.github/workflows/main.yml'
 
 jobs:
   build:
@@ -19,26 +19,45 @@ jobs:
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc git  # Ensure git is installed
+        sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
 
-    - name: Generate Dynamic Content for Index
+    - name: Generate Dynamic Index.tex from Template
       run: |
+        # Copy the template and start modifying it
         cp index_template.tex index.tex
-        echo "\\section*{Articles}" >> index.tex
+        
+        # Prepare to insert posts
+        sed -i '/%PostsStart/r /dev/stdin' index.tex <<EOF
+        EOF
+    
+        # Insert each post dynamically
         for file in posts/*.tex; do
           title=$(basename "$file" .tex)
           date=$(git log -1 --format="%ad" --date=short -- "$file")
-          echo "\\subsection*{\\href{./$(basename "$file" .tex).html}{$title}}" >> index.tex
-          echo "\\textit{Published on: $date}" >> index.tex
+          echo "\subsection*{\href{./$(basename "$file" .tex).html}{$title}}" >> index.tex
+          echo "\textit{Published on: $date}" >> index.tex
+          echo "\addcontentsline{toc}{subsection}{$title}" >> index.tex
+          echo "" >> index.tex
         done
-        echo "\\end{document}" >> index.tex
+    
+        # Cleanup the placeholder
+        sed -i '/%PostsEnd/d' index.tex
+        sed -i '/%PostsStart/d' index.tex
+    
 
-    - name: Compile LaTeX Document
+    - name: Convert LaTeX Documents to HTML
       run: |
-        pdflatex index.tex  # Assuming pdflatex is used; adjust if using another LaTeX compiler like XeLaTeX or LuaTeX
+        mkdir -p output
+        pdflatex index.tex
+        for file in posts/*.tex index.tex; do
+          pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
+          # Add MathJax for LaTeX rendering
+          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js"></script></head><body>|' output/$(basename "${file%.tex}.html")
+          echo '</body></html>' | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
+        done
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: .
+        publish_dir: ./output
