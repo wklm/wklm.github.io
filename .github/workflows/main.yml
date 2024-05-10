@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'posts/**'
+      - 'index.tex'
       - '.github/workflows/main.yml'
 
 jobs:
@@ -20,26 +21,34 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
 
-    - name: Generate Dynamic Index.tex
+    - name: Generate Dynamic Index.tex from Template
       run: |
-        echo "\\documentclass{article}" > index.tex
-        echo "\\usepackage{hyperref}" >> index.tex
-        echo "\\title{Blog Index}" >> index.tex
-        echo "\\begin{document}" >> index.tex
-        echo "\\maketitle" >> index.tex
-        echo "\\section{Blog Posts}" >> index.tex
+        # Copy the template and start modifying it
+        cp index_template.tex index.tex
+        
+        # Prepare to insert posts
+        sed -i '/%PostsStart/r /dev/stdin' index.tex <<EOF
+        EOF
+    
+        # Insert each post dynamically
         for file in posts/*.tex; do
           title=$(basename "$file" .tex)
-          date=$(git log -1 --format=%ad --date=short -- "$file")
-          echo "\\subsection*{$date: $title}" >> index.tex
-          echo "\\href{./$(basename "$file" .tex).html}{$title}" >> index.tex
+          date=$(git log -1 --format="%ad" --date=short -- "$file")
+          echo "\subsection*{\href{./$(basename "$file" .tex).html}{$title}}" >> index.tex
+          echo "\textit{Published on: $date}" >> index.tex
+          echo "\addcontentsline{toc}{subsection}{$title}" >> index.tex
           echo "" >> index.tex
         done
-        echo "\\end{document}" >> index.tex
+    
+        # Cleanup the placeholder
+        sed -i '/%PostsEnd/d' index.tex
+        sed -i '/%PostsStart/d' index.tex
+    
 
     - name: Convert LaTeX Documents to HTML
       run: |
         mkdir -p output
+        pandoc index.tex --to=html5 --standalone --mathjax --output=output/index.html
         for file in posts/*.tex index.tex; do
           pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
           # Add MathJax for LaTeX rendering
