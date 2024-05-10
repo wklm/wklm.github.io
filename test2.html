@@ -15,6 +15,7 @@
     div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
     ul.task-list{list-style: none;}
   </style>
+  <script src="/usr/share/javascript/mathjax/tex-mml-chtml.js" type="text/javascript"></script>
 </head>
 <body>
 <header id="title-block-header">
@@ -24,15 +25,15 @@
 <h1 id="introduction">Introduction</h1>
 <p>The Weak Law of Large Numbers (WLLN) is a fundamental result in probability theory, which states that the sample mean of a sequence of independent and identically distributed (i.i.d.) random variables converges in probability to the population mean. In this article, we provide a proof of the WLLN.</p>
 <h1 id="theorem-statement">Theorem Statement</h1>
-<p>Let <span class="math inline"><em>X</em><sub>1</sub>, <em>X</em><sub>2</sub>, …, <em>X</em><sub><em>n</em></sub></span> be i.i.d. random variables with mean <span class="math inline"><em>μ</em></span> and finite variance <span class="math inline"><em>σ</em><sup>2</sup></span>. Then, for any <span class="math inline"><em>ϵ</em> &gt; 0</span>, we have <br /><span class="math display">lim<sub><em>n</em> → ∞</sub><em>P</em>(|<em>X̄</em><sub><em>n</em></sub>−<em>μ</em>|≥<em>ϵ</em>) = 0,</span><br /> where <span class="math inline">$\bar{X}_n = \frac{1}{n} \sum_{i=1}^{n} X_i$</span> is the sample mean.</p>
+<p>Let <span class="math inline">\(X_1, X_2, \ldots, X_n\)</span> be i.i.d. random variables with mean <span class="math inline">\(\mu\)</span> and finite variance <span class="math inline">\(\sigma^2\)</span>. Then, for any <span class="math inline">\(\epsilon &gt; 0\)</span>, we have <span class="math display">\[\lim_{n \to \infty} \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) = 0,\]</span> where <span class="math inline">\(\bar{X}_n = \frac{1}{n} \sum_{i=1}^{n} X_i\)</span> is the sample mean.</p>
 <h1 id="proof">Proof</h1>
-<p>Let <span class="math inline"><em>ϵ</em> &gt; 0</span> be given. By Chebyshev’s inequality, <br /><span class="math display">$$\begin{aligned}
+<p>Let <span class="math inline">\(\epsilon &gt; 0\)</span> be given. By Chebyshev’s inequality, <span class="math display">\[\begin{aligned}
         \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) &amp;\leq \frac{\mathrm{E}[(\bar{X}_n - \mu)^2]}{\epsilon^2} \\
         &amp;= \frac{\mathrm{Var}(\bar{X}_n)}{\epsilon^2} \\
         &amp;= \frac{\sigma^2/n}{\epsilon^2} \\
-        &amp;= \frac{\sigma^2}{n\epsilon^2}.
-    \end{aligned}$$</span><br /></p>
-<p>As <span class="math inline"><em>n</em> → ∞</span>, <span class="math inline">$\frac{\sigma^2}{n\epsilon^2} \to 0$</span>. Therefore, <span class="math inline">lim<sub><em>n</em> → ∞</sub><em>P</em>(|<em>X̄</em><sub><em>n</em></sub>−<em>μ</em>|≥<em>ϵ</em>) = 0</span>, which completes the proof.</p>
+        &amp;= \frac{\sigma^2}{n\epsilon^2} .
+    \end{aligned}\]</span></p>
+<p>As <span class="math inline">\(n \to \infty\)</span>, <span class="math inline">\(\frac{\sigma^2}{n\epsilon^2} \to 0\)</span>. Therefore, <span class="math inline">\(\lim_{n \to \infty} \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) = 0\)</span>, which completes the proof.</p>
 <h1 id="conclusion">Conclusion</h1>
 <p>The Weak Law of Large Numbers ensures that the sample mean converges to the population mean in probability ass the sample size increases. This fundamental result has numerous applications in statistics and probability theory.</p>
 </body>
