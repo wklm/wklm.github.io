@@ -1,4 +1,4 @@
-name: Build LaTeX Blog with Dynamic Index
+name: Build LaTeX Blog with TikZ
 
 on:
   push:
@@ -7,57 +7,41 @@ on:
     paths:
       - 'posts/**'
       - 'index_template.tex'
-      - '.github/workflows/main.yml'
+      - '.github/workflows/**'
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
+    container:
+      image: dxjoke/tectonic-docker  # This Docker image contains a full LaTeX setup
+
     steps:
     - uses: actions/checkout@v2
 
-    - name: Install Dependencies
+    - name: Generate Dynamic Content for Index
       run: |
-        sudo apt-get update
-        sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
-
-    - name: Generate Dynamic Index.tex from Template
-      run: |
-        # Copy the template and start modifying it
         cp index_template.tex index.tex
-        
-        # Prepare to insert posts
-        sed -i '/%PostsStart/r /dev/stdin' index.tex <<EOF
-        EOF
-    
-        # Insert each post dynamically
+        echo "\\section*{Articles}" >> index.tex
         for file in posts/*.tex; do
           title=$(basename "$file" .tex)
           date=$(git log -1 --format="%ad" --date=short -- "$file")
-          echo "\subsection*{\href{./$(basename "$file" .tex).html}{$title}}" >> index.tex
-          echo "\textit{Published on: $date}" >> index.tex
-          echo "\addcontentsline{toc}{subsection}{$title}" >> index.tex
-          echo "" >> index.tex
+          echo "\\subsection*{\\href{./$(basename "$file" .tex).html}{$title}}" >> index.tex
+          echo "\\textit{Published on: $date}" >> index.tex
         done
-    
-        # Cleanup the placeholder
-        sed -i '/%PostsEnd/d' index.tex
-        sed -i '/%PostsStart/d' index.tex
-    
+        echo "\\end{document}" >> index.tex
 
-    - name: Convert LaTeX Documents to HTML
+    - name: Compile LaTeX Document
       run: |
-        mkdir -p output
-        pandoc index.tex --to=html5 --standalone --mathjax --output=output/index.html
-        for file in posts/*.tex index.tex; do
-          pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
-          # Add MathJax for LaTeX rendering
-          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js"></script></head><body>|' output/$(basename "${file%.tex}.html")
-          echo '</body></html>' | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
-        done
+        tectonic index.tex  # Tectonic is a modern LaTeX compilation tool that handles package installations
+
+    - name: Convert to HTML (Optional)
+      run: |
+        pandoc index.tex -s --from latex --to html -o index.html
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./output
+        publish_dir: .
+        keep_files: true  # Keep existing files at deployment
