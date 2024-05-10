@@ -1,4 +1,4 @@
-name: Build LaTeX Blog
+name: Build LaTeX Blog with MathJax
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
     paths:
       - 'posts/**'
       - 'styles/**'
-      - '.github/workflows/main.yml'
 
 jobs:
   build:
@@ -16,22 +15,19 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Setup Environment
+    - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
-        npm install katex
 
     - name: Convert LaTeX to HTML
       run: |
         mkdir -p output
         for file in posts/*.tex; do
           pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
-          # Modify the HTML to include correct headers, links to KaTeX, and CSS
-          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" integrity="sha384-wcIxkf4k558AjM3Yz3BBFQUbk/zgIYC2R0QpeeYb+TwlBVMrlgLqwRjRtGZiK7ww" crossorigin="anonymous"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js" integrity="sha384-hIoBPJpTUs74ddyc4bFZSM1TVlQDA60VBbJS0oA934VSz82sBx1X7kSx2ATBDIyd" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>|' output/$(basename "${file%.tex}.html")
-          echo "<link rel='stylesheet' href='styles/bernoulli-bauhaus.css'></head><body>" | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
-          # Remove local MathJax script and fix any other structural issues
-          sed -i '/<script src="\/usr\/share\/javascript\/mathjax/d' output/$(basename "${file%.tex}.html")
+          # Adjust the HTML to include the MathJax script
+          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><link rel="stylesheet" href="styles/bernoulli-bauhaus.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js" integrity="sha384-5S/a2XtR0cOF4IDJkLt5/wzPqL1WFPKXFfQSqTwKdrTOmz2GVfM2NP6k2mxE9N9q" crossorigin="anonymous"></script>|' output/$(basename "${file%.tex}.html")
+          echo '</head><body>' | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
         done
 
     - name: Deploy to GitHub Pages
