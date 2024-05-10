@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'posts/**'
-      - 'styles/**'  # Ensure changes in styles also trigger the build
+      - 'styles/**'
 
 jobs:
   build:
@@ -15,60 +15,23 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: Cache LaTeX and Pandoc
-      uses: actions/cache@v2
-      with:
-        path: |
-          /usr/share/texlive
-          /usr/share/pandoc
-        key: ${{ runner.os }}-texlive-pandoc-${{ hashFiles('**/*.tex') }}
-
-    - name: Install TeX Live, Pandoc, and KaTeX
+    - name: Setup Environment
       run: |
         sudo apt-get update
         sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc
         npm install katex
 
-        
-    - name: Convert LaTeX to HTML and Add KaTeX
+    - name: Convert LaTeX to HTML
       run: |
-        mkdir -p temp
-        cp styles/bernoulli-bauhaus.css temp/
+        mkdir -p output
         for file in posts/*.tex; do
-          echo "Processing $file"
-          # Convert LaTeX to HTML, use mathjax for conversion placeholder only
-          pandoc "$file" --mathjax --pdf-engine=xelatex -s -o "temp/$(basename ${file%.tex}.html)"
-          # Prepare HTML content for correct structure
-          sed -i 's|</head>||g' "temp/$(basename ${file%.tex}.html)"
-          sed -i 's|<head>|<!DOCTYPE html><html><head>|' "temp/$(basename ${file%.tex}.html)"
-          sed -i '/<html xmlns/d' "temp/$(basename ${file%.tex}.html)"
-          # Inject KaTeX scripts and styles, ensuring they're in the correct order and no duplicate head
-          sed -i '1s|^|<meta charset="utf-8"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" integrity="sha384-wcIxkf4k558AjM3Yz3BBFQUbk/zgIYC2R0QpeeYb+TwlBVMrlgLqwRjRtGZiK7ww" crossorigin="anonymous"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js" integrity="sha384-hIoBPJpTUs74ddyc4bFZSM1TVlQDA60VBbJS0oA934VSz82sBx1X7kSx2ATBDIyd" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>|' "temp/$(basename ${file%.tex}.html)"
-          echo "<link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'></head><body>" | cat - "temp/$(basename ${file%.tex}.html)" > temp/tempfile && mv temp/tempfile "$file"
-          if [ $? -ne 0 ]; then
-            echo "Error processing $file"
-            exit 1
-          fi
-          echo "Generated HTML for $file"
+          pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
+          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" integrity="sha384-wcIxkf4k558AjM3Yz3BBFQUbk/zgIYC2R0QpeeYb+TwlBVMrlgLqwRjRtGZiK7ww" crossorigin="anonymous"><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js" integrity="sha384-hIoBPJpTUs74ddyc4bFZSM1TVlQDA60VBbJS0oA934VSz82sBx1X7kSx2ATBDIyd" crossorigin="anonymous"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>|' output/$(basename "${file%.tex}.html")
+          echo "<link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'></head><body>" | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
         done
-      shell: /usr/bin/bash -e {0}
-    
-      
-
-
-    - name: Generate Index Page
-      run: |
-        echo "<html><head><title>Blog Index</title><link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'></head><body><h1>Blog Posts</h1><ul>" > _site/index.html
-        for file in _site/*.html; do
-          if [ $(basename "$file") != "index.html" ]; then
-            title=$(basename "$file" .html)
-            echo "<li><a href='/${title}.html'>$title</a></li>" >> _site/index.html
-          fi
-        done
-        echo "</ul></body></html>" >> _site/index.html
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./_site
+        publish_dir: ./output
