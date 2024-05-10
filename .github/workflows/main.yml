@@ -1,4 +1,4 @@
-name: Build LaTeX Blog with TikZ
+name: Build LaTeX Blog with Dynamic Index
 
 on:
   push:
@@ -13,11 +13,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    container:
-      image: dxjoke/tectonic-docker  # This Docker image contains a full LaTeX setup
-
     steps:
     - uses: actions/checkout@v2
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y texlive-base texlive-latex-extra texlive-fonts-recommended pandoc git  # Ensure git is installed
 
     - name: Generate Dynamic Content for Index
       run: |
@@ -33,15 +35,10 @@ jobs:
 
     - name: Compile LaTeX Document
       run: |
-        tectonic index.tex  # Tectonic is a modern LaTeX compilation tool that handles package installations
-
-    - name: Convert to HTML (Optional)
-      run: |
-        pandoc index.tex -s --from latex --to html -o index.html
+        pdflatex index.tex  # Assuming pdflatex is used; adjust if using another LaTeX compiler like XeLaTeX or LuaTeX
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: .
-        keep_files: true  # Keep existing files at deployment
