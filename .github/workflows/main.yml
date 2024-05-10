@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'posts/**'
-      - 'index.tex'
+      - 'index_template.tex'
       - '.github/workflows/main.yml'
 
 jobs:
