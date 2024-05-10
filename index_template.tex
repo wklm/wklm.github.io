@@ -1,48 +1,65 @@
-\documentclass[12pt,twoside]{article}
+\documentclass[12pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{charter} % Font choice
 \usepackage{geometry}
-\geometry{a4paper, top=3cm, bottom=3cm, left=2.5cm, right=2.5cm}
+\geometry{top=2cm, bottom=2cm, left=2cm, right=2cm}
+\usepackage{tikz}
 \usepackage{titlesec}
-\usepackage{fancyhdr} % For better header handling
+\usepackage{xcolor}
 \usepackage{hyperref}
-\usepackage{color}
 
-% Color and hyperlink setup
-\definecolor{darkred}{rgb}{0.6,0,0}
+% Hyperlink setup
 \hypersetup{
     colorlinks=true,
-    linkcolor=darkred,
-    filecolor=magenta,      
-    urlcolor=darkred,
+    linkcolor=blue,
+    urlcolor=blue,
 }
 
-% Heading styles
-\titleformat{\section}[block]{\Large\bfseries\scshape\filcenter}{}{1em}{}
-\titleformat{\subsection}[hang]{\large\bfseries}{}{1em}{}
+% Define custom colors
+\definecolor{deepblue}{rgb}{0.0, 0.18, 0.39}
+\definecolor{skyblue}{rgb}{0.53, 0.81, 0.92}
+\definecolor{mountaingray}{rgb}{0.43, 0.5, 0.5}
 
-% Headers and footers
-\pagestyle{fancy}
-\fancyhf{}
-\fancyhead[LE,RO]{\textsc{Annals of Blog Probability}}
-\fancyhead[RE,LO]{\textsc{Index of Blog Posts}}
-\fancyfoot[CE,CO]{\thepage}
-\fancyfoot[LE,RO]{\textsc{Updated: \today}}
+% Title formatting
+\titleformat{\section}[display]
+  {\normalfont\huge\bfseries\color{deepblue}}
+  {\thesection}{1em}{\Huge}
 
-\title{\vspace{-1.5cm}Annals of Blog Probability \\ \large An Index to Posts}
+\title{\vspace{-5cm}\textbf{Annals of Blogging Probability}\\\large \textit{Volume 1, Issue 1, 2024}}
+\author{}
 \date{}
 
 \begin{document}
+% Background
+\begin{tikzpicture}[remember picture,overlay]
+    \fill[skyblue] (current page.south west) rectangle (current page.north east);
+
+    % Draw mountains
+    \begin{scope}[shift={(0,-4)}]
+        \fill[mountaingray] (0,1) -- (2,4) -- (4,2) -- (6,5) -- (8,3) -- (10,6) -- (12,2) -- (12,0) -- (0,0) -- cycle;
+    \end{scope}
+
+    % Add probability curve (normal distribution curve as an example)
+    \begin{scope}[shift={(4,0)},scale=0.8]
+        \draw[thick,white] plot[domain=0:8,samples=50,smooth] (\x,{4*exp(-(\x-4)*(\x-4)/4)});
+    \end{scope}
+\end{tikzpicture}
 
 \maketitle
 
-\tableofcontents
-\newpage
+\begin{center}
+    \Large \textbf{Featured Articles}
+\end{center}
 
-\section*{Articles}
-\addcontentsline{toc}{section}{Articles}
+\section*{Introduction}
+Welcome to the inaugural issue of the \textit{Annals of Blogging Probability}. This publication is dedicated to exploring the intricate world of probability and statistics through detailed blog posts.
+
 %PostsStart
 %PostsEnd
+
+\vfill
+\begin{center}
+    \large Follow us on \href{https://twitter.com/yourhandle}{Twitter} and \href{https://github.com/yourhandle}{GitHub}
+\end{center}
 
 \end{document}
