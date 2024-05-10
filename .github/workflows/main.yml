@@ -33,14 +33,14 @@ jobs:
 
     - name: Generate Index Page
       run: |
-        echo "<html><head><title>Blog Index</title><link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'></head><body><h1>Blog Posts</h1><ul>" > _site/index.html
-        for file in _site/*.html; do
+        echo "<html><head><title>Blog Index</title><link rel='stylesheet' href='/styles/bernoulli-bauhaus.css'></head><body><h1>Blog Posts</h1><ul>" > index.html
+        for file in *.html; do
           if [ $(basename "$file") != "index.html" ]; then
             title=$(basename "$file" .html)
-            echo "<li><a href='/${title}.html'>$title</a></li>" >> _site/index.html
+            echo "<li><a href='/${title}.html'>$title</a></li>" >> index.html
           fi
         done
-        echo "</ul></body></html>" >> _site/index.html
+        echo "</ul></body></html>" >> index.html
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
