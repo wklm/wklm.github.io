@@ -26,8 +26,8 @@ jobs:
         mkdir -p output
         for file in posts/*.tex; do
           pandoc $file --to=html5 --standalone --mathjax --output=output/$(basename "${file%.tex}.html")
-          # Adjust the HTML to include the MathJax script
-          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><link rel="stylesheet" href="styles/bernoulli-bauhaus.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js" integrity="sha384-5S/a2XtR0cOF4IDJkLt5/wzPqL1WFPKXFfQSqTwKdrTOmz2GVfM2NP6k2mxE9N9q" crossorigin="anonymous"></script>|' output/$(basename "${file%.tex}.html")
+          # Adjust the HTML to include the MathJax script and remove any local script references
+          sed -i '1s|^|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"><link rel="stylesheet" href="styles/bernoulli-bauhaus.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.0/es5/tex-mml-chtml.js"></script>|' output/$(basename "${file%.tex}.html")
           echo '</head><body>' | cat - output/$(basename "${file%.tex}.html") > temp.html && mv temp.html output/$(basename "${file%.tex}.html")
         done
 
