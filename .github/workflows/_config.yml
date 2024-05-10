@@ -1,4 +1,0 @@
-collections:
-    texfiles:
-      output: true
-      permalink: /posts/:name
