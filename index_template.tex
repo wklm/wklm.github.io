@@ -1,16 +1,42 @@
 \documentclass[12pt,twoside]{article}
-\usepackage{hyperref}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{charter} % Font choice
 \usepackage{geometry}
-\geometry{a4paper, margin=1in}
+\geometry{a4paper, top=3cm, bottom=3cm, left=2.5cm, right=2.5cm}
 \usepackage{titlesec}
-\titleformat{\section}[block]{\large\bfseries\filcenter}{}{1em}{}
+\usepackage{fancyhdr} % For better header handling
+\usepackage{hyperref}
+\usepackage{color}
 
-\title{Index of Blog Posts}
-\date{\today}
+% Color and hyperlink setup
+\definecolor{darkred}{rgb}{0.6,0,0}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=darkred,
+    filecolor=magenta,      
+    urlcolor=darkred,
+}
+
+% Heading styles
+\titleformat{\section}[block]{\Large\bfseries\scshape\filcenter}{}{1em}{}
+\titleformat{\subsection}[hang]{\large\bfseries}{}{1em}{}
+
+% Headers and footers
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\textsc{Annals of Blog Probability}}
+\fancyhead[RE,LO]{\textsc{Index of Blog Posts}}
+\fancyfoot[CE,CO]{\thepage}
+\fancyfoot[LE,RO]{\textsc{Updated: \today}}
+
+\title{\vspace{-1.5cm}Annals of Blog Probability \\ \large An Index to Posts}
+\date{}
 
 \begin{document}
 
 \maketitle
+
 \tableofcontents
 \newpage
 
