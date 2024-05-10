@@ -31,7 +31,7 @@ The Weak Law of Large Numbers (WLLN) is a fundamental result in probability theo
     where $\bar{X}_n = \frac{1}{n} \sum_{i=1}^{n} X_i$ is the sample mean.
 \end{theorem}
 
-\section{Proof}
+\section{Proof} 
 
 \begin{proof}
     Let $\epsilon > 0$ be given. By Chebyshev's inequality,
@@ -39,7 +39,7 @@ The Weak Law of Large Numbers (WLLN) is a fundamental result in probability theo
         \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) &\leq \frac{\mathrm{E}[(\bar{X}_n - \mu)^2]}{\epsilon^2} \\
         &= \frac{\mathrm{Var}(\bar{X}_n)}{\epsilon^2} \\
         &= \frac{\sigma^2/n}{\epsilon^2} \\
-        &= \frac{\sigma^2}{n\epsilon^2}.
+        &= \frac{\sigma^2}{n\epsilon^2} .
     \end{align*}
     
     As $n \to \infty$, $\frac{\sigma^2}{n\epsilon^2} \to 0$. Therefore, $\lim_{n \to \infty} \mathrm{P}\left(|\bar{X}_n - \mu| \geq \epsilon\right) = 0$, which completes the proof.
