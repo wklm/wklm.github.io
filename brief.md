@@ -1,12 +1,12 @@
-# wklm.online — Editorial & Design Brief
+# wklm.github.io — Editorial & Design Brief
 
-This document describes the *intent* of the site at `wklm.online`. The
+This document describes the *intent* of the site at `wklm.github.io`. The
 companion `README.md` covers the build. Here I am concerned with what
 the site is trying to be, how it should read, and how it should look.
 
 ## Premise
 
-`wklm.online` is a personal publication of technical essays. The
+`wklm.github.io` is a personal publication of technical essays. The
 subject matter is narrow: formal verification, the tools we use to
 build software, visual design, and the places where those concerns
 overlap. The generator that builds it is written in Rocq and extracted

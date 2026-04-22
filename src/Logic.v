@@ -684,13 +684,13 @@ Definition page_shell (depth page_title page_description body_class nav_label na
     (if is_empty page_description then ""
      else concat_all ("<meta name='description' content='" :: html_escape page_description :: "'>" :: nil)) ::
     "<title>" :: html_escape page_title ::
-    (if string_eqb page_title "wklm.online" then "" else " — wklm.online") ::
+    (if string_eqb page_title "wklm.github.io" then "" else " — wklm.github.io") ::
     "</title>" ::
     "<link rel='stylesheet' href='" :: html_escape (rel_stylesheet depth) :: "'>" ::
     "</head><body class='" :: body_class :: "'>" ::
     "<a class='skip-link' href='#main'>skip to text</a>" ::
     "<div class='page-shell'>" ::
-    "<header class='site-header'><a class='site-mark' href='" :: html_escape (rel_index depth) :: "'>wklm.online</a>" ::
+    "<header class='site-header'><a class='site-mark' href='" :: html_escape (rel_index depth) :: "'>wklm.github.io</a>" ::
     (if is_empty nav_label then ""
      else concat_all ("<nav class='site-nav'><a href='" :: html_escape nav_href :: "'>" :: html_escape nav_label :: "</a></nav>" :: nil)) ::
     "</header>" ::
@@ -778,7 +778,7 @@ Definition render_index_page (posts : list Post) : string :=
   let body := concat_all (
     "<main id='main' class='index'>" ::
     "<ul class='posts'>" :: concat_all (render_post_list posts) :: "</ul></main>" :: nil) in
-  page_shell "" "wklm.online" "" "home" "" "" body.
+  page_shell "" "wklm.github.io" "" "home" "" "" body.
 
 Definition stylesheet : string :=
   concat_all (
