@@ -31,15 +31,20 @@ honestly.
 What holds by construction of the toolchain:
 
 - **Totality.** Every Rocq `Fixpoint` in `Logic.v` recurses on
-  decreasing structural arguments, most of them on an explicit `nat`
-  fuel parameter (`fuel := 4000`, `10000` for the block parser). If
+  decreasing structural arguments or on an explicit `nat` fuel
+  parameter. The shared `fuel` notation is `4000` (`Logic.v:36`) and
+  is reused by the character scanners, `render_inline_list`, and the
+  slugifier; the block parser takes a separately-supplied bound. If
   Rocq accepts the file, every function terminates.
 - **Type safety at the Rocq level.** `Logic.v` is type-checked by Rocq
-  9.0 before anything else runs; the `IO` monad is `itree (dirE +'
-  ioE)` with effect algebras supplied by Crane.
-- **Extraction succeeds.** `Crane Extraction "blog" run.` runs as part
-  of `dune build`. If it fails (for example, because something in the
-  monad table got mis-registered) the build stops.
+  9.0 before anything else runs. `IO` is declared as a `Notation` for
+  `itree (dirE +' ioE)` (`Logic.v:17`), which matters for extraction:
+  it lets Crane's monad table see `itree` directly and avoid marking
+  I/O-performing functions with `__attribute__((pure))`.
+- **Extraction succeeds.** `Crane Extraction "blog" run.`
+  (`Logic.v:721`) runs as part of `dune build`. If it fails (for
+  example because something in the monad table got mis-registered) the
+  build stops.
 - **C++ compiles.** The generated C++ is compiled with clang at `-O2`,
   bracket depth raised to 1024. If extraction produces something the
   C++ frontend rejects, the build stops.
@@ -119,13 +124,13 @@ dune build src/blog_generator.exe
 ```
 
 The binary takes no arguments; `./posts` and `./_site` are hard-coded
-relative paths in `run` (see `Logic.v:691`).
+relative paths in `run` (`Logic.v:707`).
 
 ## Writing posts
 
 A post is a UTF-8 Markdown file in `posts/`. Optional YAML-ish
 frontmatter is delimited by two `---` lines at the very top. The
-parser in `parse_frontmatter_lines` (`Logic.v:481`) recognises
+parser in `parse_frontmatter_lines` (`Logic.v:497`) recognises
 exactly these keys; everything else is silently ignored:
 
 | key              | type    | used for                                             |
@@ -155,7 +160,7 @@ The parser is intentionally small. What it recognises:
   produces an `<h3>`. We never emit a second `<h1>` from post
   content — the single `<h1>` on each post page is the frontmatter
   title, rendered by the page shell. See the heading-policy comment
-  at `Logic.v:465`.
+  at `Logic.v:482`.
 - **Images on their own line.** A line matching `![alt](src)` becomes
   a `<figure>` containing an `<img>`. `src` is resolved relative to
   `../posts/`, so `lead_image: hello_world.jpg` and `![…](hello_world.jpg)`

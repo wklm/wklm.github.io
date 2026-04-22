@@ -46,7 +46,7 @@ tradition. In practice this means:
   (`#171717`), with a muted gold accent (`#b08d57`) used sparingly for
   link underlines and rules. A deep blue-black (`#12202c`) anchors code
   blocks. Secondary text sits in a warm grey (`#5c554c`). These are the
-  literal values in the `stylesheet` constant in `src/Logic.v:637`.
+  literal values in the `stylesheet` constant in `src/Logic.v:653`.
 - A two-family type system: a serif (Georgia) for running prose and a
   geometric-leaning sans (Arial/Helvetica as a pragmatic stand-in) for
   the site mark, navigation, and display headings. Display headings
@@ -73,17 +73,17 @@ Explicit anti-patterns:
 
 - **Homepage.** A numbered index. The HTML is literally an `<ol>`
   (`<ol class='post-list'>` emitted by `render_index_page` at
-  `src/Logic.v:631`). Each entry is: number, small-caps metadata line,
+  `src/Logic.v:647`). Each entry is: number, small-caps metadata line,
   title as a link, a short deck. Nothing else. Posts are sorted by
   date, descending, via `sort_posts` / `insert_post`.
 - **Post page.** Single-column article with a left meta rail
   (topic chip, date), a title, a deck, an optional lead image, and the
-  body. This is `render_post_page` in `src/Logic.v:589`.
+  body. This is `render_post_page` in `src/Logic.v:605`.
 - **URL shape.** Each post lives at `/<slug>/`. The generator writes
   `output_dir/<slug>/index.html`; see `file_output_path` in
-  `src/Logic.v:313`. Slugs are derived from the frontmatter `slug`
+  `src/Logic.v:329`. Slugs are derived from the frontmatter `slug`
   field or the filename stem via `slugify` / `file_stem`.
-- **Frontmatter.** The `Meta` record in `src/Logic.v:101` defines the
+- **Frontmatter.** The `Meta` record in `src/Logic.v:130` defines the
   supported keys: `title`, `date`, `slug`, `summary`, `topic`,
   `lead_image`, `lead_image_alt`, `draft`. `draft: true` suppresses
   publication via `should_publish`. Anything else is ignored.
@@ -103,9 +103,10 @@ What currently holds:
 - The generator is written in Rocq (`src/Logic.v`) and is accepted by
   the type checker. All definitions are total under the encoded fuel
   discipline — recursive text-processing functions (`parse_inlines_aux`,
-  `parse_blocks`, `html_escape_aux`, `find_double_star`, etc.) take a
-  `nat` fuel bound and terminate structurally on it.
-- Extraction via `Crane Extraction "blog" run` (`src/Logic.v:705`)
+  `parse_blocks`, `html_escape_aux`, `find_double_star`,
+  `render_inline_list_aux`, etc.) take a `nat` fuel bound and terminate
+  structurally on it.
+- Extraction via `Crane Extraction "blog" run` (`src/Logic.v:721`)
   succeeds, yielding C++23 source.
 - That C++ source compiles under clang++ and runs, producing the
   `_site/` tree.
