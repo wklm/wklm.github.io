@@ -1,0 +1,10 @@
+_build/
+_site/
+*.vo
+*.vok
+*.vos
+*.glob
+*.aux
+.lia.cache
+.claude/
+firebase-debug.log

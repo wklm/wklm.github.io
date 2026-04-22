@@ -1,0 +1,30 @@
+{
+  "name": "Crane Blog",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "opam",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ocamllabs.ocaml-platform",
+        "maximedenes.vscoq",
+        "yzhang.markdown-all-in-one",
+        "davidanson.vscode-markdownlint",
+        "shd101wyy.markdown-preview-enhanced",
+        "streetsidesoftware.code-spell-checker"
+      ],
+      "settings": {
+        "ocaml.sandbox": {
+          "kind": "opam",
+          "switch": "default"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "sudo chown -R opam:opam . && eval $(opam env) && dune build",
+  "runArgs": [
+    "--userns=keep-id"
+  ]
+}
