@@ -17,8 +17,8 @@ int main() {
 
 (rule
  (targets blog_generator.exe)
- (deps Logic.vo main.cpp)
+ (deps Logic.vo main.cpp blog_helpers.h)
  (action (bash "\
 clang++ -std=c++2b -O2 -fbracket-depth=1024 \
-  -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
+  -I . -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
   -o blog_generator.exe")))

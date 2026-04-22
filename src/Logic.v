@@ -825,4 +825,14 @@ Definition run : IO unit :=
   write_post_pages "./_site" posts.
 
 Set Warnings "-crane-extraction-default-directory".
+
+(* Override the default fixpoint extraction of [concat_all] with a linear-time
+   C++ helper that pre-reserves the output [std::string].  The default
+   emission compiles to right-folded [operator+] which is O(n^2) in total
+   output length; the helper walks the list twice (sum lengths, then append)
+   so allocation is bounded by a single [reserve] plus the output itself.
+   The Coq definition is kept for proof-level reasoning; only the C++ call
+   site is redirected. *)
+Crane Extract Inlined Constant concat_all => "concat_all_std(%a0)" From "blog_helpers.h".
+
 Crane Extraction "blog" run.
