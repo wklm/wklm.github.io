@@ -1,0 +1,24 @@
+(coq.theory
+ (name FormalBlog)
+ (package crane_blog)
+ (theories Stdlib Crane ITree ExtLib Paco)
+ (plugins rocq-crane.plugin))
+
+(rule
+ (with-stdout-to main.cpp
+  (echo "\
+#include <blog.h>
+
+int main() {
+    run();
+    return 0;
+}
+")))
+
+(rule
+ (targets blog_generator.exe)
+ (deps Logic.vo main.cpp)
+ (action (bash "\
+clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+  -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
+  -o blog_generator.exe")))
