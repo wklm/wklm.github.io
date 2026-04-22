@@ -179,6 +179,13 @@ Inductive Block :=
   | CodeBlock (lang : string) (code_lines : list string)
   | ImageBlock (alt src : string).
 
+(* A post is either a prose essay (the default) or a photo post.  A [Photo]
+   post is laid out photobook-style: a cover plate, a quiet title, plates
+   owning the page, and a colophon.  An [Essay] uses the book-like reading
+   page with meta rail and measured column.  Selected via the [kind]
+   frontmatter key; anything other than the literal [photo] is [Essay]. *)
+Inductive PostKind := Essay | Photo.
+
 Record Meta : Type := mkMeta {
   meta_title : string;
   meta_date : string;
@@ -187,7 +194,8 @@ Record Meta : Type := mkMeta {
   meta_topic : string;
   meta_lead_image : string;
   meta_lead_image_alt : string;
-  meta_draft : bool
+  meta_draft : bool;
+  meta_kind : PostKind
 }.
 
 Record Post : Type := mkPost {
@@ -196,7 +204,7 @@ Record Post : Type := mkPost {
 }.
 
 Definition empty_meta : Meta :=
-  mkMeta "" "" "" "" "" "" "" false.
+  mkMeta "" "" "" "" "" "" "" false Essay.
 
 Fixpoint find_char (s : string) (ch : int) (pos : int) (remaining : nat) : int :=
   match remaining with
@@ -239,6 +247,9 @@ Definition string_eqb (a b : string) : bool :=
   if int_eqb (PrimString.length a) (PrimString.length b)
   then string_eqb_aux a b 0%int63 (nat_of_len a)
   else false.
+
+Definition kind_of_string (s : string) : PostKind :=
+  if string_eqb s "photo" then Photo else Essay.
 
 (* Lexicographic [>=] over primitive strings.  Walks up to [min(len_a, len_b)]
    codepoints; on the first differing position, returns whether [a] has the
@@ -565,14 +576,15 @@ Fixpoint parse_frontmatter_lines (lines : list string) (meta : Meta) : option (M
           let key := trim (PrimString.sub l 0%int63 colon) in
           let value := trim (substring_from l (add colon 1%int63)) in
           let meta' :=
-            if string_eqb key "title" then mkMeta value meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft)
-            else if string_eqb key "date" then mkMeta meta.(meta_title) value meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft)
-            else if string_eqb key "slug" then mkMeta meta.(meta_title) meta.(meta_date) value meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft)
-            else if string_eqb key "summary" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) value meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft)
-            else if string_eqb key "topic" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) value meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft)
-            else if string_eqb key "lead_image" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) value meta.(meta_lead_image_alt) meta.(meta_draft)
-            else if string_eqb key "lead_image_alt" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) value meta.(meta_draft)
-            else if string_eqb key "draft" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) (string_eqb value "true")
+            if string_eqb key "title" then mkMeta value meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "date" then mkMeta meta.(meta_title) value meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "slug" then mkMeta meta.(meta_title) meta.(meta_date) value meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "summary" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) value meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "topic" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) value meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "lead_image" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) value meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "lead_image_alt" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) value meta.(meta_draft) meta.(meta_kind)
+            else if string_eqb key "draft" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) (string_eqb value "true") meta.(meta_kind)
+            else if string_eqb key "kind" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) (kind_of_string value)
             else meta
           in
           parse_frontmatter_lines rest meta'
@@ -599,7 +611,8 @@ Definition finalize_meta (path : string) (meta : Meta) (body : list Block) : Met
     meta.(meta_topic)
     (trim meta.(meta_lead_image))
     meta.(meta_lead_image_alt)
-    meta.(meta_draft).
+    meta.(meta_draft)
+    meta.(meta_kind).
 
 Definition parse_post (path raw : string) : Post :=
   let lines := to_lines raw in
@@ -636,9 +649,11 @@ Definition render_block_impl (_ : unit) (b : Block) : string :=
             (cat (join_with newline_str (map html_escape code_lines))
                  "</code></pre>")))
   | ImageBlock alt src =>
-      cat "<figure class='plate'><img src='"
-        (cat (html_escape (post_asset_href src))
-          (cat "' alt='" (cat (html_escape alt) "'></figure>")))
+      concat_all (
+        "<figure class='plate'><img src='" ::
+        html_escape (post_asset_href src) ::
+        "' alt='" :: html_escape alt ::
+        "' width='3936' height='2624' loading='lazy' decoding='async'></figure>" :: nil)
   end.
 
 Fixpoint render_blocks (blocks : list Block) : string :=
@@ -652,38 +667,83 @@ Fixpoint render_blocks (blocks : list Block) : string :=
    double-encode ampersands and angle brackets. *)
 Definition meta_line (m : Meta) : string :=
   let parts := filter (fun s => negb (is_empty s)) (m.(meta_topic) :: m.(meta_date) :: nil) in
-  join_with " / " parts.
+  join_with " · " parts.
 
 Definition lead_media (m : Meta) : string :=
-  if is_empty m.(meta_lead_image) then
-    "<div class='lead-field' aria-hidden='true'></div>"
+  if is_empty m.(meta_lead_image) then ""
   else
-    cat "<figure class='lead-figure'><img src='"
-      (cat (html_escape (post_asset_href m.(meta_lead_image)))
-        (cat "' alt='" (cat (html_escape m.(meta_lead_image_alt)) "'></figure>"))).
+    concat_all (
+      "<figure class='lead-figure'><img src='" ::
+      html_escape (post_asset_href m.(meta_lead_image)) ::
+      "' alt='" :: html_escape m.(meta_lead_image_alt) ::
+      "' width='3936' height='2624' decoding='async'></figure>" :: nil).
 
-Definition page_shell (depth page_title body_class nav_label nav_href body_content : string) : string :=
+Definition page_shell (depth page_title page_description body_class nav_label nav_href body_content : string) : string :=
   concat_all (
-    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" ::
-    "<title>" :: html_escape page_title :: "</title>" ::
+    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'>" ::
+    (if is_empty page_description then ""
+     else concat_all ("<meta name='description' content='" :: html_escape page_description :: "'>" :: nil)) ::
+    "<title>" :: html_escape page_title ::
+    (if string_eqb page_title "wklm.online" then "" else " — wklm.online") ::
+    "</title>" ::
     "<link rel='stylesheet' href='" :: html_escape (rel_stylesheet depth) :: "'>" ::
-    "</head><body class='" :: body_class :: "'><div class='page-shell'>" ::
-    "<header class='site-header'><div class='site-mark'><a href='" :: html_escape (rel_index depth) :: "'>wklm.online</a></div>" ::
-    "<div class='site-note'>technical essays on verification, tooling, and design</div>" ::
-    "<nav class='site-nav'><a href='" :: html_escape nav_href :: "'>" :: html_escape nav_label :: "</a></nav></header>" ::
+    "</head><body class='" :: body_class :: "'>" ::
+    "<a class='skip-link' href='#main'>skip to text</a>" ::
+    "<div class='page-shell'>" ::
+    "<header class='site-header'><a class='site-mark' href='" :: html_escape (rel_index depth) :: "'>wklm.online</a>" ::
+    (if is_empty nav_label then ""
+     else concat_all ("<nav class='site-nav'><a href='" :: html_escape nav_href :: "'>" :: html_escape nav_label :: "</a></nav>" :: nil)) ::
+    "</header>" ::
     body_content ::
-    "<footer class='site-footer'><p>built from a small, explicit core</p></footer></div></body></html>" :: nil).
+    "</div></body></html>" :: nil).
 
-Definition render_post_page (p : Post) : string :=
+(* Render a photo post's blocks, lifting the first [ImageBlock] into a cover
+   plate with [fetchpriority='high'] and without [loading='lazy'].  All later
+   blocks (including any further images) render through the default path. *)
+Fixpoint render_blocks_photo (cover_consumed : bool) (blocks : list Block) : string :=
+  match blocks with
+  | nil => ""
+  | ImageBlock alt src :: rest =>
+      if cover_consumed
+      then cat (render_block_impl tt (ImageBlock alt src))
+               (render_blocks_photo true rest)
+      else
+        let cover := concat_all (
+          "<figure class='plate plate--cover'><img src='" ::
+          html_escape (post_asset_href src) ::
+          "' alt='" :: html_escape alt ::
+          "' width='3936' height='2624' fetchpriority='high' decoding='async'></figure>" :: nil) in
+        cat cover (render_blocks_photo true rest)
+  | b :: rest =>
+      cat (render_block_impl tt b) (render_blocks_photo cover_consumed rest)
+  end.
+
+Definition render_essay_page (p : Post) : string :=
   let m := p.(post_meta) in
   let body := concat_all (
-    "<main class='post-layout'><aside class='meta-rail'><div class='index-chip'>" ::
-    html_escape m.(meta_topic) ::
-    "</div><div class='rail-date'>" :: html_escape m.(meta_date) :: "</div></aside>" ::
-    "<article class='post-article'><header class='post-header'><p class='post-meta'>" :: html_escape (meta_line m) ::
-    "</p><h1>" :: html_escape m.(meta_title) :: "</h1><p class='post-deck'>" :: html_escape m.(meta_summary) :: "</p>" ::
-    lead_media m :: "</header><div class='post-body'>" :: render_blocks p.(post_body) :: "</div></article></main>" :: nil) in
-  page_shell "../" m.(meta_title) "post-page" "index" "../index.html" body.
+    "<main id='main' class='post'>" ::
+    "<article><header class='post-header'>" ::
+    "<p class='post-meta'>" :: html_escape (meta_line m) :: "</p>" ::
+    "<h1>" :: html_escape m.(meta_title) :: "</h1>" ::
+    lead_media m ::
+    "</header><div class='post-body'>" :: render_blocks p.(post_body) :: "</div></article></main>" :: nil) in
+  page_shell "../" m.(meta_title) m.(meta_summary) "essay" "index" "../index.html" body.
+
+Definition render_photo_page (p : Post) : string :=
+  let m := p.(post_meta) in
+  let body := concat_all (
+    "<main id='main' class='post photo'>" ::
+    "<article><header class='post-header'>" ::
+    "<p class='post-meta'>" :: html_escape (meta_line m) :: "</p>" ::
+    "<h1>" :: html_escape m.(meta_title) :: "</h1>" ::
+    "</header><div class='post-body'>" :: render_blocks_photo false p.(post_body) :: "</div></article></main>" :: nil) in
+  page_shell "../" m.(meta_title) m.(meta_summary) "photo" "index" "../index.html" body.
+
+Definition render_post_page (p : Post) : string :=
+  match p.(post_meta).(meta_kind) with
+  | Essay => render_essay_page p
+  | Photo => render_photo_page p
+  end.
 
 Fixpoint nat_to_string_aux (remaining : nat) (n : nat) (acc : string) : string :=
   match remaining with
@@ -702,28 +762,67 @@ Fixpoint nat_to_string_aux (remaining : nat) (n : nat) (acc : string) : string :
 Definition nat_to_string (n : nat) : string :=
   nat_to_string_aux 20 n "".
 
-Definition post_list_item (n : nat) (p : Post) : string :=
+Definition post_list_item (p : Post) : string :=
   let m := p.(post_meta) in
   concat_all (
-    "<li class='post-row'><div class='post-number'>" :: html_escape (nat_to_string n) ::
-    "</div><div class='post-copy'><p class='post-row-meta'>" :: html_escape (meta_line m) :: "</p>" ::
-    "<h2><a href='" :: html_escape (cat m.(meta_slug) "/index.html") :: "'>" :: html_escape m.(meta_title) :: "</a></h2>" ::
-    "<p class='post-row-deck'>" :: html_escape m.(meta_summary) :: "</p></div></li>" :: nil).
+    "<li><time datetime='" :: html_escape m.(meta_date) :: "'>" :: html_escape m.(meta_date) :: "</time> " ::
+    "<a href='" :: html_escape (cat m.(meta_slug) "/index.html") :: "'>" :: html_escape m.(meta_title) :: "</a></li>" :: nil).
 
-Fixpoint number_posts (posts : list Post) (n : nat) : list string :=
+Fixpoint render_post_list (posts : list Post) : list string :=
   match posts with
   | nil => nil
-  | p :: rest => post_list_item n p :: number_posts rest (S n)
+  | p :: rest => post_list_item p :: render_post_list rest
   end.
 
 Definition render_index_page (posts : list Post) : string :=
   let body := concat_all (
-    "<main class='index-layout'><section class='index-intro'><p class='intro-kicker'>essays</p><h1>wklm.online</h1><p class='intro-deck'>A numbered index of technical notes on formal systems, software construction, and visual design.</p></section>" ::
-    "<ol class='post-list'>" :: concat_all (number_posts posts 1%nat) :: "</ol></main>" :: nil) in
-  page_shell "" "wklm.online" "index-page" "archive" "index.html" body.
+    "<main id='main' class='index'>" ::
+    "<ul class='posts'>" :: concat_all (render_post_list posts) :: "</ul></main>" :: nil) in
+  page_shell "" "wklm.online" "" "home" "" "" body.
 
 Definition stylesheet : string :=
-  "body{margin:0;background:#f4f0e8;color:#171717;font:18px/1.65 Georgia,serif}a{color:inherit;text-decoration-color:#b08d57;text-underline-offset:.18em}img{display:block;max-width:100%;height:auto}.page-shell{max-width:72rem;margin:0 auto;padding:1.25rem}.site-header,.site-footer{display:flex;justify-content:space-between;gap:1rem;align-items:end}.site-header{padding:1rem 0 2rem;border-top:.25rem solid #171717}.site-mark,.site-note,.site-nav,.site-footer{font-family:Arial,Helvetica,sans-serif;letter-spacing:.12em;text-transform:uppercase}.site-mark a,.post-copy h2 a{text-decoration:none}.site-note,.site-nav,.site-footer,.post-row-meta,.post-meta,.intro-kicker,.index-chip,.rail-date{font-size:.78rem;color:#5c554c}.index-intro h1,.post-header h1{font-family:Arial,Helvetica,sans-serif;line-height:.95;text-transform:lowercase}.index-intro h1{font-size:clamp(3rem,10vw,6rem)}.intro-deck,.post-deck{max-width:36rem;color:#1d2733}.post-list{list-style:none;padding-left:0;margin:0}.post-row{margin:1.5rem 0;display:grid;grid-template-columns:3rem 1fr;gap:1rem;align-items:start}.post-number{font-family:Arial,Helvetica,sans-serif;font-weight:700;font-size:1.5rem;line-height:1;padding-top:.25rem;border-top:.2rem solid #171717}.post-copy h2{margin:.25rem 0 .4rem;font-family:Georgia,serif;font-size:1.6rem;line-height:1.15}.post-copy p.post-row-deck{margin:0;color:#1d2733}.post-layout{display:grid;grid-template-columns:12rem minmax(0,42rem);gap:1.5rem}.post-article,.post-body{min-width:0}.post-body p,.post-body li{overflow-wrap:break-word}.code-block{padding:1rem;background:#12202c;color:#f4f0e8;border-top:.2rem solid #b08d57;overflow-x:auto;white-space:pre;font-size:.9rem;line-height:1.5}.post-header .post-meta{display:none}.plate img,.lead-figure img,.lead-field{border:1px solid #6f665c}.lead-field{height:16rem;background:#ece6da}@media(max-width:900px){.site-header,.site-footer{display:block}.post-layout{grid-template-columns:1fr}.meta-rail{display:none}.post-header .post-meta{display:block}}".
+  concat_all (
+    ":root{--paper:#fafafa;--ink:#141414;--muted:#6b6b6b;--rule:#d9d9d9;--accent:#141414}" ::
+    "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#e8e8e8}}" ::
+    "*,*::before,*::after{box-sizing:border-box}" ::
+    "html{-webkit-text-size-adjust:100%;hanging-punctuation:first last}" ::
+    "body{margin:0;background:var(--paper);color:var(--ink);font:18px/1.55 Georgia,'Times New Roman',serif;font-variant-numeric:oldstyle-nums proportional-nums;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}" ::
+    "p{margin:0 0 1em;text-wrap:pretty;orphans:2;widows:2}" ::
+    "h1,h2,h3{font-weight:normal;line-height:1.2;text-wrap:balance;margin:1.6em 0 .4em}" ::
+    "h1{font-size:1.75rem;margin-top:0}h2{font-size:1.25rem}h3{font-size:1.05rem;font-style:italic}" ::
+    "a{color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:.18em}" ::
+    "a:hover{text-decoration-thickness:2px}" ::
+    "a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}" ::
+    "img{display:block;max-width:100%;height:auto}" ::
+    "time{font-variant-numeric:tabular-nums oldstyle-nums}" ::
+    ".skip-link{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}" ::
+    ".skip-link:focus{position:static;width:auto;height:auto;padding:.25rem .5rem;background:var(--ink);color:var(--paper)}" ::
+    ".page-shell{max-width:36rem;margin:0 auto;padding:2rem 1.25rem 4rem}" ::
+    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:3rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    ".site-mark{text-decoration:none;font-weight:600;letter-spacing:.02em}" ::
+    ".site-nav a{color:var(--muted);text-decoration:none}" ::
+    ".site-nav a:hover{color:var(--ink);text-decoration:underline}" ::
+    ".post-header{margin-bottom:2rem}" ::
+    ".post-header h1{margin:.2em 0 0}" ::
+    ".post-meta{margin:0;color:var(--muted);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem;letter-spacing:.02em}" ::
+    ".post-body p,.post-body li{overflow-wrap:break-word}" ::
+    ".post-body p+p{text-indent:1.2em;margin-top:-1em}" ::
+    ".post-body blockquote{margin:1em 0;padding-left:1em;border-left:2px solid var(--rule);color:var(--muted);font-style:italic}" ::
+    ".post-body ul,.post-body ol{padding-left:1.4em}" ::
+    ".code-block{margin:1.2em 0;padding:.8rem 1rem;background:var(--rule);color:var(--ink);overflow-x:auto;white-space:pre;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.88rem;line-height:1.5}" ::
+    ".plate{margin:1.5em 0}" ::
+    ".plate img{width:100%}" ::
+    ".lead-figure{margin:1.5em 0}" ::
+    ".lead-figure img{width:100%}" ::
+    ".photo .plate--cover{margin:0 0 2rem}" ::
+    ".photo .plate--cover img{width:100%}" ::
+    ".index .posts{list-style:none;padding:0;margin:0}" ::
+    ".index .posts li{margin:.35em 0;display:flex;gap:1.2em;align-items:baseline}" ::
+    ".index .posts time{color:var(--muted);font-size:.88rem;flex:0 0 auto;min-width:6em}" ::
+    ".index .posts a{text-decoration:none}" ::
+    ".index .posts a:hover{text-decoration:underline}" ::
+    "@media (max-width:32rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:2rem}.index .posts li{flex-direction:column;gap:.1em;margin:.8em 0}.index .posts time{min-width:0}}" ::
+    "@media print{.site-nav{display:none}body{background:#fff;color:#000}a{text-decoration:none;color:#000}}" :: nil).
 
 Definition should_publish (p : Post) : bool :=
   negb p.(post_meta).(meta_draft).
