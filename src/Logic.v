@@ -33,7 +33,12 @@ Notation ch_lbracket := 91%int63.
 Notation ch_rbracket := 93%int63.
 Notation ch_backtick := 96%int63.
 
-Notation fuel := 4000.
+(* Upper bound on recursion depth for string scanners and other fuel-indexed
+   fixpoints.  All scanners consume at least one character per step, so any
+   input shorter than [fuel] chars is scanned in full.  Bumped from 4000 to
+   cover realistic post bodies; any post exceeding this would otherwise be
+   silently truncated. *)
+Notation fuel := 200000.
 
 (* A 1-character primitive string containing LF.
    Extracted as a C++ expression using an escape to avoid an embedded raw
@@ -90,6 +95,46 @@ Fixpoint join_with (sep : string) (parts : list string) : string :=
   | x :: rest => cat x (cat sep (join_with sep rest))
   end.
 
+Fixpoint nat_of_int_fuel (i : int) (remaining : nat) : nat :=
+  match remaining with
+  | O => O
+  | S remaining' =>
+      if leb i 0%int63 then O
+      else S (nat_of_int_fuel (sub i 1%int63) remaining')
+  end.
+
+Definition nat_of_len (s : string) : nat :=
+  nat_of_int_fuel (PrimString.length s) fuel.
+
+Fixpoint starts_with_aux (s pref : string) (pos : int) (remaining : nat) : bool :=
+  match remaining with
+  | O => true
+  | S remaining' =>
+      if leb (PrimString.length pref) pos then true
+      else if leb (PrimString.length s) pos then false
+      else if int_eqb (PrimString.get s pos) (PrimString.get pref pos)
+           then starts_with_aux s pref (add pos 1%int63) remaining'
+           else false
+  end.
+
+Definition starts_with (s pref : string) : bool :=
+  starts_with_aux s pref 0%int63 (nat_of_len pref).
+
+(* Whitelist-based URL sanitizer.  Rejects [javascript:], [data:], and other
+   script-carrying schemes by mapping anything outside the allowed set to
+   ["#"], which is safe to resolve and visible to the author.  Relative paths,
+   fragments, http(s), and mailto are preserved. *)
+Definition safe_url (url : string) : string :=
+  if orb (starts_with url "http://")
+    (orb (starts_with url "https://")
+    (orb (starts_with url "mailto:")
+    (orb (starts_with url "/")
+    (orb (starts_with url "#")
+    (orb (starts_with url "./")
+         (starts_with url "../"))))))
+  then url
+  else "#".
+
 (* Fuel-based recursion: [fuel] bounds the nesting depth of emphasis/strong
    wrappers.  Real input sources cannot nest markdown inline decoration to a
    depth exceeding the very large [fuel] default. *)
@@ -105,7 +150,7 @@ Fixpoint render_inline_list_aux (fuel : nat) (parts : list Inline) : string :=
           cat (cat "<code>" (cat (html_escape s) "</code>"))
               (render_inline_list_aux fuel' rest)
       | Link label url :: rest =>
-          cat (cat "<a href='" (cat (html_escape url)
+          cat (cat "<a href='" (cat (html_escape (safe_url url))
                 (cat "'>" (cat (html_escape label) "</a>"))))
               (render_inline_list_aux fuel' rest)
       | Emphasis inner :: rest =>
@@ -146,17 +191,6 @@ Record Post : Type := mkPost {
 Definition empty_meta : Meta :=
   mkMeta "" "" "" "" "" "" "" false.
 
-Fixpoint nat_of_int_fuel (i : int) (remaining : nat) : nat :=
-  match remaining with
-  | O => O
-  | S remaining' =>
-      if leb i 0%int63 then O
-      else S (nat_of_int_fuel (sub i 1%int63) remaining')
-  end.
-
-Definition nat_of_len (s : string) : nat :=
-  nat_of_int_fuel (PrimString.length s) fuel.
-
 Fixpoint find_char (s : string) (ch : int) (pos : int) (remaining : nat) : int :=
   match remaining with
   | O => PrimString.length s
@@ -183,20 +217,6 @@ Fixpoint split_lines (s : string) (start : int) (remaining : nat) : list string 
 
 Definition to_lines (s : string) : list string :=
   split_lines s 0%int63 fuel.
-
-Fixpoint starts_with_aux (s pref : string) (pos : int) (remaining : nat) : bool :=
-  match remaining with
-  | O => true
-  | S remaining' =>
-      if leb (PrimString.length pref) pos then true
-      else if leb (PrimString.length s) pos then false
-      else if int_eqb (PrimString.get s pos) (PrimString.get pref pos)
-           then starts_with_aux s pref (add pos 1%int63) remaining'
-           else false
-  end.
-
-Definition starts_with (s pref : string) : bool :=
-  starts_with_aux s pref 0%int63 (nat_of_len pref).
 
 Fixpoint string_eqb_aux (a b : string) (pos : int) (remaining : nat) : bool :=
   match remaining with
@@ -278,7 +298,7 @@ Definition drop_prefix (s : string) (n : int) : string :=
 Definition has_suffix (s suffix : string) : bool :=
   let len_s := PrimString.length s in
   let len_suffix := PrimString.length suffix in
-  if leb len_s len_suffix then false
+  if ltb len_s len_suffix then false
   else string_eqb (PrimString.sub s (sub len_s len_suffix) len_suffix) suffix.
 
 Fixpoint last_segment_aux (s : string) (pos last : int) (remaining : nat) : string :=
@@ -494,11 +514,16 @@ Fixpoint parse_blocks (remaining : nat) (lines : list string) (acc : list string
       end
   end.
 
-Fixpoint parse_frontmatter_lines (lines : list string) (meta : Meta) : Meta * list string :=
+(* Returns [Some (meta, body_lines)] if a closing [---] was seen; [None] if
+   the frontmatter block is unterminated.  The caller should treat an
+   unterminated block as "no frontmatter" and re-parse the raw lines as body,
+   so authors who start a file with [---] but forget the closer don't lose
+   their content. *)
+Fixpoint parse_frontmatter_lines (lines : list string) (meta : Meta) : option (Meta * list string) :=
   match lines with
-  | nil => (meta, nil)
+  | nil => None
   | l :: rest =>
-      if string_eqb (trim l) "---" then (meta, rest)
+      if string_eqb (trim l) "---" then Some (meta, rest)
       else
         let colon := find_char l ch_colon 0%int63 fuel in
         if leb (PrimString.length l) colon then parse_frontmatter_lines rest meta
@@ -548,7 +573,12 @@ Definition parse_post (path raw : string) : Post :=
     match lines with
     | first :: rest =>
         if string_eqb (trim first) "---"
-        then parse_frontmatter_lines rest empty_meta
+        then match parse_frontmatter_lines rest empty_meta with
+             | Some fm => fm
+             (* Unterminated frontmatter: keep the original lines as body so
+                no content is silently lost. *)
+             | None => (empty_meta, lines)
+             end
         else (empty_meta, lines)
     | nil => (empty_meta, nil)
     end in
@@ -578,9 +608,12 @@ Fixpoint render_blocks (blocks : list Block) : string :=
   | b :: rest => cat (render_block_impl tt b) (render_blocks rest)
   end.
 
+(* Returns the raw (unescaped) "topic / date" line.  Callers are expected to
+   apply [html_escape] exactly once.  Escaping here as well would
+   double-encode ampersands and angle brackets. *)
 Definition meta_line (m : Meta) : string :=
   let parts := filter (fun s => negb (is_empty s)) (m.(meta_topic) :: m.(meta_date) :: nil) in
-  join_with " / " (map html_escape parts).
+  join_with " / " parts.
 
 Definition lead_media (m : Meta) : string :=
   if is_empty m.(meta_lead_image) then
@@ -672,7 +705,10 @@ Fixpoint copy_post_assets (source_dir output_dir : string) (names : list string)
   match names with
   | nil => Ret tt
   | name :: rest =>
-      if has_suffix name ".md"
+      (* Defensive filters: skip markdown (handled by the post pipeline) and
+         dotfiles (which may include ".", "..", or hidden files surfaced by
+         [list_directory]). *)
+      if orb (has_suffix name ".md") (starts_with name ".")
       then copy_post_assets source_dir output_dir rest
       else
         raw <- read (cat source_dir (cat "/" name)) ;;
@@ -704,15 +740,47 @@ Fixpoint write_post_pages (output_dir : string) (posts : list Post) : IO unit :=
       write_post_pages output_dir rest
   end.
 
+(* Asset reference collection: returns every asset filename referenced by
+   published posts (lead images plus inline image-block sources).  Used to
+   filter the raw directory listing so drafts' assets don't leak into
+   [_site/posts/]. *)
+Fixpoint block_image_srcs (body : list Block) : list string :=
+  match body with
+  | nil => nil
+  | ImageBlock _ src :: rest => src :: block_image_srcs rest
+  | _ :: rest => block_image_srcs rest
+  end.
+
+Definition post_asset_refs (p : Post) : list string :=
+  let lead := p.(post_meta).(meta_lead_image) in
+  let leads := if is_empty lead then nil else lead :: nil in
+  app leads (block_image_srcs p.(post_body)).
+
+Fixpoint collect_asset_refs (posts : list Post) : list string :=
+  match posts with
+  | nil => nil
+  | p :: rest => app (post_asset_refs p) (collect_asset_refs rest)
+  end.
+
+Fixpoint member_string (x : string) (xs : list string) : bool :=
+  match xs with
+  | nil => false
+  | y :: rest => if string_eqb x y then true else member_string x rest
+  end.
+
 Definition run : IO unit :=
   files <- list_directory "./posts" ;;
   let md_paths := map (fun name => cat "./posts/" name) (filter (fun name => has_suffix name ".md") files) in
   parsed_posts <- read_posts md_paths ;;
   let posts := sort_posts (filter_posts parsed_posts) in
+  (* Only copy assets referenced by a published post, so drafts don't leak
+     their images into [_site/posts/]. *)
+  let referenced := collect_asset_refs posts in
+  let asset_names := filter (fun name => member_string name referenced) files in
   _ <- create_directory "./_site" ;;
   _ <- create_directory "./_site/posts" ;;
   _ <- create_directory "./_site/styles" ;;
-  _ <- copy_post_assets "./posts" "./_site/posts" files ;;
+  _ <- copy_post_assets "./posts" "./_site/posts" asset_names ;;
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
   _ <- write_file (index_output_path "./_site") (render_index_page posts) ;;
   write_post_pages "./_site" posts.
