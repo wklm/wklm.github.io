@@ -43,9 +43,6 @@ jobs:
           docker cp crane-blog-run:/home/opam/crane-blog/_site ./_site
           docker rm crane-blog-run
 
-      - name: Write CNAME for custom domain
-        run: echo 'wklm.online' > _site/CNAME
-
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
