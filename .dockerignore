@@ -1,0 +1,9 @@
+_build/
+_site/
+.git/
+.github/
+.claude/
+.devcontainer/
+firebase-debug.log
+README.md
+brief.md

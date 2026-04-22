@@ -49,5 +49,7 @@ COPY --chown=opam:opam . .
 # Build: compile Rocq -> extract C++ -> compile binary
 RUN eval $(opam env) && dune build src/blog_generator.exe
 
-# Run the generator on ./posts by default
-CMD ["sh", "-c", "eval $(opam env) && ./_build/default/src/blog_generator.exe"]
+# Run the generator on ./posts by default.  We clear any stale _site/
+# that may have been copied in from the build context before running so
+# the tree written by the extracted binary is the only output.
+CMD ["sh", "-c", "eval $(opam env) && rm -rf _site && ./_build/default/src/blog_generator.exe"]
