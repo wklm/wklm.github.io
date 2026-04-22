@@ -32,6 +32,13 @@ Notation ch_gt := 62%int63.
 Notation ch_lbracket := 91%int63.
 Notation ch_rbracket := 93%int63.
 Notation ch_backtick := 96%int63.
+Notation ch_dash := 45%int63.
+Notation ch_0 := 48%int63.
+Notation ch_9 := 57%int63.
+Notation ch_A := 65%int63.
+Notation ch_Z := 90%int63.
+Notation ch_a := 97%int63.
+Notation ch_z := 122%int63.
 
 (* Upper bound on recursion depth for string scanners and other fuel-indexed
    fixpoints.  All scanners consume at least one character per step, so any
@@ -233,29 +240,31 @@ Definition string_eqb (a b : string) : bool :=
   then string_eqb_aux a b 0%int63 (nat_of_len a)
   else false.
 
+(* Lexicographic [>=] over primitive strings.  Walks up to [min(len_a, len_b)]
+   codepoints; on the first differing position, returns whether [a] has the
+   greater byte.  If one string is a prefix of the other, the longer string
+   is greater (so [a >= b] iff [len_a >= len_b]).  This is a total byte-wise
+   compare, suitable for sorting ISO-8601 dates and other fixed-shape keys. *)
 Fixpoint string_ge_aux (a b : string) (pos : int) (remaining : nat) : bool :=
   match remaining with
   | O => true
   | S remaining' =>
-      if leb (PrimString.length a) pos then true
+      let len_a := PrimString.length a in
+      let len_b := PrimString.length b in
+      let a_done := leb len_a pos in
+      let b_done := leb len_b pos in
+      if a_done then b_done     (* a exhausted: a >= b iff b also exhausted *)
+      else if b_done then true  (* b exhausted, a still has chars: a > b *)
       else
         let ch_a := PrimString.get a pos in
         let ch_b := PrimString.get b pos in
         if int_eqb ch_a ch_b
         then string_ge_aux a b (add pos 1%int63) remaining'
-        else negb (leb ch_a ch_b)
+        else negb (ltb ch_a ch_b)
   end.
 
 Definition string_ge (a b : string) : bool :=
-  let len_a := PrimString.length a in
-  let len_b := PrimString.length b in
-  if leb len_a len_b
-  then if int_eqb len_a len_b
-       then string_ge_aux a b 0%int63 (nat_of_len a)
-       else false
-  else if starts_with a b
-       then true
-       else string_ge_aux a b 0%int63 (nat_of_len b).
+  string_ge_aux a b 0%int63 fuel.
 
 Definition substring_from (s : string) (start : int) : string :=
   PrimString.sub s start (sub (PrimString.length s) start).
@@ -321,12 +330,37 @@ Definition file_stem (path : string) : string :=
   then PrimString.sub name 0%int63 (sub len_name 3%int63)
   else name.
 
+Definition is_ascii_digit (ch : int) : bool :=
+  andb (leb ch_0 ch) (leb ch ch_9).
+
+Definition is_ascii_lower (ch : int) : bool :=
+  andb (leb ch_a ch) (leb ch ch_z).
+
+Definition is_ascii_upper (ch : int) : bool :=
+  andb (leb ch_A ch) (leb ch ch_Z).
+
+(* Lookup table for ASCII-lowercasing an uppercase character by indexing
+   [ch - 'A'] into a fixed alphabet.  Avoids introducing a Crane extraction
+   mapping for [PrimString.make]. *)
+Definition lower_alphabet : string := "abcdefghijklmnopqrstuvwxyz".
+
+Definition lower_of_upper (ch : int) : string :=
+  PrimString.sub lower_alphabet (sub ch ch_A) 1%int63.
+
+(* Emit the slug character for position [pos].  The output alphabet is
+   restricted to [a-z], [0-9], and ASCII dash: anything outside that whitelist
+   (uppercase ASCII gets lowercased; spaces, slashes, dots, and all other
+   bytes including unicode continuation bytes, URL-reserved chars, and
+   control chars collapse to [-]).  Keeping slugs in a single-byte ASCII
+   subset means [file_output_path] and downstream URLs cannot contain
+   path-separator tricks or percent-encoding hazards. *)
 Definition slugify_char (s : string) (pos : int) : string :=
   let ch := PrimString.get s pos in
-  if int_eqb ch ch_space then "-"
-  else if int_eqb ch ch_slash then "-"
-  else if int_eqb ch ch_dot then "-"
-  else PrimString.sub s pos 1%int63.
+  if is_ascii_lower ch then PrimString.sub s pos 1%int63
+  else if is_ascii_digit ch then PrimString.sub s pos 1%int63
+  else if int_eqb ch ch_dash then "-"
+  else if is_ascii_upper ch then lower_of_upper ch
+  else "-".
 
 Fixpoint slugify_aux (s : string) (pos : int) (remaining : nat) : string :=
   match remaining with
@@ -582,7 +616,12 @@ Definition parse_post (path raw : string) : Post :=
         else (empty_meta, lines)
     | nil => (empty_meta, nil)
     end in
-  let blocks := parse_blocks 10000 body_lines nil in
+  (* [fuel] bounds the number of blocks parsed.  Since each step consumes at
+     least one line (or a fenced code block, which also consumes lines), the
+     block count is bounded by [length body_lines] which in turn is bounded
+     by [fuel] via [to_lines].  Reusing the same [fuel] constant keeps the
+     bound uniform with the rest of the pipeline. *)
+  let blocks := parse_blocks fuel body_lines nil in
   mkPost (finalize_meta path meta blocks) blocks.
 
 Definition render_block_impl (_ : unit) (b : Block) : string :=
