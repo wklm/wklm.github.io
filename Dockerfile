@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     clang \
     clang-format \
+    gnupg \
     libgmp-dev \
     libstdc++-14-dev \
     linux-libc-dev \
