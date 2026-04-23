@@ -9,57 +9,39 @@ Import ListNotations.
 Open Scope pstring_scope.
 
 (* [IO] is a [Notation], not a [Definition], so it unfolds at extraction
-   time to [itree (dirE +' ioE)].  Crane's monad table registers [itree]
-   (see [Crane.Monads.ITree]); if we kept [IO] as a [Definition] it would
-   surface in ML as an opaque [Tglob] reference that is *not* in the
-   monad table, and Crane would incorrectly mark IO-returning C++
-   functions with [__attribute__((pure))]. *)
+   time to [itree (dirE +' ioE)].  See the pre-encryption revision for the
+   full rationale; keeping it a [Notation] preserves Crane's monad-table
+   dispatch. *)
 Notation IO := (itree (dirE +' ioE)).
 
+Notation ch_tab := 9%int63.
 Notation ch_newline := 10%int63.
+Notation ch_cr := 13%int63.
 Notation ch_space := 32%int63.
 Notation ch_quote := 34%int63.
 Notation ch_amp := 38%int63.
 Notation ch_apos := 39%int63.
-Notation ch_lparen := 40%int63.
-Notation ch_rparen := 41%int63.
-Notation ch_star := 42%int63.
 Notation ch_dot := 46%int63.
 Notation ch_slash := 47%int63.
 Notation ch_colon := 58%int63.
 Notation ch_lt := 60%int63.
 Notation ch_gt := 62%int63.
-Notation ch_lbracket := 91%int63.
-Notation ch_rbracket := 93%int63.
-Notation ch_backtick := 96%int63.
-Notation ch_dash := 45%int63.
 Notation ch_0 := 48%int63.
 Notation ch_9 := 57%int63.
-Notation ch_A := 65%int63.
-Notation ch_Z := 90%int63.
-Notation ch_a := 97%int63.
-Notation ch_z := 122%int63.
 
-(* Upper bound on recursion depth for string scanners and other fuel-indexed
-   fixpoints.  All scanners consume at least one character per step, so any
-   input shorter than [fuel] chars is scanned in full.  Bumped from 4000 to
-   cover realistic post bodies; any post exceeding this would otherwise be
-   silently truncated. *)
-Notation fuel := 200000.
+(* Upper bound on recursion depth for string scanners.  An encrypted post
+   is an OpenPGP ASCII-armored MIME message; the body is largely base64
+   and is typically a few kilobytes per image.  [fuel] is a scanner
+   step count, one char per step. *)
+Notation fuel := 2000000.
 
-(* A 1-character primitive string containing LF.
-   Extracted as a C++ expression using an escape to avoid an embedded raw
-   newline in the generated .h file. *)
+(* A 1-character primitive string containing LF.  Kept because the page
+   shell composes newline-separated header rows. *)
 Definition newline_str : string := "
 ".
 Crane Extract Inlined Constant newline_str => "std::string(""\n"")".
 
-Inductive Inline :=
-  | Text (s : string)
-  | Link (label url : string)
-  | CodeSpan (s : string)
-  | Emphasis (parts : list Inline)
-  | Strong (parts : list Inline).
+(* ---- Low-level string primitives ---------------------------------- *)
 
 Definition int_eqb (a b : int) : bool := eqb a b.
 
@@ -86,20 +68,10 @@ Fixpoint html_escape_aux (s : string) (pos : int) (remaining : nat) : string :=
 Definition html_escape (s : string) : string :=
   html_escape_aux s 0%int63 fuel.
 
-Definition post_asset_href (candidate : string) : string :=
-  if is_empty candidate then "" else cat "../posts/" candidate.
-
 Fixpoint concat_all (parts : list string) : string :=
   match parts with
   | nil => ""
   | x :: rest => cat x (concat_all rest)
-  end.
-
-Fixpoint join_with (sep : string) (parts : list string) : string :=
-  match parts with
-  | nil => ""
-  | x :: nil => x
-  | x :: rest => cat x (cat sep (join_with sep rest))
   end.
 
 Fixpoint nat_of_int_fuel (i : int) (remaining : nat) : nat :=
@@ -127,85 +99,6 @@ Fixpoint starts_with_aux (s pref : string) (pos : int) (remaining : nat) : bool 
 Definition starts_with (s pref : string) : bool :=
   starts_with_aux s pref 0%int63 (nat_of_len pref).
 
-(* Whitelist-based URL sanitizer.  Rejects [javascript:], [data:], and other
-   script-carrying schemes by mapping anything outside the allowed set to
-   ["#"], which is safe to resolve and visible to the author.  Relative paths,
-   fragments, http(s), and mailto are preserved. *)
-Definition safe_url (url : string) : string :=
-  if orb (starts_with url "http://")
-    (orb (starts_with url "https://")
-    (orb (starts_with url "mailto:")
-    (orb (starts_with url "/")
-    (orb (starts_with url "#")
-    (orb (starts_with url "./")
-         (starts_with url "../"))))))
-  then url
-  else "#".
-
-(* Fuel-based recursion: [fuel] bounds the nesting depth of emphasis/strong
-   wrappers.  Real input sources cannot nest markdown inline decoration to a
-   depth exceeding the very large [fuel] default. *)
-Fixpoint render_inline_list_aux (fuel : nat) (parts : list Inline) : string :=
-  match fuel with
-  | O => ""
-  | S fuel' =>
-      match parts with
-      | nil => ""
-      | Text s :: rest =>
-          cat (html_escape s) (render_inline_list_aux fuel' rest)
-      | CodeSpan s :: rest =>
-          cat (cat "<code>" (cat (html_escape s) "</code>"))
-              (render_inline_list_aux fuel' rest)
-      | Link label url :: rest =>
-          cat (cat "<a href='" (cat (html_escape (safe_url url))
-                (cat "'>" (cat (html_escape label) "</a>"))))
-              (render_inline_list_aux fuel' rest)
-      | Emphasis inner :: rest =>
-          cat (cat "<em>" (cat (render_inline_list_aux fuel' inner) "</em>"))
-              (render_inline_list_aux fuel' rest)
-      | Strong inner :: rest =>
-          cat (cat "<strong>" (cat (render_inline_list_aux fuel' inner) "</strong>"))
-              (render_inline_list_aux fuel' rest)
-      end
-  end.
-
-Definition render_inline_list (parts : list Inline) : string :=
-  render_inline_list_aux fuel parts.
-
-Inductive Block :=
-  | Heading2 (s : string)
-  | Heading3 (s : string)
-  | Paragraph (parts : list Inline)
-  | CodeBlock (lang : string) (code_lines : list string)
-  | ImageBlock (alt src : string).
-
-(* A post is either a prose essay (the default) or a photo post.  A [Photo]
-   post is laid out photobook-style: a cover plate, a quiet title, plates
-   owning the page, and a colophon.  An [Essay] uses the book-like reading
-   page with meta rail and measured column.  Selected via the [kind]
-   frontmatter key; anything other than the literal [photo] is [Essay]. *)
-Inductive PostKind := Essay | Photo.
-
-Record Meta : Type := mkMeta {
-  meta_title : string;
-  meta_date : string;
-  meta_slug : string;
-  meta_summary : string;
-  meta_topic : string;
-  meta_lead_image : string;
-  meta_lead_image_alt : string;
-  meta_draft : bool;
-  meta_kind : PostKind
-}.
-
-Record Post : Type := mkPost {
-  post_meta : Meta;
-  post_body : list Block
-}.
-
-Definition empty_meta : Meta :=
-  mkMeta "" "" "" "" "" "" "" false Essay.
-
 Fixpoint find_char (s : string) (ch : int) (pos : int) (remaining : nat) : int :=
   match remaining with
   | O => PrimString.length s
@@ -214,24 +107,6 @@ Fixpoint find_char (s : string) (ch : int) (pos : int) (remaining : nat) : int :
       else if int_eqb (PrimString.get s pos) ch then pos
       else find_char s ch (add pos 1%int63) remaining'
   end.
-
-Definition get_line_at (s : string) (start : int) : string * int :=
-  let eol := find_char s ch_newline start fuel in
-  let line := PrimString.sub s start (sub eol start) in
-  (line, add eol 1%int63).
-
-Fixpoint split_lines (s : string) (start : int) (remaining : nat) : list string :=
-  match remaining with
-  | O => nil
-  | S remaining' =>
-      if leb (PrimString.length s) start then nil
-      else
-        let '(line, next) := get_line_at s start in
-        line :: split_lines s next remaining'
-  end.
-
-Definition to_lines (s : string) : list string :=
-  split_lines s 0%int63 fuel.
 
 Fixpoint string_eqb_aux (a b : string) (pos : int) (remaining : nat) : bool :=
   match remaining with
@@ -248,30 +123,20 @@ Definition string_eqb (a b : string) : bool :=
   then string_eqb_aux a b 0%int63 (nat_of_len a)
   else false.
 
-Definition kind_of_string (s : string) : PostKind :=
-  if string_eqb s "photo" then Photo else Essay.
-
-(* Lexicographic [>=] over primitive strings.  Walks up to [min(len_a, len_b)]
-   codepoints; on the first differing position, returns whether [a] has the
-   greater byte.  If one string is a prefix of the other, the longer string
-   is greater (so [a >= b] iff [len_a >= len_b]).  This is a total byte-wise
-   compare, suitable for sorting ISO-8601 dates and other fixed-shape keys. *)
 Fixpoint string_ge_aux (a b : string) (pos : int) (remaining : nat) : bool :=
   match remaining with
   | O => true
   | S remaining' =>
-      let len_a := PrimString.length a in
-      let len_b := PrimString.length b in
-      let a_done := leb len_a pos in
-      let b_done := leb len_b pos in
-      if a_done then b_done     (* a exhausted: a >= b iff b also exhausted *)
-      else if b_done then true  (* b exhausted, a still has chars: a > b *)
+      let la := PrimString.length a in
+      let lb := PrimString.length b in
+      if andb (leb la pos) (leb lb pos) then true
+      else if leb la pos then false
+      else if leb lb pos then true
       else
-        let ch_a := PrimString.get a pos in
-        let ch_b := PrimString.get b pos in
-        if int_eqb ch_a ch_b
-        then string_ge_aux a b (add pos 1%int63) remaining'
-        else negb (ltb ch_a ch_b)
+        let ca := PrimString.get a pos in
+        let cb := PrimString.get b pos in
+        if int_eqb ca cb then string_ge_aux a b (add pos 1%int63) remaining'
+        else leb cb ca
   end.
 
 Definition string_ge (a b : string) : bool :=
@@ -284,23 +149,28 @@ Fixpoint reverse_string_acc (s acc : string) (pos : int) (remaining : nat) : str
   match remaining with
   | O => acc
   | S remaining' =>
-      if leb pos 0%int63 then acc
+      if leb (PrimString.length s) pos then acc
       else
-        let next := sub pos 1%int63 in
-        reverse_string_acc s (cat acc (PrimString.sub s next 1%int63)) next remaining'
+        let ch := PrimString.sub s pos 1%int63 in
+        reverse_string_acc s (cat ch acc) (add pos 1%int63) remaining'
   end.
 
 Definition reverse_string (s : string) : string :=
-  reverse_string_acc s "" (PrimString.length s) fuel.
+  reverse_string_acc s "" 0%int63 fuel.
 
 Fixpoint trim_left_from (s : string) (pos : int) (remaining : nat) : string :=
   match remaining with
-  | O => s
+  | O => substring_from s pos
   | S remaining' =>
       if leb (PrimString.length s) pos then ""
-      else if int_eqb (PrimString.get s pos) ch_space
-           then trim_left_from s (add pos 1%int63) remaining'
-           else substring_from s pos
+      else
+        let ch := PrimString.get s pos in
+        if orb (int_eqb ch ch_space)
+           (orb (int_eqb ch ch_tab)
+           (orb (int_eqb ch ch_newline)
+                (int_eqb ch ch_cr)))
+        then trim_left_from s (add pos 1%int63) remaining'
+        else substring_from s pos
   end.
 
 Definition trim_left (s : string) : string :=
@@ -311,9 +181,6 @@ Definition trim_right (s : string) : string :=
 
 Definition trim (s : string) : string :=
   trim_right (trim_left s).
-
-Definition drop_prefix (s : string) (n : int) : string :=
-  substring_from s n.
 
 Definition has_suffix (s suffix : string) : bool :=
   let len_s := PrimString.length s in
@@ -334,56 +201,16 @@ Fixpoint last_segment_aux (s : string) (pos last : int) (remaining : nat) : stri
 Definition last_segment (s : string) : string :=
   last_segment_aux s 0%int63 0%int63 fuel.
 
-Definition file_stem (path : string) : string :=
+(* Strip a trailing [".eml"] from the last path segment; whatever remains is
+   used verbatim as the URL slug. *)
+Definition file_stem_eml (path : string) : string :=
   let name := last_segment path in
   let len_name := PrimString.length name in
-  if has_suffix name ".md"
-  then PrimString.sub name 0%int63 (sub len_name 3%int63)
+  if has_suffix name ".eml"
+  then PrimString.sub name 0%int63 (sub len_name 4%int63)
   else name.
 
-Definition is_ascii_digit (ch : int) : bool :=
-  andb (leb ch_0 ch) (leb ch ch_9).
-
-Definition is_ascii_lower (ch : int) : bool :=
-  andb (leb ch_a ch) (leb ch ch_z).
-
-Definition is_ascii_upper (ch : int) : bool :=
-  andb (leb ch_A ch) (leb ch ch_Z).
-
-(* Lookup table for ASCII-lowercasing an uppercase character by indexing
-   [ch - 'A'] into a fixed alphabet.  Avoids introducing a Crane extraction
-   mapping for [PrimString.make]. *)
-Definition lower_alphabet : string := "abcdefghijklmnopqrstuvwxyz".
-
-Definition lower_of_upper (ch : int) : string :=
-  PrimString.sub lower_alphabet (sub ch ch_A) 1%int63.
-
-(* Emit the slug character for position [pos].  The output alphabet is
-   restricted to [a-z], [0-9], and ASCII dash: anything outside that whitelist
-   (uppercase ASCII gets lowercased; spaces, slashes, dots, and all other
-   bytes including unicode continuation bytes, URL-reserved chars, and
-   control chars collapse to [-]).  Keeping slugs in a single-byte ASCII
-   subset means [file_output_path] and downstream URLs cannot contain
-   path-separator tricks or percent-encoding hazards. *)
-Definition slugify_char (s : string) (pos : int) : string :=
-  let ch := PrimString.get s pos in
-  if is_ascii_lower ch then PrimString.sub s pos 1%int63
-  else if is_ascii_digit ch then PrimString.sub s pos 1%int63
-  else if int_eqb ch ch_dash then "-"
-  else if is_ascii_upper ch then lower_of_upper ch
-  else "-".
-
-Fixpoint slugify_aux (s : string) (pos : int) (remaining : nat) : string :=
-  match remaining with
-  | O => ""
-  | S remaining' =>
-      if leb (PrimString.length s) pos then ""
-      else cat (slugify_char s pos) (slugify_aux s (add pos 1%int63) remaining')
-  end.
-
-Definition slugify (candidate fallback : string) : string :=
-  let base := trim candidate in
-  if is_empty base then fallback else slugify_aux base 0%int63 fuel.
+(* ---- Output-path helpers ----------------------------------------- *)
 
 Definition rel_stylesheet (depth : string) : string :=
   cat depth "styles/site.css".
@@ -403,286 +230,113 @@ Definition index_output_path (output_dir : string) : string :=
 Definition dirname_output_path (output_dir slug : string) : string :=
   cat output_dir (cat "/" slug).
 
-Definition classify_ticks (line : string) : option string :=
-  if starts_with line "```" then Some (trim (drop_prefix line 3%int63)) else None.
+(* ---- Encrypted post model ---------------------------------------- *)
 
-Definition parse_image_line (line : string) : option (string * string) :=
-  if negb (starts_with line "![") then None
-  else
-    let alt_end := find_char line ch_rbracket 2%int63 fuel in
-    let url_start := add alt_end 2%int63 in
-    let url_end := find_char line ch_rparen url_start fuel in
-    if leb (PrimString.length line) alt_end then None
-    else if leb (PrimString.length line) url_end then None
-    else if negb (int_eqb (PrimString.get line (add alt_end 1%int63)) ch_lparen) then None
-         else Some (
-           PrimString.sub line 2%int63 (sub alt_end 2%int63),
-           PrimString.sub line url_start (sub url_end url_start)
-         ).
+(* An [EncryptedPost] is the opaque view the generator has of a
+   [posts-encrypted/<slug>.eml] file.  The file itself is a
+   fully-formed RFC 3156 PGP/MIME message produced by the pre-commit
+   hook; the generator only needs the four headers that populate the
+   fake mail-client chrome, plus the raw body (everything after the
+   first blank line) to print verbatim inside a [<pre>].
 
-(* Return the position of the next [**] at or after [pos], or [length s]
-   if there is none within [remaining] steps. *)
-Fixpoint find_double_star (s : string) (pos : int) (remaining : nat) : int :=
+   [ep_body] is deliberately untouched: MIME boundaries, the
+   [application/pgp-encrypted] part, the armored
+   [-----BEGIN PGP MESSAGE-----] block, and the armor's CRC-24 trailer
+   all appear as they were written by [gpg].  The generator never
+   parses MIME semantics and never touches OpenPGP bytes. *)
+Record EncryptedPost : Type := mkEncryptedPost {
+  ep_slug : string;
+  ep_from : string;
+  ep_to : string;
+  ep_date : string;
+  ep_subject : string;
+  ep_body : string
+}.
+
+Definition empty_ep : EncryptedPost :=
+  mkEncryptedPost "" "" "" "" "" "".
+
+(* ---- .eml header parsing ----------------------------------------- *)
+
+(* Split a raw [.eml] byte string at the first blank line.  Returns the
+   header block (without the blank line) and the body (everything after
+   the blank line).  [\r] is tolerated: a line consisting solely of
+   [\r] counts as blank.  The hook emits LF-only output, so this is
+   defensive. *)
+Definition is_blank_line (line : string) : bool :=
+  let t := trim line in
+  is_empty t.
+
+Fixpoint split_headers_body (s : string) (pos : int) (remaining : nat) : string * string :=
   match remaining with
-  | O => PrimString.length s
+  | O => (s, "")
   | S remaining' =>
       let len := PrimString.length s in
-      if leb len (add pos 1%int63) then len
-      else if andb (int_eqb (PrimString.get s pos) ch_star)
-                   (int_eqb (PrimString.get s (add pos 1%int63)) ch_star)
-           then pos
-           else find_double_star s (add pos 1%int63) remaining'
+      if leb len pos then (s, "")
+      else
+        let eol := find_char s ch_newline pos fuel in
+        let line := PrimString.sub s pos (sub eol pos) in
+        if is_blank_line line
+        then
+          let header := PrimString.sub s 0%int63 pos in
+          let body_start := if ltb eol len then add eol 1%int63 else len in
+          let body := PrimString.sub s body_start (sub (PrimString.length s) body_start) in
+          (header, body)
+        else
+          let next := if ltb eol len then add eol 1%int63 else len in
+          split_headers_body s next remaining'
   end.
 
-(* Return the position of the next lone [*] at or after [pos] that is not
-   part of a [**] pair, or [length s] if none. *)
-Fixpoint find_single_star (s : string) (pos : int) (remaining : nat) : int :=
+(* [Header] lines are [Key: Value]; the header block is already free of
+   RFC 5322 line folding because the hook emits each header on a single
+   line.  A line that does not contain [':'] is ignored. *)
+Definition parse_header_line (line : string) : string * string :=
+  let len := PrimString.length line in
+  let colon := find_char line ch_colon 0%int63 fuel in
+  if leb len colon then ("", "")
+  else
+    let key := PrimString.sub line 0%int63 colon in
+    let value_start := add colon 1%int63 in
+    let value :=
+      if leb len value_start then ""
+      else PrimString.sub line value_start (sub len value_start) in
+    (trim key, trim value).
+
+Fixpoint lookup_header_aux (s : string) (needle : string) (pos : int) (remaining : nat) : string :=
   match remaining with
-  | O => PrimString.length s
+  | O => ""
   | S remaining' =>
       let len := PrimString.length s in
-      if leb len pos then len
-      else if int_eqb (PrimString.get s pos) ch_star then
-        let next := add pos 1%int63 in
-        if leb len next then pos
-        else if int_eqb (PrimString.get s next) ch_star
-             then find_single_star s (add pos 2%int63) remaining'
-             else pos
-      else find_single_star s (add pos 1%int63) remaining'
-  end.
-
-Fixpoint parse_inlines_aux (s : string) (pos : int) (remaining : nat) : list Inline :=
-  match remaining with
-  | O => nil
-  | S remaining' =>
-      if leb (PrimString.length s) pos then nil
+      if leb len pos then ""
       else
-        let ch := PrimString.get s pos in
-        if int_eqb ch ch_backtick then
-          let end_pos := find_char s ch_backtick (add pos 1%int63) fuel in
-          if leb (PrimString.length s) end_pos then Text (substring_from s pos) :: nil
-          else CodeSpan (PrimString.sub s (add pos 1%int63) (sub end_pos (add pos 1%int63)))
-                 :: parse_inlines_aux s (add end_pos 1%int63) remaining'
-        else if int_eqb ch ch_lbracket then
-          let label_end := find_char s ch_rbracket (add pos 1%int63) fuel in
-          let url_open := add label_end 1%int63 in
-          let url_start := add label_end 2%int63 in
-          let url_end := find_char s ch_rparen url_start fuel in
-          if leb (PrimString.length s) label_end then Text (substring_from s pos) :: nil
-          else if leb (PrimString.length s) url_end then Text (substring_from s pos) :: nil
-          else if negb (int_eqb (PrimString.get s url_open) ch_lparen) then Text (substring_from s pos) :: nil
-               else Link
-                 (PrimString.sub s (add pos 1%int63) (sub label_end (add pos 1%int63)))
-                 (PrimString.sub s url_start (sub url_end url_start))
-                 :: parse_inlines_aux s (add url_end 1%int63) remaining'
-        else if int_eqb ch ch_star then
-          (* Try [**strong**] first; fall back to [*emphasis*]; if no closer,
-             emit a literal asterisk so we never lose characters. *)
-          let next := add pos 1%int63 in
-          let len := PrimString.length s in
-          let is_strong_open :=
-            andb (leb next (sub len 1%int63))
-                 (int_eqb (PrimString.get s next) ch_star) in
-          if is_strong_open then
-            let inner_start := add pos 2%int63 in
-            let close := find_double_star s inner_start fuel in
-            if leb len (add close 1%int63) then
-              (* unterminated [**] -> literal *)
-              Text "*" :: parse_inlines_aux s next remaining'
-            else
-              let inner := PrimString.sub s inner_start (sub close inner_start) in
-              Strong (parse_inlines_aux inner 0%int63 remaining')
-                :: parse_inlines_aux s (add close 2%int63) remaining'
-          else
-            let close := find_single_star s next fuel in
-            if leb len close then
-              Text "*" :: parse_inlines_aux s next remaining'
-            else
-              let inner := PrimString.sub s next (sub close next) in
-              Emphasis (parse_inlines_aux inner 0%int63 remaining')
-                :: parse_inlines_aux s (add close 1%int63) remaining'
+        let eol := find_char s ch_newline pos fuel in
+        let line := PrimString.sub s pos (sub eol pos) in
+        let '(key, value) := parse_header_line line in
+        if string_eqb key needle
+        then value
         else
-          let next_link := find_char s ch_lbracket pos fuel in
-          let next_code := find_char s ch_backtick pos fuel in
-          let next_emph := find_char s ch_star pos fuel in
-          let m1 := if leb next_link next_code then next_link else next_code in
-          let next_break := if leb m1 next_emph then m1 else next_emph in
-          if leb (PrimString.length s) next_break then Text (substring_from s pos) :: nil
-          else if int_eqb next_break pos then Text (PrimString.sub s pos 1%int63) :: parse_inlines_aux s (add pos 1%int63) remaining'
-               else Text (PrimString.sub s pos (sub next_break pos)) :: parse_inlines_aux s next_break remaining'
+          let next := if ltb eol len then add eol 1%int63 else len in
+          lookup_header_aux s needle next remaining'
   end.
 
-Definition parse_inlines (s : string) : list Inline :=
-  parse_inlines_aux s 0%int63 fuel.
+Definition lookup_header (headers needle : string) : string :=
+  lookup_header_aux headers needle 0%int63 fuel.
 
-Fixpoint collect_code_lines (lines : list string) (acc : list string) : list string * list string :=
-  match lines with
-  | nil => (rev acc, nil)
-  | l :: rest =>
-      match classify_ticks l with
-      | Some _ => (rev acc, rest)
-      | None => collect_code_lines rest (l :: acc)
-      end
-  end.
+Definition parse_eml (slug raw : string) : EncryptedPost :=
+  let '(headers, body) := split_headers_body raw 0%int63 fuel in
+  mkEncryptedPost
+    slug
+    (lookup_header headers "From")
+    (lookup_header headers "To")
+    (lookup_header headers "Date")
+    (lookup_header headers "Subject")
+    body.
 
-Definition flush_paragraph (acc : list string) (tail : list Block) : list Block :=
-  match acc with
-  | nil => tail
-  | _ => Paragraph (parse_inlines (join_with " " (rev acc))) :: tail
-  end.
+(* ---- Rendering --------------------------------------------------- *)
 
-Fixpoint parse_blocks (remaining : nat) (lines : list string) (acc : list string) : list Block :=
-  match remaining with
-  | O => flush_paragraph acc nil
-  | S remaining' =>
-      match lines with
-      | nil => flush_paragraph acc nil
-      | l :: rest =>
-          match classify_ticks l with
-          | Some lang =>
-              let '(code_lines, remaining_lines) := collect_code_lines rest nil in
-              flush_paragraph acc (CodeBlock (trim lang) code_lines :: parse_blocks remaining' remaining_lines nil)
-          | None =>
-              (* Heading policy (see README): both "# " and "## " map to
-                 Heading2.  The post title is rendered as the sole H1 in the
-                 page shell, so any top-level heading in the body must be H2
-                 to keep exactly one H1 per page.  "### " stays Heading3. *)
-              if is_empty (trim l) then flush_paragraph acc (parse_blocks remaining' rest nil)
-              else if starts_with l "# " then flush_paragraph acc (Heading2 (trim (drop_prefix l 2%int63)) :: parse_blocks remaining' rest nil)
-              else if starts_with l "## " then flush_paragraph acc (Heading2 (trim (drop_prefix l 3%int63)) :: parse_blocks remaining' rest nil)
-              else if starts_with l "### " then flush_paragraph acc (Heading3 (trim (drop_prefix l 4%int63)) :: parse_blocks remaining' rest nil)
-              else match parse_image_line (trim l) with
-                   | Some (alt, src) => flush_paragraph acc (ImageBlock (trim alt) (trim src) :: parse_blocks remaining' rest nil)
-                   | None => parse_blocks remaining' rest (trim l :: acc)
-                   end
-          end
-      end
-  end.
-
-(* Returns [Some (meta, body_lines)] if a closing [---] was seen; [None] if
-   the frontmatter block is unterminated.  The caller should treat an
-   unterminated block as "no frontmatter" and re-parse the raw lines as body,
-   so authors who start a file with [---] but forget the closer don't lose
-   their content. *)
-Fixpoint parse_frontmatter_lines (lines : list string) (meta : Meta) : option (Meta * list string) :=
-  match lines with
-  | nil => None
-  | l :: rest =>
-      if string_eqb (trim l) "---" then Some (meta, rest)
-      else
-        let colon := find_char l ch_colon 0%int63 fuel in
-        if leb (PrimString.length l) colon then parse_frontmatter_lines rest meta
-        else
-          let key := trim (PrimString.sub l 0%int63 colon) in
-          let value := trim (substring_from l (add colon 1%int63)) in
-          let meta' :=
-            if string_eqb key "title" then mkMeta value meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "date" then mkMeta meta.(meta_title) value meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "slug" then mkMeta meta.(meta_title) meta.(meta_date) value meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "summary" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) value meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "topic" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) value meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "lead_image" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) value meta.(meta_lead_image_alt) meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "lead_image_alt" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) value meta.(meta_draft) meta.(meta_kind)
-            else if string_eqb key "draft" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) (string_eqb value "true") meta.(meta_kind)
-            else if string_eqb key "kind" then mkMeta meta.(meta_title) meta.(meta_date) meta.(meta_slug) meta.(meta_summary) meta.(meta_topic) meta.(meta_lead_image) meta.(meta_lead_image_alt) meta.(meta_draft) (kind_of_string value)
-            else meta
-          in
-          parse_frontmatter_lines rest meta'
-  end.
-
-Fixpoint first_heading_title (body : list Block) : string :=
-  match body with
-  | nil => "Untitled"
-  | Heading2 s :: _ => s
-  | Heading3 s :: _ => s
-  | _ :: rest => first_heading_title rest
-  end.
-
-Definition fallback_title (meta : Meta) (body : list Block) : string :=
-  if negb (is_empty meta.(meta_title)) then meta.(meta_title)
-  else first_heading_title body.
-
-Definition finalize_meta (path : string) (meta : Meta) (body : list Block) : Meta :=
-  mkMeta
-    (fallback_title meta body)
-    meta.(meta_date)
-    (slugify meta.(meta_slug) (file_stem path))
-    meta.(meta_summary)
-    meta.(meta_topic)
-    (trim meta.(meta_lead_image))
-    meta.(meta_lead_image_alt)
-    meta.(meta_draft)
-    meta.(meta_kind).
-
-Definition parse_post (path raw : string) : Post :=
-  let lines := to_lines raw in
-  let '(meta, body_lines) :=
-    match lines with
-    | first :: rest =>
-        if string_eqb (trim first) "---"
-        then match parse_frontmatter_lines rest empty_meta with
-             | Some fm => fm
-             (* Unterminated frontmatter: keep the original lines as body so
-                no content is silently lost. *)
-             | None => (empty_meta, lines)
-             end
-        else (empty_meta, lines)
-    | nil => (empty_meta, nil)
-    end in
-  (* [fuel] bounds the number of blocks parsed.  Since each step consumes at
-     least one line (or a fenced code block, which also consumes lines), the
-     block count is bounded by [length body_lines] which in turn is bounded
-     by [fuel] via [to_lines].  Reusing the same [fuel] constant keeps the
-     bound uniform with the rest of the pipeline. *)
-  let blocks := parse_blocks fuel body_lines nil in
-  mkPost (finalize_meta path meta blocks) blocks.
-
-Definition render_block_impl (_ : unit) (b : Block) : string :=
-  match b with
-  | Heading2 s => cat "<h2>" (cat (html_escape s) "</h2>")
-  | Heading3 s => cat "<h3>" (cat (html_escape s) "</h3>")
-  | Paragraph parts => cat "<p>" (cat (render_inline_list parts) "</p>")
-  | CodeBlock lang code_lines =>
-      cat "<pre class='code-block'><code"
-        (cat (if is_empty lang then "" else cat " data-lang='" (cat (html_escape lang) "'"))
-          (cat ">"
-            (cat (join_with newline_str (map html_escape code_lines))
-                 "</code></pre>")))
-  | ImageBlock alt src =>
-      concat_all (
-        "<figure class='plate'><img src='" ::
-        html_escape (post_asset_href src) ::
-        "' alt='" :: html_escape alt ::
-        "' width='3936' height='2624' loading='lazy' decoding='async'></figure>" :: nil)
-  end.
-
-Fixpoint render_blocks (blocks : list Block) : string :=
-  match blocks with
-  | nil => ""
-  | b :: rest => cat (render_block_impl tt b) (render_blocks rest)
-  end.
-
-(* Returns the raw (unescaped) "topic / date" line.  Callers are expected to
-   apply [html_escape] exactly once.  Escaping here as well would
-   double-encode ampersands and angle brackets. *)
-Definition meta_line (m : Meta) : string :=
-  let parts := filter (fun s => negb (is_empty s)) (m.(meta_topic) :: m.(meta_date) :: nil) in
-  join_with " · " parts.
-
-Definition lead_media (m : Meta) : string :=
-  if is_empty m.(meta_lead_image) then ""
-  else
-    concat_all (
-      "<figure class='lead-figure'><img src='" ::
-      html_escape (post_asset_href m.(meta_lead_image)) ::
-      "' alt='" :: html_escape m.(meta_lead_image_alt) ::
-      "' width='3936' height='2624' decoding='async'></figure>" :: nil).
-
-Definition page_shell (depth page_title page_description body_class nav_label nav_href body_content : string) : string :=
+Definition page_shell (depth page_title body_class nav_label nav_href body_content : string) : string :=
   concat_all (
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'>" ::
-    (if is_empty page_description then ""
-     else concat_all ("<meta name='description' content='" :: html_escape page_description :: "'>" :: nil)) ::
     "<title>" :: html_escape page_title ::
     (if string_eqb page_title "wklm.github.io" then "" else " — wklm.github.io") ::
     "</title>" ::
@@ -697,241 +351,161 @@ Definition page_shell (depth page_title page_description body_class nav_label na
     body_content ::
     "</div></body></html>" :: nil).
 
-(* Render a photo post's blocks, lifting the first [ImageBlock] into a cover
-   plate with [fetchpriority='high'] and without [loading='lazy'].  All later
-   blocks (including any further images) render through the default path. *)
-Fixpoint render_blocks_photo (cover_consumed : bool) (blocks : list Block) : string :=
-  match blocks with
-  | nil => ""
-  | ImageBlock alt src :: rest =>
-      if cover_consumed
-      then cat (render_block_impl tt (ImageBlock alt src))
-               (render_blocks_photo true rest)
-      else
-        let cover := concat_all (
-          "<figure class='plate plate--cover'><img src='" ::
-          html_escape (post_asset_href src) ::
-          "' alt='" :: html_escape alt ::
-          "' width='3936' height='2624' fetchpriority='high' decoding='async'></figure>" :: nil) in
-        cat cover (render_blocks_photo true rest)
-  | b :: rest =>
-      cat (render_block_impl tt b) (render_blocks_photo cover_consumed rest)
-  end.
-
-Definition render_essay_page (p : Post) : string :=
-  let m := p.(post_meta) in
-  let body := concat_all (
-    "<main id='main' class='post'>" ::
-    "<article><header class='post-header'>" ::
-    "<p class='post-meta'>" :: html_escape (meta_line m) :: "</p>" ::
-    "<h1>" :: html_escape m.(meta_title) :: "</h1>" ::
-    lead_media m ::
-    "</header><div class='post-body'>" :: render_blocks p.(post_body) :: "</div></article></main>" :: nil) in
-  page_shell "../" m.(meta_title) m.(meta_summary) "essay" "index" "../index.html" body.
-
-Definition render_photo_page (p : Post) : string :=
-  let m := p.(post_meta) in
-  let body := concat_all (
-    "<main id='main' class='post photo'>" ::
-    "<article><header class='post-header'>" ::
-    "<p class='post-meta'>" :: html_escape (meta_line m) :: "</p>" ::
-    "<h1>" :: html_escape m.(meta_title) :: "</h1>" ::
-    "</header><div class='post-body'>" :: render_blocks_photo false p.(post_body) :: "</div></article></main>" :: nil) in
-  page_shell "../" m.(meta_title) m.(meta_summary) "photo" "index" "../index.html" body.
-
-Definition render_post_page (p : Post) : string :=
-  match p.(post_meta).(meta_kind) with
-  | Essay => render_essay_page p
-  | Photo => render_photo_page p
-  end.
-
-Fixpoint nat_to_string_aux (remaining : nat) (n : nat) (acc : string) : string :=
-  match remaining with
-  | O => acc
-  | S remaining' =>
-      let d := Nat.modulo n 10 in
-      let n' := Nat.div n 10 in
-      let c := match d with
-               | 0 => "0" | 1 => "1" | 2 => "2" | 3 => "3" | 4 => "4"
-               | 5 => "5" | 6 => "6" | 7 => "7" | 8 => "8" | _ => "9"
-               end in
-      let acc' := cat c acc in
-      if Nat.eqb n' 0 then acc' else nat_to_string_aux remaining' n' acc'
-  end.
-
-Definition nat_to_string (n : nat) : string :=
-  nat_to_string_aux 20 n "".
-
-Definition post_list_item (p : Post) : string :=
-  let m := p.(post_meta) in
+Definition header_row (label value : string) : string :=
   concat_all (
-    "<li><time datetime='" :: html_escape m.(meta_date) :: "'>" :: html_escape m.(meta_date) :: "</time> " ::
-    "<a href='" :: html_escape (cat m.(meta_slug) "/index.html") :: "'>" :: html_escape m.(meta_title) :: "</a></li>" :: nil).
+    "<div class='eml-header'><dt>" :: html_escape label :: "</dt>" ::
+    "<dd>" :: html_escape value :: "</dd></div>" :: nil).
 
-Fixpoint render_post_list (posts : list Post) : list string :=
-  match posts with
+(* The four visible headers are [From], [To], [Date], and [Subject].
+   [MIME-Version] and [Content-Type] are rendered as literal strings
+   so the reader sees the same envelope a mail client would show for
+   any RFC 3156 message. *)
+Definition render_eml_page (ep : EncryptedPost) : string :=
+  let title := cat "Subject: " ep.(ep_subject) in
+  let body :=
+    concat_all (
+      "<main id='main' class='eml'>" ::
+      "<dl class='eml-headers'>" ::
+      header_row "From" ep.(ep_from) ::
+      header_row "To" ep.(ep_to) ::
+      header_row "Date" ep.(ep_date) ::
+      header_row "Subject" ep.(ep_subject) ::
+      header_row "MIME-Version" "1.0" ::
+      header_row "Content-Type" "multipart/encrypted; protocol=application/pgp-encrypted" ::
+      "</dl>" ::
+      "<hr class='eml-rule'>" ::
+      "<pre class='eml-body'>" :: html_escape ep.(ep_body) :: "</pre>" ::
+      "</main>" :: nil) in
+  page_shell "../" title "eml" "index" "../index.html" body.
+
+Definition inbox_row (ep : EncryptedPost) : string :=
+  concat_all (
+    "<li class='inbox-row'>" ::
+    "<span class='inbox-from'>" :: html_escape ep.(ep_from) :: "</span>" ::
+    "<time class='inbox-date' datetime='" :: html_escape ep.(ep_date) :: "'>" :: html_escape ep.(ep_date) :: "</time>" ::
+    "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
+    "Subject: " :: html_escape ep.(ep_subject) ::
+    "</a>" ::
+    "</li>" :: nil).
+
+Fixpoint render_inbox_rows (eps : list EncryptedPost) : list string :=
+  match eps with
   | nil => nil
-  | p :: rest => post_list_item p :: render_post_list rest
+  | ep :: rest => inbox_row ep :: render_inbox_rows rest
   end.
 
-Definition render_index_page (posts : list Post) : string :=
-  let body := concat_all (
-    "<main id='main' class='index'>" ::
-    "<ul class='posts'>" :: concat_all (render_post_list posts) :: "</ul></main>" :: nil) in
-  page_shell "" "wklm.github.io" "" "home" "" "" body.
+Definition render_inbox_page (eps : list EncryptedPost) : string :=
+  let body :=
+    concat_all (
+      "<main id='main' class='inbox'>" ::
+      "<ol class='inbox-list'>" ::
+      concat_all (render_inbox_rows eps) ::
+      "</ol>" :: "</main>" :: nil) in
+  page_shell "" "wklm.github.io" "inbox" "" "" body.
 
+(* ---- Stylesheet --------------------------------------------------
+   The visual target is a plain, lightly-styled email client.  A single
+   warm off-white background, near-black ink, a muted rule colour.
+   Headers and body are monospaced to sell the "raw .eml" register.
+   The inbox keeps the same monospace family for the same reason. *)
 Definition stylesheet : string :=
   concat_all (
-    ":root{--paper:#fafafa;--ink:#141414;--muted:#6b6b6b;--rule:#d9d9d9;--accent:#141414}" ::
-    "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#e8e8e8}}" ::
+    ":root{--paper:#f4f0e8;--ink:#171717;--muted:#5c554c;--rule:#d9d2c2;--accent:#b08d57}" ::
+    "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#b08d57}}" ::
     "*,*::before,*::after{box-sizing:border-box}" ::
-    "html{-webkit-text-size-adjust:100%;hanging-punctuation:first last}" ::
-    "body{margin:0;background:var(--paper);color:var(--ink);font:18px/1.55 Georgia,'Times New Roman',serif;font-variant-numeric:oldstyle-nums proportional-nums;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}" ::
-    "p{margin:0 0 1em;text-wrap:pretty;orphans:2;widows:2}" ::
-    "h1,h2,h3{font-weight:normal;line-height:1.2;text-wrap:balance;margin:1.6em 0 .4em}" ::
-    "h1{font-size:1.75rem;margin-top:0}h2{font-size:1.25rem}h3{font-size:1.05rem;font-style:italic}" ::
+    "html{-webkit-text-size-adjust:100%}" ::
+    "body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 ui-monospace,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}" ::
     "a{color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:.18em}" ::
     "a:hover{text-decoration-thickness:2px}" ::
     "a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}" ::
-    "img{display:block;max-width:100%;height:auto}" ::
-    "time{font-variant-numeric:tabular-nums oldstyle-nums}" ::
     ".skip-link{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}" ::
     ".skip-link:focus{position:static;width:auto;height:auto;padding:.25rem .5rem;background:var(--ink);color:var(--paper)}" ::
-    ".page-shell{max-width:36rem;margin:0 auto;padding:2rem 1.25rem 4rem}" ::
-    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:3rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    ".page-shell{max-width:54rem;margin:0 auto;padding:2rem 1.25rem 4rem}" ::
+    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:2.5rem;font-size:.9rem;border-top:2px solid var(--ink);padding-top:.75rem}" ::
     ".site-mark{text-decoration:none;font-weight:600;letter-spacing:.02em}" ::
     ".site-nav a{color:var(--muted);text-decoration:none}" ::
     ".site-nav a:hover{color:var(--ink);text-decoration:underline}" ::
-    ".post-header{margin-bottom:2rem}" ::
-    ".post-header h1{margin:.2em 0 0}" ::
-    ".post-meta{margin:0;color:var(--muted);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem;letter-spacing:.02em}" ::
-    ".post-body p,.post-body li{overflow-wrap:break-word}" ::
-    ".post-body p+p{text-indent:1.2em;margin-top:-1em}" ::
-    ".post-body blockquote{margin:1em 0;padding-left:1em;border-left:2px solid var(--rule);color:var(--muted);font-style:italic}" ::
-    ".post-body ul,.post-body ol{padding-left:1.4em}" ::
-    ".code-block{margin:1.2em 0;padding:.8rem 1rem;background:var(--rule);color:var(--ink);overflow-x:auto;white-space:pre;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.88rem;line-height:1.5}" ::
-    ".plate{margin:1.5em 0}" ::
-    ".plate img{width:100%}" ::
-    ".lead-figure{margin:1.5em 0}" ::
-    ".lead-figure img{width:100%}" ::
-    ".photo .plate--cover{margin:0 0 2rem}" ::
-    ".photo .plate--cover img{width:100%}" ::
-    ".index .posts{list-style:none;padding:0;margin:0}" ::
-    ".index .posts li{margin:.35em 0;display:flex;gap:1.2em;align-items:baseline}" ::
-    ".index .posts time{color:var(--muted);font-size:.88rem;flex:0 0 auto;min-width:6em}" ::
-    ".index .posts a{text-decoration:none}" ::
-    ".index .posts a:hover{text-decoration:underline}" ::
-    "@media (max-width:32rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:2rem}.index .posts li{flex-direction:column;gap:.1em;margin:.8em 0}.index .posts time{min-width:0}}" ::
+    ".eml-headers{margin:0 0 1rem;padding:0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}" ::
+    ".eml-header{display:grid;grid-template-columns:9rem 1fr;gap:1rem;padding:.25rem 0;border-bottom:1px dotted var(--rule)}" ::
+    ".eml-header:last-child{border-bottom:0}" ::
+    ".eml-header dt{margin:0;color:var(--muted);font-weight:600}" ::
+    ".eml-header dd{margin:0;word-break:break-word}" ::
+    ".eml-rule{border:0;border-top:1px solid var(--rule);margin:1rem 0}" ::
+    ".eml-body{margin:0;padding:1rem;background:transparent;color:var(--ink);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;font-size:.85rem;line-height:1.45}" ::
+    ".inbox-list{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}" ::
+    ".inbox-row{display:grid;grid-template-columns:14rem 10rem 1fr;gap:1rem;padding:.5rem 0;border-bottom:1px dotted var(--rule);align-items:baseline}" ::
+    ".inbox-from{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" ::
+    ".inbox-date{color:var(--muted);font-variant-numeric:tabular-nums}" ::
+    ".inbox-subject{text-decoration:none}" ::
+    ".inbox-subject:hover{text-decoration:underline}" ::
+    "@media (max-width:40rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:1.5rem}.eml-header{grid-template-columns:6rem 1fr;gap:.5rem}.inbox-row{grid-template-columns:1fr;gap:.1em;padding:.6rem 0}.inbox-from,.inbox-date{font-size:.8rem}}" ::
     "@media print{.site-nav{display:none}body{background:#fff;color:#000}a{text-decoration:none;color:#000}}" :: nil).
 
-Definition should_publish (p : Post) : bool :=
-  negb p.(post_meta).(meta_draft).
+(* ---- IO pipeline ------------------------------------------------- *)
 
-Definition filter_posts (posts : list Post) : list Post :=
-  filter should_publish posts.
-
-Fixpoint read_posts (paths : list string) : IO (list Post) :=
+Fixpoint read_eml_list (paths : list string) : IO (list EncryptedPost) :=
   match paths with
   | nil => Ret nil
   | path :: rest =>
       raw <- read path ;;
-      parsed_rest <- read_posts rest ;;
-      Ret (parse_post path raw :: parsed_rest)
+      parsed_rest <- read_eml_list rest ;;
+      Ret (parse_eml (file_stem_eml path) raw :: parsed_rest)
   end.
 
-Fixpoint copy_post_assets (source_dir output_dir : string) (names : list string) : IO unit :=
-  match names with
-  | nil => Ret tt
-  | name :: rest =>
-      (* Defensive filters: skip markdown (handled by the post pipeline) and
-         dotfiles (which may include ".", "..", or hidden files surfaced by
-         [list_directory]). *)
-      if orb (has_suffix name ".md") (starts_with name ".")
-      then copy_post_assets source_dir output_dir rest
-      else
-        raw <- read (cat source_dir (cat "/" name)) ;;
-        _ <- write_file (cat output_dir (cat "/" name)) raw ;;
-        copy_post_assets source_dir output_dir rest
-  end.
-
-Fixpoint insert_post (p : Post) (posts : list Post) : list Post :=
-  match posts with
-  | nil => p :: nil
+(* Descending sort by [ep_date].  The hook writes an RFC 5322 date, which
+   is not lexicographic; we therefore sort by the value in the header,
+   accepting that the order is *date-header* order.  When the hook emits
+   ISO-8601-ish dates (as it does here, via Python's
+   [email.utils.format_datetime]) lex order does not match calendar order
+   for dates before 1970 or after 9999, which is outside this repo's
+   scope.  For conventional RFC 5322 dates we fall back to insertion
+   order as a tie-breaker. *)
+Fixpoint insert_ep (ep : EncryptedPost) (eps : list EncryptedPost) : list EncryptedPost :=
+  match eps with
+  | nil => ep :: nil
   | q :: rest =>
-      if string_ge p.(post_meta).(meta_date) q.(post_meta).(meta_date)
-      then p :: q :: rest
-      else q :: insert_post p rest
+      if string_ge ep.(ep_date) q.(ep_date)
+      then ep :: q :: rest
+      else q :: insert_ep ep rest
   end.
 
-Fixpoint sort_posts (posts : list Post) : list Post :=
-  match posts with
+Fixpoint sort_eps (eps : list EncryptedPost) : list EncryptedPost :=
+  match eps with
   | nil => nil
-  | p :: rest => insert_post p (sort_posts rest)
+  | ep :: rest => insert_ep ep (sort_eps rest)
   end.
 
-Fixpoint write_post_pages (output_dir : string) (posts : list Post) : IO unit :=
-  match posts with
+Fixpoint write_eml_pages (output_dir : string) (eps : list EncryptedPost) : IO unit :=
+  match eps with
   | nil => Ret tt
-  | p :: rest =>
-      _ <- create_directory (dirname_output_path output_dir p.(post_meta).(meta_slug)) ;;
-      _ <- write_file (file_output_path output_dir p.(post_meta).(meta_slug)) (render_post_page p) ;;
-      write_post_pages output_dir rest
+  | ep :: rest =>
+      _ <- create_directory (dirname_output_path output_dir ep.(ep_slug)) ;;
+      _ <- write_file (file_output_path output_dir ep.(ep_slug)) (render_eml_page ep) ;;
+      write_eml_pages output_dir rest
   end.
 
-(* Asset reference collection: returns every asset filename referenced by
-   published posts (lead images plus inline image-block sources).  Used to
-   filter the raw directory listing so drafts' assets don't leak into
-   [_site/posts/]. *)
-Fixpoint block_image_srcs (body : list Block) : list string :=
-  match body with
-  | nil => nil
-  | ImageBlock _ src :: rest => src :: block_image_srcs rest
-  | _ :: rest => block_image_srcs rest
-  end.
-
-Definition post_asset_refs (p : Post) : list string :=
-  let lead := p.(post_meta).(meta_lead_image) in
-  let leads := if is_empty lead then nil else lead :: nil in
-  app leads (block_image_srcs p.(post_body)).
-
-Fixpoint collect_asset_refs (posts : list Post) : list string :=
-  match posts with
-  | nil => nil
-  | p :: rest => app (post_asset_refs p) (collect_asset_refs rest)
-  end.
-
-Fixpoint member_string (x : string) (xs : list string) : bool :=
-  match xs with
-  | nil => false
-  | y :: rest => if string_eqb x y then true else member_string x rest
-  end.
-
+(* [run] is the extracted entry point.  It reads the ciphertext tree
+   from [./posts-encrypted/], emits one page per [.eml] under
+   [_site/<slug>/], plus the inbox index and stylesheet.  No plaintext
+   attachments are copied anywhere; every byte of the original post
+   lives inside the armored body. *)
 Definition run : IO unit :=
-  files <- list_directory "./posts" ;;
-  let md_paths := map (fun name => cat "./posts/" name) (filter (fun name => has_suffix name ".md") files) in
-  parsed_posts <- read_posts md_paths ;;
-  let posts := sort_posts (filter_posts parsed_posts) in
-  (* Only copy assets referenced by a published post, so drafts don't leak
-     their images into [_site/posts/]. *)
-  let referenced := collect_asset_refs posts in
-  let asset_names := filter (fun name => member_string name referenced) files in
+  files <- list_directory "./posts-encrypted" ;;
+  let eml_paths := map (fun name => cat "./posts-encrypted/" name)
+                       (filter (fun name => has_suffix name ".eml") files) in
+  parsed <- read_eml_list eml_paths ;;
+  let eps := sort_eps parsed in
   _ <- create_directory "./_site" ;;
-  _ <- create_directory "./_site/posts" ;;
   _ <- create_directory "./_site/styles" ;;
-  _ <- copy_post_assets "./posts" "./_site/posts" asset_names ;;
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
-  _ <- write_file (index_output_path "./_site") (render_index_page posts) ;;
-  write_post_pages "./_site" posts.
+  _ <- write_file (index_output_path "./_site") (render_inbox_page eps) ;;
+  write_eml_pages "./_site" eps.
 
 Set Warnings "-crane-extraction-default-directory".
 
-(* Override the default fixpoint extraction of [concat_all] with a linear-time
-   C++ helper that pre-reserves the output [std::string].  The default
-   emission compiles to right-folded [operator+] which is O(n^2) in total
-   output length; the helper walks the list twice (sum lengths, then append)
-   so allocation is bounded by a single [reserve] plus the output itself.
-   The Coq definition is kept for proof-level reasoning; only the C++ call
-   site is redirected. *)
+(* Linear-time [concat_all] override — same rationale as the pre-encryption
+   revision.  The Coq definition is kept for proof-level reasoning; only
+   the C++ call site is redirected to the helper in [blog_helpers.h]. *)
 Crane Extract Inlined Constant concat_all => "concat_all_std(%a0)" From "blog_helpers.h".
 
 Crane Extraction "blog" run.

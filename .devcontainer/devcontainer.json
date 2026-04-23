@@ -9,7 +9,7 @@
     "vscode": {
       "extensions": [
         "ocamllabs.ocaml-platform",
-        "maximedenes.vscoq",
+        "rocq-prover.vsrocq",
         "yzhang.markdown-all-in-one",
         "davidanson.vscode-markdownlint",
         "shd101wyy.markdown-preview-enhanced",
@@ -19,12 +19,12 @@
         "ocaml.sandbox": {
           "kind": "opam",
           "switch": "default"
-        }
+        },
+        "vsrocq.path": "/home/opam/.opam/default/bin/vsrocqtop"
       }
     }
   },
+  "updateRemoteUserUID": true,
   "postCreateCommand": "sudo chown -R opam:opam . && eval $(opam env) && dune build",
-  "runArgs": [
-    "--userns=keep-id"
-  ]
+  "runArgs": []
 }

@@ -6,146 +6,161 @@ the site is trying to be, how it should read, and how it should look.
 
 ## Premise
 
-`wklm.github.io` is a personal publication of technical essays. The
-subject matter is narrow: formal verification, the tools we use to
-build software, visual design, and the places where those concerns
-overlap. The generator that builds it is written in Rocq and extracted
-to C++ via Crane — that fact matters to me, but the site is not a demo
-for the generator. The generator is infrastructure; the writing is the
-product.
+`wklm.github.io` is a personal publication of technical essays
+distributed as PGP-encrypted email. Every page on the public site is,
+literally, a PGP/MIME message: an inbox of `Subject: ...` headers on
+the homepage, an RFC 5322 envelope on each post page, and below it a
+`-----BEGIN PGP MESSAGE-----` block. The reader is not given a
+rendered essay. The reader is given ciphertext, and — if they hold
+one of the listed recipient keys — the means to decrypt it.
+
+The point of this is not novelty. It is the editorial stance: the
+site does not solicit a passing audience. To read a piece you must
+already be on the recipient list, or you must do the work of
+becoming one. Everyone else sees the envelope.
+
+The generator that builds the inbox is written in Rocq and extracted
+to C++ via Crane. That fact matters to me, but the site is not a
+demo for the generator. The generator is infrastructure; the
+encryption is the editorial gesture; the writing is the product.
 
 ## Voice and editorial scope
 
-First person, restrained, declarative. I am writing for readers who
-already know the territory, or who are willing to meet the text on its
-own terms. The editorial rules are:
+First person, restrained, declarative. The pieces themselves —
+which only the recipients ever read — follow the same rules as
+before:
 
 - No marketing register. No "unlock", "leverage", "powerful",
   "seamless", "cutting-edge".
-- No hedging tics ("it's worth noting that…", "at the end of the
-  day…"). If it is worth noting, note it.
-- Claims are either grounded or marked as opinion. A piece that asserts
-  something about a proof, a compiler, or a spec is expected to cite
-  the relevant artifact.
-- Essays, not posts. Minimum viable length is "whatever is needed";
-  there is no quota and no schedule.
+- No hedging tics. If it is worth noting, note it.
+- Claims are either grounded or marked as opinion.
+- Essays, not posts. Length is whatever the argument needs.
 
 Topics in scope: proof engineering in Rocq and adjacent systems;
-extraction pipelines; programming-language design; small, well-shaped
-tools; typography; the visual grammar of early-20th-century European
-design. Topics out of scope: product announcements, hot takes on
-industry news, career advice.
+extraction pipelines; programming-language design; small,
+well-shaped tools; typography; the visual grammar of
+early-20th-century European design. Topics out of scope: product
+announcements, hot takes, career advice.
+
+The public site itself carries no editorial register at all — only
+metadata and ciphertext. Subjects are always the literal string
+`Subject: ...`, so even the title of a piece does not leak.
 
 ## Visual language
 
-The reference points are Bauhaus (Tschichold, Bayer, Moholy-Nagy),
-Klimt's ornamental palette, and the broader early modernist print
-tradition. In practice this means:
+The site renders as a plain mail client, deliberately ugly in the
+way real `.eml` files are ugly. Monospace everywhere. Minimal
+chrome. The reference points are early Pine/Mutt screenshots and
+the raw output of `gpg --decrypt`. Concretely:
 
-- A warm off-white page (`#f4f0e8`) against near-black text
-  (`#171717`), with a muted gold accent (`#b08d57`) used sparingly for
-  link underlines and rules. A deep blue-black (`#12202c`) anchors code
-  blocks. Secondary text sits in a warm grey (`#5c554c`). These are the
-  literal values in the `stylesheet` constant in `src/Logic.v:653`.
-- A two-family type system: a serif (Georgia) for running prose and a
-  geometric-leaning sans (Arial/Helvetica as a pragmatic stand-in) for
-  the site mark, navigation, and display headings. Display headings
-  are set lowercase and tightly leaded; metadata and nav are uppercase
-  with generous letter-spacing. See `.index-intro h1` and
-  `.site-mark` in the same stylesheet.
-- Strong horizontal rules. The site header is anchored by a heavy
-  top border, not a logo lockup.
-- Generous measure — text column caps around 36rem — and a grid-based
-  post layout (`.post-layout` is a two-column grid of a meta rail and
-  the article proper).
+- A near-white page with near-black text. A single muted accent for
+  rule lines and the inbox hover state. No second typeface, no
+  ornaments, no display headings.
+- A single monospace family for the entire site (system
+  `ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`).
+- Each post page has two regions, separated by a horizontal rule:
+  a `<dl class='eml-headers'>` table of `From / To / Date /
+  Content-Type` rows, then a `<pre class='eml-body'>` containing
+  the multipart-encrypted body verbatim, including the
+  `-----BEGIN PGP MESSAGE-----` armor.
+- The homepage is an `<ol class='inbox'>` of rows; each row shows
+  `From`, `Date`, and a link whose text is `Subject: ...`.
+- No JavaScript. No webfonts. No images on any rendered page —
+  every image in a post is encrypted as a MIME attachment inside
+  the ciphertext, never exposed.
 
 Explicit anti-patterns:
 
-- No card grids on the homepage. No tile-flavoured "featured" hero.
-- No gradients, no blurred blobs, no glassmorphism, no pastel
-  "AI-slop minimalism".
-- No decorative emoji in the chrome. No badges. No social-embed chrome.
-- No JavaScript on reading pages. The generator emits a single
-  stylesheet and static HTML; `render_post_page` and `render_index_page`
-  in `src/Logic.v` do not reference a script tag.
+- No card grids, no hero, no featured tile.
+- No gradients, no blurred blobs, no glassmorphism.
+- No decorative emoji. No badges. No social-embed chrome.
+- Nothing that suggests the site is trying to be read by a casual
+  visitor. The aesthetic should communicate, immediately, that
+  this page is correspondence and not an article.
 
 ## Information architecture
 
-- **Homepage.** A numbered index. The HTML is literally an `<ol>`
-  (`<ol class='post-list'>` emitted by `render_index_page` at
-  `src/Logic.v:647`). Each entry is: number, small-caps metadata line,
-  title as a link, a short deck. Nothing else. Posts are sorted by
-  date, descending, via `sort_posts` / `insert_post`.
-- **Post page.** Single-column article with a left meta rail
-  (topic chip, date), a title, a deck, an optional lead image, and the
-  body. This is `render_post_page` in `src/Logic.v:605`.
-- **URL shape.** Each post lives at `/<slug>/`. The generator writes
-  `output_dir/<slug>/index.html`; see `file_output_path` in
-  `src/Logic.v:329`. Slugs are derived from the frontmatter `slug`
-  field or the filename stem via `slugify` / `file_stem`.
-- **Frontmatter.** The `Meta` record in `src/Logic.v:130` defines the
-  supported keys: `title`, `date`, `slug`, `summary`, `topic`,
-  `lead_image`, `lead_image_alt`, `draft`. `draft: true` suppresses
-  publication via `should_publish`. Anything else is ignored.
-- **Block grammar.** The `Block` ADT is deliberately small: `Heading2`,
-  `Heading3`, `Paragraph`, `CodeBlock`, `ImageBlock`. The `Inline` ADT
-  covers `Text`, `Link`, `CodeSpan`, `Emphasis`, `Strong`. There are no
-  lists, tables, blockquotes, or footnotes yet; they will be added
-  when an essay actually needs them, not before.
+- **Homepage.** A list of envelopes. Rendered by
+  `render_inbox_page` in [src/Logic.v](src/Logic.v). Each row is:
+  `From`, `Date`, `Subject: ...` as a link to `/<slug>/`. Sorted
+  by `Date` descending.
+- **Post page.** Headers table on top, ciphertext `<pre>` below.
+  Rendered by `render_eml_page` in [src/Logic.v](src/Logic.v). The
+  `<pre>` contains the body of the `.eml` byte-for-byte after HTML
+  escaping; nothing is reformatted.
+- **URL shape.** Each message lives at `/<slug>/`. The slug is the
+  basename of the `.eml` file in `posts-encrypted/`.
+- **Visible headers.** `From`, `To`, `Date`, `MIME-Version`,
+  `Content-Type`. Everything else (`Subject`, any `X-` headers,
+  `Message-ID`) is suppressed at render time so it cannot leak
+  metadata, and the public `Subject:` is always literally `...`.
 
 ## What is verified today
 
-I want to be precise about this, because the previous version of this
-document overclaimed.
+I want to be precise about this, because the encryption story is
+easy to overclaim.
 
 What currently holds:
 
-- The generator is written in Rocq (`src/Logic.v`) and is accepted by
-  the type checker. All definitions are total under the encoded fuel
-  discipline — recursive text-processing functions (`parse_inlines_aux`,
-  `parse_blocks`, `html_escape_aux`, `find_double_star`,
-  `render_inline_list_aux`, etc.) take a `nat` fuel bound and terminate
-  structurally on it.
-- Extraction via `Crane Extraction "blog" run` (`src/Logic.v:721`)
-  succeeds, yielding C++23 source.
+- The generator is written in Rocq ([src/Logic.v](src/Logic.v)) and
+  is accepted by the type checker. All recursive definitions are
+  total under structural recursion or explicit `nat` fuel.
+- Extraction via `Crane Extraction "blog" run` succeeds, yielding
+  C++23 source.
 - That C++ source compiles under clang++ and runs, producing the
   `_site/` tree.
+- `scripts/test-roundtrip.sh` confirms end-to-end that the OCaml
+  encrypt/decrypt tools round-trip a Markdown post and a binary
+  attachment byte-for-byte through `gpg`, that the resulting
+  armored body contains a PKESK packet, and that the rendered HTML
+  contains the armor and never an `<img>` or a real subject line.
 
 What is *not* verified today:
 
-- There are no theorems in the repository. In particular, there is no
-  proof that `render_post_page` produces well-formed HTML, no proof of
-  parser soundness, and no round-trip statement between `parse_post`
-  and any canonical form.
-- The `parse_*` family and the serializers in `render_block_impl` are
-  best-effort: type-checked code, not proved code.
+- There are no theorems in the repository.
+- The OpenPGP encryption itself is **not** formally verified. It
+  is delegated to GnuPG, which is the same trust boundary any PGP
+  email client operates under. No verified end-to-end OpenPGP
+  implementation exists today in any language; building one on
+  top of verified primitives (e.g. HACL\*) would require
+  re-implementing RFC 4880 framing, which would defeat the goal
+  of replicating PGP-email behaviour bit-for-bit.
+- The OCaml glue in `tools/` — frontmatter parsing, MIME framing,
+  subprocess plumbing — is type-checked code, not proved code.
 
 Compile-time success is evidence that the system is type-consistent
-and terminating, nothing more. It is not a correctness claim.
+and terminating. Round-trip success is evidence that the framing
+matches what `gpg` expects. Neither is a correctness claim about
+the cryptography.
 
 ## Roadmap
 
 Verification work I consider worth doing, in rough order:
 
-1. A narrowly-scoped theorem about `render_block_impl`: for every
-   `Block`, the emitted string is balanced with respect to a small
-   explicit tag alphabet (`<h2>`/`</h2>`, `<p>`/`</p>`, etc.) and every
-   user-supplied substring passes through `html_escape`. This is
-   tractable and worth the effort.
-- A soundness statement for `html_escape` against a spec predicate
-   that forbids the raw characters `&<>"'` in the output.
-- A parser round-trip on a restricted grammar fragment (paragraphs of
-   `Text` and `CodeSpan` only), extended opportunistically.
+1. A narrowly-scoped theorem about `render_eml_page`: every visible
+   header value passes through `html_escape`, and no character
+   outside the ciphertext alphabet (`A–Z a–z 0–9 + / = -` plus
+   newline) appears inside `<pre class='eml-body'>`.
+2. A proof that `parse_eml` and the unparser used by the OCaml
+   tool agree on the boundary (headers / blank line / body) for
+   the subset of messages we generate.
+3. A formalisation of the RFC 3156 envelope structure, against
+   which the OCaml emitter can be checked by extraction and round
+   trip.
 
 Content and tooling work:
 
-- More `Block` constructors (lists, blockquotes) when an essay needs
-  them.
-- An RSS/Atom feed emitted from the same `Post` list.
-- A local preview mode that watches `posts/` and rebuilds.
+- A `decrypt-all` driver that reconstructs `posts/` from
+  `posts-encrypted/` for the author.
+- A pre-receive check in CI that rejects any push touching
+  `posts/`.
+- A short note on each recipient's key fingerprint, kept in the
+  repo so subscribers can verify out-of-band.
 
 ## Out of scope
 
-Comments, analytics, newsletters, pop-ups, cookie banners, tracking
-pixels, A/B tests, a CMS, a dashboard, a Twitter-card generator, and a
-theme switcher. If any of these appear, something has gone wrong.
+Comments, analytics, newsletters, pop-ups, cookie banners,
+tracking pixels, A/B tests, a CMS, a dashboard, a Twitter-card
+generator, a theme switcher, any rendering of post bodies on the
+public site, any plaintext on the public site beyond envelope
+metadata. If any of these appear, something has gone wrong.

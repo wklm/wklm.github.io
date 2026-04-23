@@ -30,10 +30,14 @@ USER opam
 
 # Update opam repo (remove stale cache first to avoid cp -PRp overlay failure)
 RUN rm -rf ~/.opam/repo/default && opam update
+RUN opam repo add coq-released https://coq.inria.fr/opam/released
 RUN opam install -y dune
 
 # Install Coq 9.0.0 specifically to support rocq-crane requirements
-RUN opam install -y coq=9.0.0
+RUN opam install -y coq=9.0.0 coq-itree coq-paco coq-ext-lib
+
+# Install the VsRocq language server used by the VS Code extension.
+RUN opam install -y vsrocq-language-server
 
 # Install OCaml development tools
 RUN opam install -y ocaml-lsp-server ocamlformat utop
