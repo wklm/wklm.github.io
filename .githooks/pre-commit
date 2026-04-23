@@ -11,6 +11,22 @@ set -euo pipefail
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
 
+# Safety net: refuse to commit anything under posts-encrypted/ that is
+# not an .eml ciphertext (or the .gitkeep). Catches the case where a
+# plaintext file is misplaced directly into posts-encrypted/ and would
+# otherwise bypass the encrypt step entirely.
+mapfile -t bad < <(
+    git diff --cached --name-only --diff-filter=AM -- 'posts-encrypted/*' \
+        | grep -Ev '(^posts-encrypted/[^/]+\.eml$|^posts-encrypted/\.gitkeep$)' \
+        || true
+)
+if [[ ${#bad[@]} -gt 0 ]]; then
+    echo "pre-commit: refusing to commit non-ciphertext under posts-encrypted/:" >&2
+    printf '  %s\n' "${bad[@]}" >&2
+    echo "Move plaintext into posts/ (gitignored) and commit from there." >&2
+    exit 1
+fi
+
 mapfile -t staged < <(
     git diff --cached --name-only --diff-filter=AMR -- 'posts/*.md' || true
 )
