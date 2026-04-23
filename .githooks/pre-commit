@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# pre-commit hook -- encrypt any staged posts/*.md into
+# posts-encrypted/<slug>.eml, stage the ciphertext, and unstage the
+# plaintext. The plaintext never enters a commit.
+#
+# Crypto is done by gpg. MIME framing and the glue around it are
+# built by the OCaml executable tools/encrypt_post, which is part of
+# this repo's dune build tree.
+set -euo pipefail
+
+repo="$(git rev-parse --show-toplevel)"
+cd "$repo"
+
+mapfile -t staged < <(
+    git diff --cached --name-only --diff-filter=AMR -- 'posts/*.md' || true
+)
+
+if [[ ${#staged[@]} -eq 0 ]]; then
+    exit 0
+fi
+
+if ! command -v dune >/dev/null 2>&1; then
+    echo "pre-commit: dune not on PATH; did you 'eval \$(opam env)'?" >&2
+    exit 1
+fi
+
+dune build tools/encrypt_post.exe
+enc="./_build/default/tools/encrypt_post.exe"
+
+for path in "${staged[@]}"; do
+    if [[ ! -f "$path" ]]; then
+        echo "pre-commit: staged file missing from working tree: $path" >&2
+        exit 1
+    fi
+    "$enc" --stage "$path"
+done
