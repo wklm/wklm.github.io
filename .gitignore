@@ -8,3 +8,12 @@ _site/
 .lia.cache
 .claude/
 firebase-debug.log
+
+# Plaintext posts are never committed. They live under posts/ on the
+# author's working tree, are encrypted by the pre-commit hook into
+# posts-encrypted/*.eml, and only the ciphertext is tracked.
+posts/
+!posts/.gitkeep
+
+# Local GPG scratch used by the round-trip test
+.gnupg-test/
