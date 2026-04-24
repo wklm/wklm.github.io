@@ -17,3 +17,11 @@ posts/
 
 # Local GPG scratch used by the round-trip test
 .gnupg-test/
+
+# Never commit exported keys or passphrases
+*.asc
+*.gpg
+*.pgp
+*.key
+secret*
+passphrase*
