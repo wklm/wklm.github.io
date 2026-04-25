@@ -78,14 +78,9 @@ class BlogEmailHandler:
             
         print(f"Created post: {filepath}")
         
-        # Run docker build & git publish
-        print("Running build via docker...")
+        # Git publish
+        print("Pushing to git to trigger deployment...")
         try:
-            subprocess.run(["docker", "build", "-t", "crane-blog", "."], check=True)
-            subprocess.run(["docker", "run", "--name", "crane-blog-run", "crane-blog"], check=True)
-            subprocess.run(["docker", "cp", "crane-blog-run:/home/opam/crane-blog/_site", "./_site"], check=True)
-            subprocess.run(["docker", "rm", "crane-blog-run"], check=True)
-            
             subprocess.run(["git", "add", "posts/"], check=True)
             subprocess.run(["git", "commit", "-m", f"feat: new post via Tailscale SMTP ({slug})"], check=True)
             subprocess.run(["git", "push"], check=True)
@@ -96,12 +91,8 @@ class BlogEmailHandler:
             subprocess.run(["wall"], input=f"Crane Blog post published: {title} ({slug})".encode(), check=False)
             
         except Exception as e:
-            print(f"Error during build/publish: {e}")
-            subprocess.run(["wall"], input=f"Crane Blog post build FAILED for: {title}".encode(), check=False)
-            try:
-                subprocess.run(["docker", "rm", "-f", "crane-blog-run"], check=False, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+            print(f"Error during publish: {e}")
+            subprocess.run(["wall"], input=f"Crane Blog post publish FAILED for: {title}".encode(), check=False)
             
         return '250 Message accepted for delivery'
 

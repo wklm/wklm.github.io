@@ -3,7 +3,7 @@
 set -e
 
 # Setup directory
-cd ~/crane_blog
+cd /home/wojtek/crane_blog
 
 # Install the Python aiosmtpd library from Debian repositories
 sudo apt-get update
@@ -16,11 +16,11 @@ Description=Crane Blog Tailscale SMTP Server
 After=network.target
 
 [Service]
-User=$USER
-WorkingDirectory=$HOME/crane_blog
+User=wojtek
+WorkingDirectory=/home/wojtek/crane_blog
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="SMTP_PORT=2525"
-ExecStart=/usr/bin/env python3 $HOME/crane_blog/scripts/tailscale_smtp.py
+ExecStart=/usr/bin/env python3 /home/wojtek/crane_blog/scripts/tailscale_smtp.py
 Restart=always
 
 [Install]
