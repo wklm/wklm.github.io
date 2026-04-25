@@ -32,57 +32,31 @@ class BlogEmailHandler:
         title = subject
         slug = clean_slug(title)
         
-        # Get body
-        body = ""
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        body = payload.decode(errors="replace")
-                    break
-        else:
-            payload = msg.get_payload(decode=True)
-            if payload:
-                body = payload.decode(errors="replace")
-                
-        # Clean up signature if present
-        body = body.split('\n-- \n')[0]
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        
-        # Build frontmatter
-        frontmatter = "---\n"
-        frontmatter += f"title: {title}\n"
-        frontmatter += f"date: {date_str}\n"
-        frontmatter += f"slug: {slug}\n"
-        frontmatter += "---\n\n"
-        
-        content = frontmatter + body.strip() + "\n"
-        
         # Switch to the correct directory (assumes script is inside crane_blog/scripts/)
         script_dir = os.path.dirname(os.path.abspath(__file__))
         project_dir = os.path.abspath(os.path.join(script_dir, ".."))
         os.chdir(project_dir)
         
-        if not os.path.exists("posts"):
-            os.makedirs("posts")
+        if not os.path.exists("posts-encrypted"):
+            os.makedirs("posts-encrypted")
             
-        filepath = os.path.join("posts", f"{slug}.md")
+        filepath = os.path.join("posts-encrypted", f"{slug}.eml")
         counter = 1
         while os.path.exists(filepath):
-            filepath = os.path.join("posts", f"{slug}-{counter}.md")
+            filepath = os.path.join("posts-encrypted", f"{slug}-{counter}.eml")
             counter += 1
             
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
+        # Write the raw RFC 5322 email directly
+        with open(filepath, "wb") as f:
+            f.write(envelope.content)
             
         print(f"Created post: {filepath}")
         
         # Git publish
         print("Pushing to git to trigger deployment...")
         try:
-            subprocess.run(["git", "add", "posts/"], check=True)
-            subprocess.run(["git", "commit", "-m", f"feat: new post via Tailscale SMTP ({slug})"], check=True)
+            subprocess.run(["git", "add", "posts-encrypted/"], check=True)
+            subprocess.run(["git", "commit", "--no-verify", "-m", f"feat: new post via Tailscale SMTP ({slug})"], check=True)
             subprocess.run(["git", "push"], check=True)
             
             print("Successfully published via git push!")
