@@ -4,6 +4,21 @@ _site/
 .github/
 .claude/
 .devcontainer/
+.githooks/
+.vscode/
+posts/
+scripts/
+smtp/
+tools/
+compose.yml
 firebase-debug.log
 README.md
 brief.md
+
+# Never send local key material or secrets into the Docker build context.
+*.asc
+*.gpg
+*.pgp
+*.key
+secret*
+passphrase*

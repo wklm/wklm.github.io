@@ -1,8 +1,10 @@
 # Strategy:
-# Build the project's Docker image on a stock ubuntu-latest runner (cold build ~5min is acceptable),
-# run the container by name to generate /home/opam/crane-blog/_site, then `docker cp` the whole
-# _site tree onto the host (no bind mounts — Docker file sharing is unreliable). The `build` job
-# uploads the tree as a Pages artifact; a dependent `deploy` job publishes it to GitHub Pages.
+# Build the project's Docker image on a stock ubuntu-latest runner. Docker layer
+# cache keeps the expensive Rocq/Crane/opam layers hot; post-only commits only
+# invalidate the cheap posts-encrypted/ copy layer. The container generates
+# /home/opam/crane-blog/_site, then `docker cp` moves the whole tree onto the
+# host. The `build` job uploads the tree as a Pages artifact; a dependent
+# `deploy` job publishes it to GitHub Pages.
 
 name: Deploy Verified Blog
 
@@ -12,13 +14,14 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: read
   pages: write
   id-token: write
 
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -31,12 +34,17 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        run: docker buildx build --load -t crane-blog .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: crane-blog:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Generate site in container
         run: |
-          docker run --name crane-blog-run crane-blog \
-            sh -c 'eval $(opam env) && ./_build/default/src/blog_generator.exe ./posts'
+          docker run --name crane-blog-run crane-blog:latest
 
       - name: Extract _site from container
         run: |

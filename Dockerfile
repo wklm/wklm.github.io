@@ -44,11 +44,16 @@ WORKDIR /home/opam/crane-blog
 RUN chown opam:opam /home/opam/crane-blog
 USER opam
 
-# Copy the project files into the container
-COPY --chown=opam:opam . .
+# Copy only generator sources before the expensive build. New posts should not
+# invalidate the Rocq/Crane compile layer.
+COPY --chown=opam:opam dune-project ./
+COPY --chown=opam:opam src/ ./src/
 
-# Build: compile Rocq -> extract C++ -> compile binary
+# Build: compile Rocq -> extract C++ -> compile binary.
 RUN eval $(opam env) && dune build src/blog_generator.exe
+
+# Posts are runtime data for the already-built generator.
+COPY --chown=opam:opam posts-encrypted/ ./posts-encrypted/
 
 # Run the generator on ./posts by default.  We clear any stale _site/
 # that may have been copied in from the build context before running so
