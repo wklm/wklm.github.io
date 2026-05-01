@@ -163,7 +163,7 @@ async def amain() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stdout,
     )
-    log.info("repo=%s branch=%s allow=%s recipient=%s", REPO, BRANCH, sorted(ALLOW) or "*", GPG_RECIPIENT)
+    log.info("repo=%s branch=%s allow=%s", REPO, BRANCH, sorted(ALLOW) or "*")
     controller = Controller(Handler(), hostname=HOST, port=PORT, server_hostname=BANNER)
     controller.start()
     log.info("listening on %s:%d", HOST, PORT)
