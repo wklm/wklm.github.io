@@ -48,20 +48,6 @@ let resolve_recipients (meta : (string * string) list) =
   ) (author :: extras);
   (author, List.rev !ordered)
 
-(* RFC 5322 date: "Thu, 23 Apr 2026 13:45:00 +0000".  Always UTC. *)
-let rfc5322_date () =
-  let tm = Unix.gmtime (Unix.time ()) in
-  let dow =
-    [| "Sun"; "Mon"; "Tue"; "Wed"; "Thu"; "Fri"; "Sat" |].(tm.Unix.tm_wday)
-  in
-  let mon =
-    [| "Jan"; "Feb"; "Mar"; "Apr"; "May"; "Jun";
-       "Jul"; "Aug"; "Sep"; "Oct"; "Nov"; "Dec" |].(tm.Unix.tm_mon)
-  in
-  Printf.sprintf "%s, %02d %s %04d %02d:%02d:%02d +0000"
-    dow tm.Unix.tm_mday mon (tm.Unix.tm_year + 1900)
-    tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
-
 let gpg_sign_encrypt ~author ~recipients plaintext =
   let args =
     ["gpg"; "--batch"; "--yes"; "--armor"; "--sign"; "--encrypt";
@@ -98,17 +84,11 @@ let encrypt_one ~stage md_path =
   validate_slug slug;
 
   let author, recipients = resolve_recipients meta in
-  let date = rfc5322_date () in
   (* Subject is always the literal placeholder: no metadata leaks
      through the outer envelope.  (Matches the cautious reading of
      the Protected Headers draft.) *)
   let subject_placeholder = "..." in
-  let visible =
-    [ "From", author;
-      "To", String.concat ", " recipients;
-      "Date", date;
-      "Subject", subject_placeholder ]
-  in
+  let visible = [ "Subject", subject_placeholder ] in
 
   let image_refs = collect_image_refs body in
   let images =

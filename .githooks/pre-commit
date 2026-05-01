@@ -15,7 +15,10 @@ cd "$repo"
 # not an .eml ciphertext (or the .gitkeep). Catches the case where a
 # plaintext file is misplaced directly into posts-encrypted/ and would
 # otherwise bypass the encrypt step entirely.
-mapfile -t bad < <(
+bad=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && bad+=("$line")
+done < <(
     git diff --cached --name-only --diff-filter=AM -- 'posts-encrypted/*' \
         | grep -Ev '(^posts-encrypted/[^/]+\.eml$|^posts-encrypted/\.gitkeep$)' \
         || true
@@ -27,7 +30,10 @@ if [[ ${#bad[@]} -gt 0 ]]; then
     exit 1
 fi
 
-mapfile -t staged < <(
+staged=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && staged+=("$line")
+done < <(
     git diff --cached --name-only --diff-filter=AMR -- 'posts/*.md' || true
 )
 

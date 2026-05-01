@@ -11,9 +11,7 @@ ACL plus an optional MAIL FROM allowlist.
 import asyncio
 import datetime as dt
 from email import policy
-from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import format_datetime
 import logging
 import os
 import signal
@@ -44,12 +42,12 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _header(msg: EmailMessage, name: str, fallback: str = "") -> str:
+def _header(msg, name: str, fallback: str = "") -> str:
     value = msg.get(name)
     return str(value).replace("\r", " ").replace("\n", " ").strip() if value else fallback
 
 
-def _plain_body(msg: EmailMessage) -> str:
+def _plain_body(msg) -> str:
     body = msg.get_body(preferencelist=("plain", "html"))
     if body is not None:
         return body.get_content()
@@ -90,24 +88,31 @@ def _encrypt(text: str) -> str:
     return proc.stdout.decode("ascii")
 
 
-def _encrypted_envelope(envelope: Envelope, now: dt.datetime) -> bytes:
-    incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
-    sender = _header(incoming, "From", envelope.mail_from or "unknown")
-    recipients = _header(incoming, "To", ", ".join(envelope.rcpt_tos or []) or "blog@wklm.github.io")
-    subject = _header(incoming, "Subject", "Untitled")
-    date = _header(incoming, "Date", format_datetime(now))
-    armor = _encrypt(_plain_body(incoming))
+def _armor_from_bytes(payload: bytes) -> str:
+    text = payload.decode("utf-8", errors="replace")
+    begin = text.find("-----BEGIN PGP MESSAGE-----")
+    end = text.find("-----END PGP MESSAGE-----")
+    if begin < 0 or end < begin:
+        raise ValueError("PGP armor block not found")
+    end += len("-----END PGP MESSAGE-----")
+    return text[begin:end] + "\n"
 
-    outgoing = EmailMessage(policy=policy.SMTP)
-    outgoing["From"] = sender
-    outgoing["To"] = recipients
-    outgoing["Date"] = date
-    outgoing["Subject"] = subject
-    outgoing["MIME-Version"] = "1.0"
-    outgoing.set_content(armor)
-    outgoing.replace_header("Content-Type", 'application/pgp-encrypted; name="post.asc"')
-    outgoing["Content-Disposition"] = 'inline; filename="post.asc"'
-    return outgoing.as_bytes()
+
+def _public_envelope(subject: str, armor: str) -> bytes:
+    return (f"Subject: {subject}\r\n\r\n{armor}").encode("utf-8")
+
+
+def _encrypted_envelope(envelope: Envelope) -> bytes:
+    incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
+    subject = _header(incoming, "Subject", "Untitled")
+    armor = _encrypt(_plain_body(incoming))
+    return _public_envelope(subject, armor)
+
+
+def _sanitized_envelope(envelope: Envelope) -> bytes:
+    incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
+    subject = _header(incoming, "Subject", "Untitled")
+    return _public_envelope(subject, _armor_from_bytes(envelope.content or b""))
 
 
 class Handler:
@@ -125,10 +130,10 @@ class Handler:
         rel = Path("posts-encrypted") / f"{ts}.eml"
         try:
             if PGP_MARKER in (envelope.content or b""):
-                post_bytes = envelope.content or b""
-                log.info("payload already encrypted; storing verbatim")
+                post_bytes = _sanitized_envelope(envelope)
+                log.info("payload already encrypted; storing sanitized envelope")
             else:
-                post_bytes = _encrypted_envelope(envelope, now)
+                post_bytes = _encrypted_envelope(envelope)
                 log.info("encrypted plaintext message for %s", GPG_RECIPIENT)
         except subprocess.CalledProcessError as e:
             log.error("gpg failed: %s\nstderr: %s", e, e.stderr.decode("utf-8", errors="replace"))
@@ -142,7 +147,7 @@ class Handler:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(post_bytes)
                 _git("add", str(rel))
-                _git("commit", "-m", f"post: {ts} (via smtp from {sender or 'unknown'})")
+                _git("commit", "-m", f"post: {ts} (via smtp)")
                 _git("push", "origin", f"HEAD:{BRANCH}")
             except subprocess.CalledProcessError as e:
                 log.error("git failed: %s\nstderr: %s", e, e.stderr)

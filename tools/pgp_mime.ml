@@ -389,34 +389,15 @@ let build_outer_envelope
     ~visible
     ~armored
     () =
-  let b = make_boundary () in
   let out = Buffer.create 4096 in
-  List.iter (fun (k, v) -> Buffer.add_string out (header_line k v)) visible;
-  Buffer.add_string out "MIME-Version: 1.0\r\n";
-  Buffer.add_string out
-    (Printf.sprintf
-       "Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"%s\"\r\n"
-       b);
-  Buffer.add_string out "\r\n";
-  Buffer.add_string out
-    "This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).\r\n";
-  Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
-  Buffer.add_string out "Content-Type: application/pgp-encrypted\r\n";
-  Buffer.add_string out "Content-Description: PGP/MIME version identification\r\n";
-  Buffer.add_string out "\r\n";
-  Buffer.add_string out "Version: 1\r\n";
-  Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
-  Buffer.add_string out
-    "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n";
-  Buffer.add_string out "Content-Description: OpenPGP encrypted message\r\n";
-  Buffer.add_string out
-    "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n";
+  List.iter (fun (k, v) ->
+    if k = "Subject" then Buffer.add_string out (header_line k v)
+  ) visible;
   Buffer.add_string out "\r\n";
   Buffer.add_string out armored;
   if String.length armored = 0
      || armored.[String.length armored - 1] <> '\n'
   then Buffer.add_string out "\r\n";
-  Buffer.add_string out (Printf.sprintf "--%s--\r\n" b);
   Buffer.contents out
 
 (* ---- Minimal MIME parser for decrypt ---------------------------- *)

@@ -233,11 +233,9 @@ Definition dirname_output_path (output_dir slug : string) : string :=
 (* ---- Encrypted post model ---------------------------------------- *)
 
 (* An [EncryptedPost] is the opaque view the generator has of a
-   [posts-encrypted/<slug>.eml] file.  The file itself is a
-   fully-formed RFC 3156 PGP/MIME message produced by the pre-commit
-   hook; the generator only needs the four headers that populate the
-   fake mail-client chrome, plus the raw body (everything after the
-   first blank line) to print verbatim inside a [<pre>].
+   [posts-encrypted/<slug>.eml] file.  The public renderer only uses
+   the slug, subject, and encrypted body.  Address/date/MIME headers are
+   intentionally ignored so sender metadata is not published.
 
    [ep_body] is deliberately untouched: MIME boundaries, the
    [application/pgp-encrypted] part, the armored
@@ -246,15 +244,12 @@ Definition dirname_output_path (output_dir slug : string) : string :=
    parses MIME semantics and never touches OpenPGP bytes. *)
 Record EncryptedPost : Type := mkEncryptedPost {
   ep_slug : string;
-  ep_from : string;
-  ep_to : string;
-  ep_date : string;
   ep_subject : string;
   ep_body : string
 }.
 
 Definition empty_ep : EncryptedPost :=
-  mkEncryptedPost "" "" "" "" "" "".
+  mkEncryptedPost "" "" "".
 
 (* ---- .eml header parsing ----------------------------------------- *)
 
@@ -326,9 +321,6 @@ Definition parse_eml (slug raw : string) : EncryptedPost :=
   let '(headers, body) := split_headers_body raw 0%int63 fuel in
   mkEncryptedPost
     slug
-    (lookup_header headers "From")
-    (lookup_header headers "To")
-    (lookup_header headers "Date")
     (lookup_header headers "Subject")
     body.
 
@@ -351,39 +343,15 @@ Definition page_shell (depth page_title body_class nav_label nav_href body_conte
     body_content ::
     "</div></body></html>" :: nil).
 
-Definition header_row (label value : string) : string :=
-  concat_all (
-    "<div class='eml-header'><dt>" :: html_escape label :: "</dt>" ::
-    "<dd>" :: html_escape value :: "</dd></div>" :: nil).
-
-(* The four visible headers are [From], [To], [Date], and [Subject].
-   [MIME-Version] and [Content-Type] are rendered as literal strings
-   so the reader sees the same envelope a mail client would show for
-   any RFC 3156 message. *)
 Definition render_eml_page (ep : EncryptedPost) : string :=
   let title := cat "Subject: " ep.(ep_subject) in
-  let meta :=
-    concat_all (
-      "<p class='post-meta'>" ::
-      html_escape ep.(ep_from) ::
-      (if is_empty ep.(ep_date) then "" else concat_all (" · " :: html_escape ep.(ep_date) :: nil)) ::
-      "</p>" :: nil) in
   let body :=
     concat_all (
       "<main id='main' class='post eml'>" ::
       "<article>" ::
       "<header class='post-header'>" ::
-      meta ::
       "<h1>" :: html_escape ep.(ep_subject) :: "</h1>" ::
       "</header>" ::
-      "<dl class='eml-headers'>" ::
-      header_row "From" ep.(ep_from) ::
-      header_row "To" ep.(ep_to) ::
-      header_row "Date" ep.(ep_date) ::
-      header_row "Subject" ep.(ep_subject) ::
-      header_row "MIME-Version" "1.0" ::
-      header_row "Content-Type" "multipart/encrypted; protocol=application/pgp-encrypted" ::
-      "</dl>" ::
       "<pre class='eml-body'>" :: html_escape ep.(ep_body) :: "</pre>" ::
       "</article></main>" :: nil) in
   page_shell "../" title "essay eml-page" "index" "../index.html" body.
@@ -391,11 +359,9 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
 Definition inbox_row (ep : EncryptedPost) : string :=
   concat_all (
     "<li>" ::
-    "<time datetime='" :: html_escape ep.(ep_date) :: "'>" :: html_escape ep.(ep_date) :: "</time> " ::
     "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
     html_escape ep.(ep_subject) ::
     "</a>" ::
-    "<span class='inbox-from'>" :: html_escape ep.(ep_from) :: "</span>" ::
     "</li>" :: nil).
 
 Fixpoint render_inbox_rows (eps : list EncryptedPost) : list string :=
@@ -442,19 +408,12 @@ Definition stylesheet : string :=
     ".post-header{margin-bottom:2rem}" ::
     ".post-header h1{margin:.2em 0 0}" ::
     ".post-meta{margin:0;color:var(--muted);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem;letter-spacing:.02em}" ::
-    ".eml-headers{margin:0 0 1.2rem;padding:.75rem 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
-    ".eml-header{display:grid;grid-template-columns:7rem 1fr;gap:1rem;padding:.2rem 0;border-bottom:1px dotted var(--rule)}" ::
-    ".eml-header:last-child{border-bottom:0}" ::
-    ".eml-header dt{margin:0;color:var(--muted);font-weight:600}" ::
-    ".eml-header dd{margin:0;word-break:break-word}" ::
     ".eml-body{margin:1.2em 0 0;padding:0;background:transparent;color:var(--ink);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;line-height:1.45}" ::
     ".index .posts{list-style:none;padding:0;margin:0}" ::
-    ".index .posts li{margin:.35em 0;display:grid;grid-template-columns:9.5rem 1fr;gap:1.2em;align-items:baseline}" ::
-    ".index .posts time{color:var(--muted);font-size:.88rem}" ::
+    ".index .posts li{margin:.35em 0}" ::
     ".index .posts a{text-decoration:none}" ::
     ".index .posts a:hover{text-decoration:underline}" ::
-    ".index .posts .inbox-from{grid-column:2;color:var(--muted);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:-.25em}" ::
-    "@media (max-width:32rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:2rem}.eml-header{grid-template-columns:5rem 1fr;gap:.5rem}.index .posts li{display:flex;flex-direction:column;gap:.1em;margin:.8em 0}.index .posts .inbox-from{margin-top:0}}" ::
+    "@media (max-width:32rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:2rem}.index .posts li{margin:.8em 0}}" ::
     "@media print{.site-nav{display:none}body{background:#fff;color:#000}a{text-decoration:none;color:#000}}" :: nil).
 
 (* ---- IO pipeline ------------------------------------------------- *)
@@ -468,19 +427,13 @@ Fixpoint read_eml_list (paths : list string) : IO (list EncryptedPost) :=
       Ret (parse_eml (file_stem_eml path) raw :: parsed_rest)
   end.
 
-(* Descending sort by [ep_date].  The hook writes an RFC 5322 date, which
-   is not lexicographic; we therefore sort by the value in the header,
-   accepting that the order is *date-header* order.  When the hook emits
-   ISO-8601-ish dates (as it does here, via Python's
-   [email.utils.format_datetime]) lex order does not match calendar order
-   for dates before 1970 or after 9999, which is outside this repo's
-   scope.  For conventional RFC 5322 dates we fall back to insertion
-   order as a tie-breaker. *)
+(* Descending sort by slug. SMTP-generated slugs are UTC timestamps, so this
+   keeps newest posts first without publishing a Date header. *)
 Fixpoint insert_ep (ep : EncryptedPost) (eps : list EncryptedPost) : list EncryptedPost :=
   match eps with
   | nil => ep :: nil
   | q :: rest =>
-      if string_ge ep.(ep_date) q.(ep_date)
+      if string_ge ep.(ep_slug) q.(ep_slug)
       then ep :: q :: rest
       else q :: insert_ep ep rest
   end.
