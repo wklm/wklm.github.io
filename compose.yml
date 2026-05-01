@@ -1,0 +1,38 @@
+# Crane Blog SMTP listener, deployed on fuji via `docker compose up -d`.
+# Receives one envelope per email, writes the raw .eml to posts-encrypted/,
+# and pushes a commit to the blog repo. No plaintext ever lives on fuji;
+# the author encrypts before sending.
+
+services:
+  smtp:
+    build: ./smtp
+    image: crane-blog-smtp:latest
+    container_name: crane_blog_smtp
+    restart: unless-stopped
+    # Host networking so the listener binds on the Tailscale interface
+    # without port-publish gymnastics. SMTP_HOST below pins the bind address
+    # to fuji's Tailscale IP (not 0.0.0.0) so we never expose port 2525 on
+    # any non-Tailscale interface.
+    network_mode: host
+    environment:
+      SMTP_HOST: "100.99.77.105"
+      SMTP_PORT: "2525"
+      SMTP_BANNER: "wklm.github.io"
+      BLOG_REPO_URL: "git@github.com:wklm/wklm.github.io.git"
+      BLOG_REPO_PATH: "/repo"
+      BLOG_BRANCH: "main"
+      # Comma-separated allowlist of MAIL FROM addresses. Empty = accept any.
+      BLOG_ALLOW_FROM: ""
+      # Reject envelopes that do not contain a PGP armor block.
+      BLOG_REQUIRE_PGP: "1"
+      GIT_AUTHOR_NAME: "Crane Blog SMTP"
+      GIT_AUTHOR_EMAIL: "wojtekkulma@gmail.com"
+      GIT_COMMITTER_NAME: "Crane Blog SMTP"
+      GIT_COMMITTER_EMAIL: "wojtekkulma@gmail.com"
+      GIT_SSH_COMMAND: "ssh -i /secrets/ssh/id_ed25519 -o UserKnownHostsFile=/secrets/ssh/known_hosts -o StrictHostKeyChecking=yes"
+    volumes:
+      - blog_repo:/repo
+      - /home/wojtek/.ssh:/secrets/ssh:ro
+
+volumes:
+  blog_repo:
