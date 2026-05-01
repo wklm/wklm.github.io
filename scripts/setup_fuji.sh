@@ -47,4 +47,11 @@ echo
 echo "==> recent logs"
 docker compose logs --tail=20 smtp || true
 echo
-echo "Done. Send mail to fuji:2525 with a PGP-encrypted body to publish."
+echo "Done. Mail.app settings:"
+echo "  Server: 100.99.77.105"
+echo "  Port:   2525"
+echo "  TLS:    off"
+echo "  Auth:   none"
+echo ""
+echo "The container accepts normal plaintext email, encrypts it in memory with"
+echo "the public key in smtp/author.pub, and commits only posts-encrypted/*.eml."

@@ -57,6 +57,26 @@ body).
 
 ## Workflow
 
+### Email from Mail.app
+
+Configure an outgoing SMTP server:
+
+```text
+Server: 100.99.77.105
+Port:   2525
+TLS:    off
+Auth:   none
+```
+
+The hostname `fuji` is an SSH alias on this Mac, not normal macOS DNS, so
+Mail.app must use the Tailscale IP unless MagicDNS is enabled system-wide.
+Write a normal plaintext email. The fuji container encrypts the body in
+memory with `smtp/author.pub`, writes only `posts-encrypted/*.eml`, and
+pushes the commit. If a script sends an already-armored PGP message, the
+container stores it verbatim.
+
+### Local Git Hook
+
 ```bash
 # One-time per clone
 scripts/setup-hooks.sh
@@ -78,21 +98,25 @@ git commit -m "new: my slug"
 
 ## Pipeline
 
-1. `tools/encrypt_post.ml` (OCaml). Parses the frontmatter, resolves
+1. `smtp/listener.py` (Docker on fuji). Receives normal SMTP from
+   Mail.app over Tailscale, encrypts the message body in memory with
+   GnuPG and the checked-in public key, writes `posts-encrypted/*.eml`,
+   commits, and pushes. No private key lives on fuji.
+2. `tools/encrypt_post.ml` (OCaml). Parses the frontmatter, resolves
    `recipients`, builds a `multipart/mixed` inner MIME tree, pipes
    it to `gpg --sign --encrypt --armor --local-user <author>
    --recipient <author> --recipient …`, wraps the armored output in
    the RFC 3156 envelope, writes `posts-encrypted/<slug>.eml`. No
    crypto is implemented here; all OpenPGP work is done by `gpg`.
-2. `.githooks/pre-commit` calls that tool with `--stage` for every
+3. `.githooks/pre-commit` calls that tool with `--stage` for every
    staged `posts/*.md`.
-3. `src/Logic.v` (Rocq, extracted to C++) reads
+4. `src/Logic.v` (Rocq, extracted to C++) reads
    `./posts-encrypted/*.eml`, splits headers from body at the first
    blank line, and renders each file as a page whose `<pre>` holds
    the body verbatim. The generator is pure, total, and never
    touches OpenPGP bytes — it only concatenates already-ciphertext
    strings into HTML.
-4. `tools/decrypt_post.ml` is the local inverse: walks the MIME tree
+5. `tools/decrypt_post.ml` is the local inverse: walks the MIME tree
    in a `.eml`, pipes the armored part through `gpg --decrypt`,
    writes the parts back to `posts/`.
 
