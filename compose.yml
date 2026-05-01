@@ -1,7 +1,7 @@
 # Crane Blog SMTP listener, deployed on fuji via `docker compose up -d`.
-# Receives one envelope per email, writes the raw .eml to posts-encrypted/,
-# and pushes a commit to the blog repo. No plaintext ever lives on fuji;
-# the author encrypts before sending.
+# Receives one envelope per email, encrypts normal Mail.app plaintext in memory,
+# writes only the encrypted .eml to posts-encrypted/, and pushes a commit to the
+# blog repo. No plaintext is committed or written to disk.
 
 services:
   smtp:
@@ -21,10 +21,9 @@ services:
       BLOG_REPO_URL: "git@github.com:wklm/wklm.github.io.git"
       BLOG_REPO_PATH: "/repo"
       BLOG_BRANCH: "main"
+      BLOG_GPG_RECIPIENT: "wklm@protonmail.com"
       # Comma-separated allowlist of MAIL FROM addresses. Empty = accept any.
       BLOG_ALLOW_FROM: ""
-      # Reject envelopes that do not contain a PGP armor block.
-      BLOG_REQUIRE_PGP: "1"
       GIT_AUTHOR_NAME: "Crane Blog SMTP"
       GIT_AUTHOR_EMAIL: "wojtekkulma@gmail.com"
       GIT_COMMITTER_NAME: "Crane Blog SMTP"

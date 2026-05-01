@@ -6,6 +6,12 @@ set -eu
 : "${BLOG_REPO_URL:?BLOG_REPO_URL is required}"
 : "${BLOG_REPO_PATH:=/repo}"
 : "${BLOG_BRANCH:=main}"
+: "${GNUPGHOME:=/gnupg}"
+
+mkdir -p "${GNUPGHOME}"
+chmod 700 "${GNUPGHOME}"
+export GNUPGHOME
+gpg --batch --import /app/author.pub >/dev/null
 
 # Configure git identity from env (GIT_*_NAME / GIT_*_EMAIL also work but
 # `git commit` ignores GIT_AUTHOR_NAME without a configured user.email).
