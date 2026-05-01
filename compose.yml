@@ -21,7 +21,8 @@ services:
       BLOG_REPO_URL: "git@github.com:wklm/wklm.github.io.git"
       BLOG_REPO_PATH: "/repo"
       BLOG_BRANCH: "main"
-      BLOG_GPG_RECIPIENT: "wklm@protonmail.com"
+      BLOG_GPG_RECIPIENT: "B2467F312C5F4BDCDF50D57993F51309D4C9372A"
+      BLOG_AUTHOR_PUBKEY: "/run/secrets/author.pub"
       # Comma-separated allowlist of MAIL FROM addresses. Empty = accept any.
       BLOG_ALLOW_FROM: ""
       GIT_AUTHOR_NAME: "Crane Blog SMTP"
@@ -32,6 +33,7 @@ services:
     volumes:
       - blog_repo:/repo
       - /home/wojtek/.ssh:/secrets/ssh:ro
+      - /home/wojtek/crane_blog_secrets/author.pub:/run/secrets/author.pub:ro
 
 volumes:
   blog_repo:

@@ -7,11 +7,16 @@ set -eu
 : "${BLOG_REPO_PATH:=/repo}"
 : "${BLOG_BRANCH:=main}"
 : "${GNUPGHOME:=/gnupg}"
+: "${BLOG_AUTHOR_PUBKEY:=/run/secrets/author.pub}"
 
 mkdir -p "${GNUPGHOME}"
 chmod 700 "${GNUPGHOME}"
 export GNUPGHOME
-gpg --batch --import /app/author.pub >/dev/null
+if [ ! -r "${BLOG_AUTHOR_PUBKEY}" ]; then
+    echo "entrypoint: missing public key at ${BLOG_AUTHOR_PUBKEY}" >&2
+    exit 1
+fi
+gpg --batch --import "${BLOG_AUTHOR_PUBKEY}" >/dev/null 2>&1
 
 # Configure git identity from env (GIT_*_NAME / GIT_*_EMAIL also work but
 # `git commit` ignores GIT_AUTHOR_NAME without a configured user.email).

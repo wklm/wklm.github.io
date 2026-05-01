@@ -7,7 +7,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir aiosmtpd==1.4.6
 
 WORKDIR /app
-COPY listener.py entrypoint.sh author.pub /app/
+COPY listener.py entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1 \

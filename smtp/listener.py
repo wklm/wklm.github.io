@@ -29,7 +29,7 @@ BRANCH = os.environ.get("BLOG_BRANCH", "main")
 HOST = os.environ.get("SMTP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SMTP_PORT", "2525"))
 ALLOW = {a.strip().lower() for a in os.environ.get("BLOG_ALLOW_FROM", "").split(",") if a.strip()}
-GPG_RECIPIENT = os.environ.get("BLOG_GPG_RECIPIENT", "wklm@protonmail.com")
+GPG_RECIPIENT = os.environ.get("BLOG_GPG_RECIPIENT", "B2467F312C5F4BDCDF50D57993F51309D4C9372A")
 PGP_MARKER = b"-----BEGIN PGP MESSAGE-----"
 
 log = logging.getLogger("crane-blog-smtp")
@@ -120,10 +120,10 @@ class Handler:
         sender = (envelope.mail_from or "").lower()
         peer = session.peer[0] if session.peer else "?"
         size = len(envelope.content or b"")
-        log.info("DATA from=%s peer=%s size=%d", sender, peer, size)
+        log.info("DATA peer=%s size=%d", peer, size)
 
         if ALLOW and sender not in ALLOW:
-            log.warning("reject: sender %r not in allowlist", sender)
+            log.warning("reject: sender not in allowlist")
             return "550 sender not allowed"
         now = dt.datetime.now(dt.timezone.utc)
         ts = now.strftime("%Y%m%dT%H%M%SZ")
@@ -134,7 +134,7 @@ class Handler:
                 log.info("payload already encrypted; storing sanitized envelope")
             else:
                 post_bytes = _encrypted_envelope(envelope)
-                log.info("encrypted plaintext message for %s", GPG_RECIPIENT)
+                log.info("encrypted plaintext message")
         except subprocess.CalledProcessError as e:
             log.error("gpg failed: %s\nstderr: %s", e, e.stderr.decode("utf-8", errors="replace"))
             return "451 encryption failed"
@@ -163,6 +163,7 @@ async def amain() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stdout,
     )
+    logging.getLogger("mail.log").setLevel(logging.WARNING)
     log.info("repo=%s branch=%s allow=%s", REPO, BRANCH, sorted(ALLOW) or "*")
     controller = Controller(Handler(), hostname=HOST, port=PORT, server_hostname=BANNER)
     controller.start()

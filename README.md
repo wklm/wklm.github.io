@@ -71,9 +71,10 @@ Auth:   none
 The hostname `fuji` is an SSH alias on this Mac, not normal macOS DNS, so
 Mail.app must use the Tailscale IP unless MagicDNS is enabled system-wide.
 Write a normal plaintext email. The fuji container encrypts the body in
-memory with `smtp/author.pub`, writes only `posts-encrypted/*.eml`, and
-pushes the commit. If a script sends an already-armored PGP message, the
-container stores it verbatim.
+memory with a mounted public key secret, writes only
+`posts-encrypted/*.eml`, and pushes the commit. If a script sends an
+already-armored PGP message, the container stores only `Subject` plus the
+armor block.
 
 ### Local Git Hook
 
