@@ -362,9 +362,20 @@ Definition header_row (label value : string) : string :=
    any RFC 3156 message. *)
 Definition render_eml_page (ep : EncryptedPost) : string :=
   let title := cat "Subject: " ep.(ep_subject) in
+  let meta :=
+    concat_all (
+      "<p class='post-meta'>" ::
+      html_escape ep.(ep_from) ::
+      (if is_empty ep.(ep_date) then "" else concat_all (" · " :: html_escape ep.(ep_date) :: nil)) ::
+      "</p>" :: nil) in
   let body :=
     concat_all (
-      "<main id='main' class='eml'>" ::
+      "<main id='main' class='post eml'>" ::
+      "<article>" ::
+      "<header class='post-header'>" ::
+      meta ::
+      "<h1>" :: html_escape ep.(ep_subject) :: "</h1>" ::
+      "</header>" ::
       "<dl class='eml-headers'>" ::
       header_row "From" ep.(ep_from) ::
       header_row "To" ep.(ep_to) ::
@@ -373,19 +384,18 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       header_row "MIME-Version" "1.0" ::
       header_row "Content-Type" "multipart/encrypted; protocol=application/pgp-encrypted" ::
       "</dl>" ::
-      "<hr class='eml-rule'>" ::
       "<pre class='eml-body'>" :: html_escape ep.(ep_body) :: "</pre>" ::
-      "</main>" :: nil) in
-  page_shell "../" title "eml" "index" "../index.html" body.
+      "</article></main>" :: nil) in
+  page_shell "../" title "essay eml-page" "index" "../index.html" body.
 
 Definition inbox_row (ep : EncryptedPost) : string :=
   concat_all (
-    "<li class='inbox-row'>" ::
-    "<span class='inbox-from'>" :: html_escape ep.(ep_from) :: "</span>" ::
-    "<time class='inbox-date' datetime='" :: html_escape ep.(ep_date) :: "'>" :: html_escape ep.(ep_date) :: "</time>" ::
+    "<li>" ::
+    "<time datetime='" :: html_escape ep.(ep_date) :: "'>" :: html_escape ep.(ep_date) :: "</time> " ::
     "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
-    "Subject: " :: html_escape ep.(ep_subject) ::
+    html_escape ep.(ep_subject) ::
     "</a>" ::
+    "<span class='inbox-from'>" :: html_escape ep.(ep_from) :: "</span>" ::
     "</li>" :: nil).
 
 Fixpoint render_inbox_rows (eps : list EncryptedPost) : list string :=
@@ -397,48 +407,54 @@ Fixpoint render_inbox_rows (eps : list EncryptedPost) : list string :=
 Definition render_inbox_page (eps : list EncryptedPost) : string :=
   let body :=
     concat_all (
-      "<main id='main' class='inbox'>" ::
-      "<ol class='inbox-list'>" ::
+      "<main id='main' class='index'>" ::
+      "<ul class='posts'>" ::
       concat_all (render_inbox_rows eps) ::
-      "</ol>" :: "</main>" :: nil) in
-  page_shell "" "wklm.github.io" "inbox" "" "" body.
+      "</ul>" :: "</main>" :: nil) in
+  page_shell "" "wklm.github.io" "home" "" "" body.
 
 (* ---- Stylesheet --------------------------------------------------
-   The visual target is a plain, lightly-styled email client.  A single
-   warm off-white background, near-black ink, a muted rule colour.
-   Headers and body are monospaced to sell the "raw .eml" register.
-   The inbox keeps the same monospace family for the same reason. *)
+   Restores the pre-email visual language: a small literary page, Georgia
+   body text, neutral paper, and a restrained index.  The encrypted envelope
+   remains visible, but as a quiet source artifact inside the old essay shell
+   instead of a mail-client imitation. *)
 Definition stylesheet : string :=
   concat_all (
-    ":root{--paper:#f4f0e8;--ink:#171717;--muted:#5c554c;--rule:#d9d2c2;--accent:#b08d57}" ::
-    "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#b08d57}}" ::
+    ":root{--paper:#fafafa;--ink:#141414;--muted:#6b6b6b;--rule:#d9d9d9;--accent:#141414}" ::
+    "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#e8e8e8}}" ::
     "*,*::before,*::after{box-sizing:border-box}" ::
-    "html{-webkit-text-size-adjust:100%}" ::
-    "body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 ui-monospace,'SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}" ::
+    "html{-webkit-text-size-adjust:100%;hanging-punctuation:first last}" ::
+    "body{margin:0;background:var(--paper);color:var(--ink);font:18px/1.55 Georgia,'Times New Roman',serif;font-variant-numeric:oldstyle-nums proportional-nums;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}" ::
+    "p{margin:0 0 1em;text-wrap:pretty;orphans:2;widows:2}" ::
+    "h1,h2,h3{font-weight:normal;line-height:1.2;text-wrap:balance;margin:1.6em 0 .4em}" ::
+    "h1{font-size:1.75rem;margin-top:0}h2{font-size:1.25rem}h3{font-size:1.05rem;font-style:italic}" ::
     "a{color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:.18em}" ::
     "a:hover{text-decoration-thickness:2px}" ::
     "a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}" ::
+    "time{font-variant-numeric:tabular-nums oldstyle-nums}" ::
     ".skip-link{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}" ::
     ".skip-link:focus{position:static;width:auto;height:auto;padding:.25rem .5rem;background:var(--ink);color:var(--paper)}" ::
-    ".page-shell{max-width:54rem;margin:0 auto;padding:2rem 1.25rem 4rem}" ::
-    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:2.5rem;font-size:.9rem;border-top:2px solid var(--ink);padding-top:.75rem}" ::
+    ".page-shell{max-width:36rem;margin:0 auto;padding:2rem 1.25rem 4rem}" ::
+    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:3rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
     ".site-mark{text-decoration:none;font-weight:600;letter-spacing:.02em}" ::
     ".site-nav a{color:var(--muted);text-decoration:none}" ::
     ".site-nav a:hover{color:var(--ink);text-decoration:underline}" ::
-    ".eml-headers{margin:0 0 1rem;padding:0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}" ::
-    ".eml-header{display:grid;grid-template-columns:9rem 1fr;gap:1rem;padding:.25rem 0;border-bottom:1px dotted var(--rule)}" ::
+    ".post-header{margin-bottom:2rem}" ::
+    ".post-header h1{margin:.2em 0 0}" ::
+    ".post-meta{margin:0;color:var(--muted);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem;letter-spacing:.02em}" ::
+    ".eml-headers{margin:0 0 1.2rem;padding:.75rem 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    ".eml-header{display:grid;grid-template-columns:7rem 1fr;gap:1rem;padding:.2rem 0;border-bottom:1px dotted var(--rule)}" ::
     ".eml-header:last-child{border-bottom:0}" ::
     ".eml-header dt{margin:0;color:var(--muted);font-weight:600}" ::
     ".eml-header dd{margin:0;word-break:break-word}" ::
-    ".eml-rule{border:0;border-top:1px solid var(--rule);margin:1rem 0}" ::
-    ".eml-body{margin:0;padding:1rem;background:transparent;color:var(--ink);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;font-size:.85rem;line-height:1.45}" ::
-    ".inbox-list{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}" ::
-    ".inbox-row{display:grid;grid-template-columns:14rem 10rem 1fr;gap:1rem;padding:.5rem 0;border-bottom:1px dotted var(--rule);align-items:baseline}" ::
-    ".inbox-from{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" ::
-    ".inbox-date{color:var(--muted);font-variant-numeric:tabular-nums}" ::
-    ".inbox-subject{text-decoration:none}" ::
-    ".inbox-subject:hover{text-decoration:underline}" ::
-    "@media (max-width:40rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:1.5rem}.eml-header{grid-template-columns:6rem 1fr;gap:.5rem}.inbox-row{grid-template-columns:1fr;gap:.1em;padding:.6rem 0}.inbox-from,.inbox-date{font-size:.8rem}}" ::
+    ".eml-body{margin:1.2em 0 0;padding:0;background:transparent;color:var(--ink);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;line-height:1.45}" ::
+    ".index .posts{list-style:none;padding:0;margin:0}" ::
+    ".index .posts li{margin:.35em 0;display:grid;grid-template-columns:9.5rem 1fr;gap:1.2em;align-items:baseline}" ::
+    ".index .posts time{color:var(--muted);font-size:.88rem}" ::
+    ".index .posts a{text-decoration:none}" ::
+    ".index .posts a:hover{text-decoration:underline}" ::
+    ".index .posts .inbox-from{grid-column:2;color:var(--muted);font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:-.25em}" ::
+    "@media (max-width:32rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:2rem}.eml-header{grid-template-columns:5rem 1fr;gap:.5rem}.index .posts li{display:flex;flex-direction:column;gap:.1em;margin:.8em 0}.index .posts .inbox-from{margin-top:0}}" ::
     "@media print{.site-nav{display:none}body{background:#fff;color:#000}a{text-decoration:none;color:#000}}" :: nil).
 
 (* ---- IO pipeline ------------------------------------------------- *)
