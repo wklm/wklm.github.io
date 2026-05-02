@@ -11,15 +11,9 @@ repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
 
 scratch="$(mktemp -d)"
-old_email="$(git config --get user.email || true)"
 cleanup() {
     rm -rf "$scratch"
     rm -f posts/fixture.md posts/fixture.bin posts-encrypted/fixture.eml
-    if [[ -n "$old_email" ]]; then
-        git config user.email "$old_email"
-    else
-        git config --unset user.email || true
-    fi
 }
 trap cleanup EXIT
 
@@ -42,7 +36,7 @@ Expire-Date: 0
 %commit
 EOF
 gpg --batch --gen-key "$scratch/keyparams" 2>/dev/null
-git config user.email "$author"
+export CRANE_BLOG_AUTHOR_EMAIL="$author"
 
 # Build the tools.
 if ! command -v dune >/dev/null 2>&1; then
@@ -68,7 +62,7 @@ EOF
 printf '\x89PNG\r\n\x1a\n\x00\x01\x02\x03binary-image-bytes-xyz' > posts/fixture.bin
 
 orig_md="$(cat posts/fixture.md)"
-orig_img_sha="$(sha256sum posts/fixture.bin | awk '{print $1}')"
+orig_img_sha="$(shasum -a 256 posts/fixture.bin | cut -d ' ' -f 1)"
 
 "$enc" posts/fixture.md
 
@@ -89,7 +83,7 @@ awk '/BEGIN PGP MESSAGE/,/END PGP MESSAGE/' posts-encrypted/fixture.eml \
 rm -f posts/fixture.md posts/fixture.bin
 "$dec" posts-encrypted/fixture.eml
 roundtripped_md="$(cat posts/fixture.md)"
-roundtripped_img_sha="$(sha256sum posts/fixture.bin | awk '{print $1}')"
+roundtripped_img_sha="$(shasum -a 256 posts/fixture.bin | cut -d ' ' -f 1)"
 
 if [[ "$orig_md" != "$roundtripped_md" ]]; then
     echo "FAIL: markdown mismatch after round-trip" >&2
@@ -116,6 +110,18 @@ if ! grep -q 'BEGIN PGP MESSAGE' _site/fixture/index.html; then
 fi
 if grep -E '>Subject: [^.<]' _site/index.html >/dev/null 2>&1; then
     echo "FAIL: non-placeholder Subject on inbox" >&2
+    exit 1
+fi
+if grep -q 'Round-trip fixture' _site/fixture/index.html _site/index.html; then
+    echo "FAIL: plaintext title leaked into rendered HTML" >&2
+    exit 1
+fi
+if grep -q '<dt>Subject</dt>' _site/fixture/index.html; then
+    echo "FAIL: Subject header row rendered on post page" >&2
+    exit 1
+fi
+if ! grep -q 'Subject: ...' _site/fixture/index.html; then
+    echo "FAIL: post page missing placeholder subject" >&2
     exit 1
 fi
 echo "site lint OK"

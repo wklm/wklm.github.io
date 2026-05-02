@@ -22,7 +22,11 @@ let validate_slug slug =
   if not !ok then fail (Printf.sprintf "slug %S must match [a-z0-9-]+" slug)
 
 let resolve_recipients (meta : (string * string) list) =
-  let author = git ["config"; "user.email"] in
+  let author =
+    match Sys.getenv_opt "CRANE_BLOG_AUTHOR_EMAIL" with
+    | Some s when trim s <> "" -> trim s
+    | _ -> git ["config"; "user.email"]
+  in
   if author = "" then fail "git config user.email is unset; refusing to encrypt";
   let extras =
     match lookup "recipients" meta with
@@ -51,6 +55,7 @@ let resolve_recipients (meta : (string * string) list) =
 let gpg_sign_encrypt ~author ~recipients plaintext =
   let args =
     ["gpg"; "--batch"; "--yes"; "--armor"; "--sign"; "--encrypt";
+     "--no-auto-key-retrieve";
      "--trust-model"; "always";
      "--local-user"; author]
     @ List.concat_map (fun r -> ["--recipient"; r]) recipients
@@ -84,11 +89,28 @@ let encrypt_one ~stage md_path =
   validate_slug slug;
 
   let author, recipients = resolve_recipients meta in
+  let author = require_header_value "author email" author in
+  let recipients = List.map (require_header_value "recipient") recipients in
+  let date = rfc5322_date () in
+
+  let title =
+    match lookup "title" meta with
+    | Some t when t <> "" -> t
+    | _ -> "Untitled"
+  in
+  let title = require_header_value "title" title in
+
   (* Subject is always the literal placeholder: no metadata leaks
      through the outer envelope.  (Matches the cautious reading of
      the Protected Headers draft.) *)
   let subject_placeholder = "..." in
   let visible = [ "Subject", subject_placeholder ] in
+  let protected_headers =
+    [ "From", author;
+      "To", String.concat ", " recipients;
+      "Date", date;
+      "Subject", title ]
+  in
 
   let image_refs = collect_image_refs body in
   let images =
@@ -102,13 +124,14 @@ let encrypt_one ~stage md_path =
       let p = Filename.concat posts_dir rel in
       if not (file_exists p) then
         fail (Printf.sprintf "referenced image not found: %s" rel);
-      (Filename.basename rel, read_file p)
+      let name = require_safe_filename "image filename" (Filename.basename rel) in
+      (name, read_file p)
     ) image_refs
   in
 
   let inner =
     build_inner_mime
-      ~protected:visible
+      ~protected:protected_headers
       ~md_filename:md_basename
       ~md_body:raw
       ~images

@@ -30,6 +30,24 @@ if [[ ${#bad[@]} -gt 0 ]]; then
     exit 1
 fi
 
+emls=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && emls+=("$line")
+done < <(
+    git diff --cached --name-only --diff-filter=AM -- 'posts-encrypted/*.eml' || true
+)
+if [[ ${#emls[@]} -gt 0 ]]; then
+    for eml in "${emls[@]}"; do
+        if ! git show ":$eml" | tr -d '\r' | grep -qx 'Subject: \.\.\.'; then
+            echo "pre-commit: refusing $eml; outer Subject must be literal ..." >&2
+            exit 1
+        fi
+        if ! git show ":$eml" | tr -d '\r' | grep -qi '^Content-Type: multipart/encrypted;.*protocol="application/pgp-encrypted"'; then
+            echo "pre-commit: refusing $eml; expected RFC 3156 multipart/encrypted envelope" >&2
+            exit 1
+        fi
+    done
+fi
 staged=()
 while IFS= read -r line; do
     [[ -n "$line" ]] && staged+=("$line")
