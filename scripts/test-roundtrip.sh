@@ -11,7 +11,32 @@ repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
 
 scratch="$(mktemp -d)"
+container=""
+docker_step() {
+    local seconds="$1"
+    shift
+    "$@" &
+    local pid="$!"
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( elapsed >= seconds )); then
+            echo "FAIL: timed out after ${seconds}s: $*" >&2
+            kill "$pid" 2>/dev/null || true
+            sleep 2
+            kill -9 "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"
+}
+
 cleanup() {
+    if [[ -n "${container:-}" ]]; then
+        docker_step 20 docker rm -f "$container" >/dev/null 2>&1 || true
+    fi
     rm -rf "$scratch"
     rm -f posts/fixture.md posts/fixture.bin posts-encrypted/fixture.eml
 }
@@ -73,6 +98,10 @@ grep -q 'application/pgp-encrypted' posts-encrypted/fixture.eml
 grep -q 'BEGIN PGP MESSAGE' posts-encrypted/fixture.eml
 # Outer Subject is literally the placeholder.
 grep -E '^Subject: \.\.\.' posts-encrypted/fixture.eml > /dev/null
+if grep -E '^(From|To|Date): ' posts-encrypted/fixture.eml >/dev/null; then
+    echo "FAIL: outer envelope exposes sender, recipient, or date metadata" >&2
+    exit 1
+fi
 
 # PKESK inspection -- ask gpg directly.
 awk '/BEGIN PGP MESSAGE/,/END PGP MESSAGE/' posts-encrypted/fixture.eml \
@@ -96,10 +125,34 @@ if [[ "$orig_img_sha" != "$roundtripped_img_sha" ]]; then
 fi
 echo "round-trip OK"
 
-# Build the site and lint the HTML for leaks.
-dune build src/blog_generator.exe
+# Build the Rocq/Crane generator and site in Docker only. The host does not
+# need Rocq, Crane, or coqc installed.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "docker not on PATH; the Rocq/Crane generator is container-only" >&2
+    exit 1
+fi
+image="${CRANE_BLOG_DOCKER_IMAGE:-crane-blog-roundtrip}"
+published_image="${CRANE_BLOG_GENERATOR_IMAGE:-ghcr.io/wklm/crane-blog-generator:latest}"
+build_timeout="${CRANE_BLOG_DOCKER_BUILD_TIMEOUT:-1800}"
+pull_timeout="${CRANE_BLOG_DOCKER_PULL_TIMEOUT:-300}"
+run_timeout="${CRANE_BLOG_DOCKER_RUN_TIMEOUT:-120}"
+inspect_timeout="${CRANE_BLOG_DOCKER_INSPECT_TIMEOUT:-20}"
+container="crane-blog-roundtrip-$$"
+if [[ "${CRANE_BLOG_BUILD_GENERATOR:-0}" == "1" ]]; then
+    docker_step "$build_timeout" docker build --target runtime -t "$image" .
+else
+    image="$published_image"
+    if ! docker_step "$inspect_timeout" docker image inspect "$image" >/dev/null 2>&1; then
+        docker_step "$pull_timeout" docker pull "$image"
+    fi
+fi
 rm -rf _site
-./_build/default/src/blog_generator.exe
+mkdir -p _site
+docker_step "$run_timeout" docker run --name "$container" --rm \
+    -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
+    -v "$PWD/_site:/site/_site" \
+    "$image"
+container=""
 if grep -R -l '<img' _site >/dev/null 2>&1; then
     echo "FAIL: <img tag present in site" >&2
     exit 1

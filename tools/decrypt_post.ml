@@ -82,9 +82,12 @@ let () =
     match extract_filename ph with
     | None -> ()
     | Some name ->
+      let name = require_safe_filename "decrypted filename" name in
       let data = decode_transfer ph pb in
       let target = Filename.concat posts_dir name in
-      write_file target data;
+      let tmp = target ^ ".tmp" in
+      write_file tmp data;
+      Sys.rename tmp target;
       let rel =
         let n = String.length repo + 1 in
         if starts_with target (repo ^ "/") then
