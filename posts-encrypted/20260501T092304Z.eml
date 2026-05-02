@@ -1,4 +1,17 @@
-Subject: Less Machinery
+Subject: ...
+MIME-Version: 1.0
+Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="=_cb_20260501T092304Z_="
+
+This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).
+--=_cb_20260501T092304Z_=
+Content-Type: application/pgp-encrypted
+Content-Description: PGP/MIME version identification
+
+Version: 1
+--=_cb_20260501T092304Z_=
+Content-Type: application/octet-stream; name="encrypted.asc"
+Content-Description: OpenPGP encrypted message
+Content-Disposition: inline; filename="encrypted.asc"
 
 -----BEGIN PGP MESSAGE-----
 
@@ -13,3 +26,4 @@ CvADAuCpIOdWIT3275QEwbrp6NjaAagEd+PeWxULH9kss28j1EHyg9iudIZJkSTo
 Ekb50gr6SzAQIrD5tdhLjM15qsVQLDySs/veQbf6tcN8v/PS/vs1xQAZDA==
 =7zZ+
 -----END PGP MESSAGE-----
+--=_cb_20260501T092304Z_=--

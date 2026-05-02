@@ -1,4 +1,17 @@
-Subject: Test post
+Subject: ...
+MIME-Version: 1.0
+Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="=_cb_20260501T131449Z_="
+
+This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).
+--=_cb_20260501T131449Z_=
+Content-Type: application/pgp-encrypted
+Content-Description: PGP/MIME version identification
+
+Version: 1
+--=_cb_20260501T131449Z_=
+Content-Type: application/octet-stream; name="encrypted.asc"
+Content-Description: OpenPGP encrypted message
+Content-Disposition: inline; filename="encrypted.asc"
 
 -----BEGIN PGP MESSAGE-----
 
@@ -12,3 +25,4 @@ iPaq7bBKuN9PW3g6FuFguKk5n2cGgPdCbJs7m9CXzhyb84yny7IRjeRWrEhS9itT
 OLzoVgt+
 =nzLc
 -----END PGP MESSAGE-----
+--=_cb_20260501T131449Z_=--

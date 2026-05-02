@@ -3,15 +3,16 @@
 Crane Blog SMTP listener.
 
 Receives one envelope, encrypts normal Mail.app plaintext in memory with the
-author's public key, writes posts-encrypted/<UTC-isoZ>.eml, and pushes the
-commit to the blog repo. If the envelope already contains a PGP armor block,
-it is stored verbatim for script-driven clients. Authentication is by Tailscale
-ACL plus an optional MAIL FROM allowlist.
+author's public key, wraps it in a canonical RFC 3156 multipart/encrypted
+message, writes posts-encrypted/<UTC-isoZ>.eml, and pushes the commit to the
+blog repo. Authentication is by Tailscale ACL plus an optional MAIL FROM
+allowlist.
 """
 import asyncio
 import datetime as dt
 from email import policy
 from email.parser import BytesParser
+from email.utils import format_datetime
 import logging
 import os
 import signal
@@ -30,7 +31,6 @@ HOST = os.environ.get("SMTP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SMTP_PORT", "2525"))
 ALLOW = {a.strip().lower() for a in os.environ.get("BLOG_ALLOW_FROM", "").split(",") if a.strip()}
 GPG_RECIPIENT = os.environ.get("BLOG_GPG_RECIPIENT", "B2467F312C5F4BDCDF50D57993F51309D4C9372A")
-PGP_MARKER = b"-----BEGIN PGP MESSAGE-----"
 
 log = logging.getLogger("crane-blog-smtp")
 _git_lock = asyncio.Lock()
@@ -68,6 +68,10 @@ def _plain_body(msg) -> str:
     return str(msg.get_payload() or "")
 
 
+def _header_line(name: str, value: str) -> str:
+    return f"{name}: {value.replace(chr(13), ' ').replace(chr(10), ' ').strip()}\r\n"
+
+
 def _encrypt(text: str) -> str:
     proc = subprocess.run(
         [
@@ -76,6 +80,7 @@ def _encrypt(text: str) -> str:
             "--yes",
             "--trust-model",
             "always",
+            "--no-auto-key-retrieve",
             "--armor",
             "--encrypt",
             "-r",
@@ -87,32 +92,53 @@ def _encrypt(text: str) -> str:
     )
     return proc.stdout.decode("ascii")
 
-
-def _armor_from_bytes(payload: bytes) -> str:
-    text = payload.decode("utf-8", errors="replace")
-    begin = text.find("-----BEGIN PGP MESSAGE-----")
-    end = text.find("-----END PGP MESSAGE-----")
-    if begin < 0 or end < begin:
-        raise ValueError("PGP armor block not found")
-    end += len("-----END PGP MESSAGE-----")
-    return text[begin:end] + "\n"
-
-
-def _public_envelope(subject: str, armor: str) -> bytes:
-    return (f"Subject: {subject}\r\n\r\n{armor}").encode("utf-8")
-
-
-def _encrypted_envelope(envelope: Envelope) -> bytes:
+def _encrypted_envelope(envelope: Envelope, now: dt.datetime) -> bytes:
     incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
+    sender = _header(incoming, "From", envelope.mail_from or "unknown")
+    recipients = _header(incoming, "To", ", ".join(envelope.rcpt_tos or []) or "blog@wklm.github.io")
+    date = format_datetime(now)
     subject = _header(incoming, "Subject", "Untitled")
-    armor = _encrypt(_plain_body(incoming))
-    return _public_envelope(subject, armor)
-
-
-def _sanitized_envelope(envelope: Envelope) -> bytes:
-    incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
-    subject = _header(incoming, "Subject", "Untitled")
-    return _public_envelope(subject, _armor_from_bytes(envelope.content or b""))
+    body = _plain_body(incoming)
+    inner = "".join(
+        [
+            _header_line("From", sender),
+            _header_line("To", recipients),
+            _header_line("Date", date),
+            _header_line("Subject", subject),
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "Content-Transfer-Encoding: 8bit\r\n",
+            "\r\n",
+            body,
+            "" if body.endswith("\n") else "\r\n",
+        ]
+    )
+    armor = _encrypt(inner)
+    ts = now.strftime("%Y%m%dT%H%M%SZ")
+    boundary = f"=_cb_smtp_{ts}_="
+    outer = "".join(
+        [
+            "Subject: ...\r\n",
+            "MIME-Version: 1.0\r\n",
+            f'Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="{boundary}"\r\n',
+            "\r\n",
+            "This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).\r\n",
+            f"--{boundary}\r\n",
+            "Content-Type: application/pgp-encrypted\r\n",
+            "Content-Description: PGP/MIME version identification\r\n",
+            "\r\n",
+            "Version: 1\r\n",
+            f"--{boundary}\r\n",
+            "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n",
+            "Content-Description: OpenPGP encrypted message\r\n",
+            "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n",
+            "\r\n",
+            armor,
+            "" if armor.endswith("\n") else "\r\n",
+            f"--{boundary}--\r\n",
+        ]
+    )
+    return outer.encode("utf-8")
 
 
 class Handler:
@@ -129,12 +155,8 @@ class Handler:
         ts = now.strftime("%Y%m%dT%H%M%SZ")
         rel = Path("posts-encrypted") / f"{ts}.eml"
         try:
-            if PGP_MARKER in (envelope.content or b""):
-                post_bytes = _sanitized_envelope(envelope)
-                log.info("payload already encrypted; storing sanitized envelope")
-            else:
-                post_bytes = _encrypted_envelope(envelope)
-                log.info("encrypted plaintext message")
+            post_bytes = _encrypted_envelope(envelope, now)
+            log.info("encrypted plaintext message for %s", GPG_RECIPIENT)
         except subprocess.CalledProcessError as e:
             log.error("gpg failed: %s\nstderr: %s", e, e.stderr.decode("utf-8", errors="replace"))
             return "451 encryption failed"
