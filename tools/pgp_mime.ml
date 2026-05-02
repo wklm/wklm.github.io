@@ -26,6 +26,30 @@ let starts_with s p =
 
 let trim = String.trim
 
+let has_ctl_or_newline s =
+  String.exists (fun c ->
+    let code = Char.code c in
+    c = '\r' || c = '\n' || code = 0 || code = 127
+  ) s
+
+let require_header_value context s =
+  if has_ctl_or_newline s then
+    invalid_arg (Printf.sprintf "%s contains a control character" context);
+  s
+
+let is_safe_filename s =
+  String.length s > 0
+  && s <> "."
+  && s <> ".."
+  && not (String.contains s '/')
+  && not (String.contains s '\\')
+  && not (String.contains s '\000')
+
+let require_safe_filename context s =
+  if not (is_safe_filename s) then
+    invalid_arg (Printf.sprintf "%s %S is not a safe basename" context s);
+  s
+
 let split_on_char c s =
   let r = ref [] in
   let j = ref (String.length s) in
@@ -122,21 +146,8 @@ let run_capture ?(env = Unix.environment ()) argv stdin_data =
   Unix.close in_r;
   Unix.close out_w;
   Unix.close err_w;
-  (* Write stdin on a helper thread equivalent: use non-blocking write loop.
-     For our sizes (<= a few MB) a single writev after selecting stdout
-     drain is fine; simplest is to write then close, reading after. *)
-  let write_all fd s =
-    let len = String.length s in
-    let pos = ref 0 in
-    while !pos < len do
-      let n = Unix.write_substring fd s !pos (len - !pos) in
-      if n = 0 then failwith "short write";
-      pos := !pos + n
-    done
-  in
-  (* To avoid deadlocks when the child fills its stdout buffer before
-     we finish writing, use a fork: drain stdout/stderr in a child-like
-     loop using select. *)
+  (* Drain stdout/stderr while feeding stdin, so gpg cannot deadlock on
+     full pipes.  Writes are deliberately chunked to pipe-sized pieces. *)
   let obuf = Buffer.create 4096 and ebuf = Buffer.create 1024 in
   let chunk = Bytes.create 4096 in
   let in_closed = ref false in
@@ -170,7 +181,7 @@ let run_capture ?(env = Unix.environment ()) argv stdin_data =
           Unix.close in_w;
           in_closed := true
         end else begin
-          let n = Unix.write_substring in_w stdin_data !stdin_pos remaining in
+          let n = Unix.write_substring in_w stdin_data !stdin_pos (min 4096 remaining) in
           stdin_pos := !stdin_pos + n;
           if !stdin_pos = stdin_len then begin
             Unix.close in_w;
@@ -187,7 +198,6 @@ let run_capture ?(env = Unix.environment ()) argv stdin_data =
     | Unix.WSIGNALED s -> 128 + s
     | Unix.WSTOPPED s -> 128 + s
   in
-  ignore (write_all);
   (code, Buffer.contents obuf, Buffer.contents ebuf)
 
 let must_run argv stdin_data =
@@ -308,6 +318,7 @@ let make_boundary () =
    To/From/Subject on the outer envelope are ASCII by policy (the
    literal "..." Subject has no non-ASCII bytes). *)
 let header_line k v =
+  let v = require_header_value ("header " ^ k) v in
   Printf.sprintf "%s: %s\r\n" k v
 
 (* Build inner MIME:
@@ -334,6 +345,7 @@ let build_inner_mime
     ~images
     () =
   let b = make_boundary () in
+  let md_filename = require_safe_filename "markdown filename" md_filename in
   let out = Buffer.create 4096 in
   List.iter (fun (k, v) -> Buffer.add_string out (header_line k v)) protected;
   Buffer.add_string out "MIME-Version: 1.0\r\n";
@@ -356,6 +368,7 @@ let build_inner_mime
   then Buffer.add_string out "\r\n";
   (* Image parts. *)
   List.iter (fun (name, bytes) ->
+    let name = require_safe_filename "attachment filename" name in
     Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
     Buffer.add_string out
       (Printf.sprintf "Content-Type: application/octet-stream; name=\"%s\"\r\n"
@@ -389,15 +402,36 @@ let build_outer_envelope
     ~visible
     ~armored
     () =
+  let b = make_boundary () in
   let out = Buffer.create 4096 in
   List.iter (fun (k, v) ->
     if k = "Subject" then Buffer.add_string out (header_line k v)
   ) visible;
+  Buffer.add_string out "MIME-Version: 1.0\r\n";
+  Buffer.add_string out
+    (Printf.sprintf
+       "Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"%s\"\r\n"
+       b);
+  Buffer.add_string out "\r\n";
+  Buffer.add_string out
+    "This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).\r\n";
+  Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
+  Buffer.add_string out "Content-Type: application/pgp-encrypted\r\n";
+  Buffer.add_string out "Content-Description: PGP/MIME version identification\r\n";
+  Buffer.add_string out "\r\n";
+  Buffer.add_string out "Version: 1\r\n";
+  Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
+  Buffer.add_string out
+    "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n";
+  Buffer.add_string out "Content-Description: OpenPGP encrypted message\r\n";
+  Buffer.add_string out
+    "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n";
   Buffer.add_string out "\r\n";
   Buffer.add_string out armored;
   if String.length armored = 0
      || armored.[String.length armored - 1] <> '\n'
   then Buffer.add_string out "\r\n";
+  Buffer.add_string out (Printf.sprintf "--%s--\r\n" b);
   Buffer.contents out
 
 (* ---- Minimal MIME parser for decrypt ---------------------------- *)

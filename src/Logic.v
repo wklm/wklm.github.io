@@ -234,8 +234,8 @@ Definition dirname_output_path (output_dir slug : string) : string :=
 
 (* An [EncryptedPost] is the opaque view the generator has of a
    [posts-encrypted/<slug>.eml] file.  The public renderer only uses
-   the slug, subject, and encrypted body.  Address/date/MIME headers are
-   intentionally ignored so sender metadata is not published.
+   the slug, a non-rendered sort key, and the encrypted body.  Public
+   pages never render sender, recipient, date, or real subject metadata.
 
    [ep_body] is deliberately untouched: MIME boundaries, the
    [application/pgp-encrypted] part, the armored
@@ -244,12 +244,49 @@ Definition dirname_output_path (output_dir slug : string) : string :=
    parses MIME semantics and never touches OpenPGP bytes. *)
 Record EncryptedPost : Type := mkEncryptedPost {
   ep_slug : string;
-  ep_subject : string;
+  ep_sort_key : string;
   ep_body : string
 }.
 
 Definition empty_ep : EncryptedPost :=
   mkEncryptedPost "" "" "".
+
+Definition public_subject : string := "Subject: ...".
+
+Definition month_key (m : string) : string :=
+  if string_eqb m "Jan" then "01"
+  else if string_eqb m "Feb" then "02"
+  else if string_eqb m "Mar" then "03"
+  else if string_eqb m "Apr" then "04"
+  else if string_eqb m "May" then "05"
+  else if string_eqb m "Jun" then "06"
+  else if string_eqb m "Jul" then "07"
+  else if string_eqb m "Aug" then "08"
+  else if string_eqb m "Sep" then "09"
+  else if string_eqb m "Oct" then "10"
+  else if string_eqb m "Nov" then "11"
+  else if string_eqb m "Dec" then "12"
+  else "00".
+
+(* Normalize the RFC 5322 date shape emitted by the tools,
+   e.g. [Fri, 01 May 2026 13:24:03 +0000], into a lexicographic UTC-ish
+   key.  If a hand-written message uses another shape, sorting falls
+   back to the original date string. *)
+Definition date_sort_key (date : string) : string :=
+  let len := PrimString.length date in
+  if leb 25%int63 len then
+    let day := PrimString.sub date 5%int63 2%int63 in
+    let mon := PrimString.sub date 8%int63 3%int63 in
+    let year := PrimString.sub date 12%int63 4%int63 in
+    let time := PrimString.sub date 17%int63 8%int63 in
+    concat_all (year :: month_key mon :: day :: "T" :: time :: nil)
+  else date.
+
+Definition sort_key (slug date : string) : string :=
+  if int_eqb (PrimString.length slug) 16%int63
+  then slug
+  else if is_empty date then slug
+  else date_sort_key date.
 
 (* ---- .eml header parsing ----------------------------------------- *)
 
@@ -319,9 +356,10 @@ Definition lookup_header (headers needle : string) : string :=
 
 Definition parse_eml (slug raw : string) : EncryptedPost :=
   let '(headers, body) := split_headers_body raw 0%int63 fuel in
+  let date := lookup_header headers "Date" in
   mkEncryptedPost
     slug
-    (lookup_header headers "Subject")
+    (sort_key slug date)
     body.
 
 (* ---- Rendering --------------------------------------------------- *)
@@ -343,14 +381,16 @@ Definition page_shell (depth page_title body_class nav_label nav_href body_conte
     body_content ::
     "</div></body></html>" :: nil).
 
+(* The public subject is not data.  Even if a bad [.eml] contains a real
+   [Subject] header, public pages render only the fixed placeholder. *)
 Definition render_eml_page (ep : EncryptedPost) : string :=
-  let title := cat "Subject: " ep.(ep_subject) in
+  let title := public_subject in
   let body :=
     concat_all (
       "<main id='main' class='post eml'>" ::
       "<article>" ::
       "<header class='post-header'>" ::
-      "<h1>" :: html_escape ep.(ep_subject) :: "</h1>" ::
+      "<h1>" :: html_escape public_subject :: "</h1>" ::
       "</header>" ::
       "<pre class='eml-body'>" :: html_escape ep.(ep_body) :: "</pre>" ::
       "</article></main>" :: nil) in
@@ -360,7 +400,7 @@ Definition inbox_row (ep : EncryptedPost) : string :=
   concat_all (
     "<li>" ::
     "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
-    html_escape ep.(ep_subject) ::
+    html_escape public_subject ::
     "</a>" ::
     "</li>" :: nil).
 
@@ -427,13 +467,13 @@ Fixpoint read_eml_list (paths : list string) : IO (list EncryptedPost) :=
       Ret (parse_eml (file_stem_eml path) raw :: parsed_rest)
   end.
 
-(* Descending sort by slug. SMTP-generated slugs are UTC timestamps, so this
-   keeps newest posts first without publishing a Date header. *)
+(* Descending sort by a hidden key. Timestamp slugs sort directly; otherwise
+   the key falls back to the Date header when present. *)
 Fixpoint insert_ep (ep : EncryptedPost) (eps : list EncryptedPost) : list EncryptedPost :=
   match eps with
   | nil => ep :: nil
   | q :: rest =>
-      if string_ge ep.(ep_slug) q.(ep_slug)
+      if string_ge ep.(ep_sort_key) q.(ep_sort_key)
       then ep :: q :: rest
       else q :: insert_ep ep rest
   end.

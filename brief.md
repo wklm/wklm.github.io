@@ -7,12 +7,12 @@ the site is trying to be, how it should read, and how it should look.
 ## Premise
 
 `wklm.github.io` is a personal publication of technical essays
-distributed as PGP-encrypted email. Every page on the public site is,
-literally, a PGP/MIME message: an inbox of `Subject: ...` headers on
-the homepage, an RFC 5322 envelope on each post page, and below it a
-`-----BEGIN PGP MESSAGE-----` block. The reader is not given a
-rendered essay. The reader is given ciphertext, and — if they hold
-one of the listed recipient keys — the means to decrypt it.
+distributed as PGP-encrypted email. The public site is a classic,
+restrained blog shell, but every post is still only a PGP/MIME
+ciphertext: a list of `Subject: ...` entries on the homepage and, on
+each post page, a `-----BEGIN PGP MESSAGE-----` block. The reader is
+not given a rendered essay. The reader is given ciphertext, and — if
+they hold one of the listed recipient keys — the means to decrypt it.
 
 The point of this is not novelty. It is the editorial stance: the
 site does not solicit a passing audience. To read a piece you must
@@ -42,58 +42,52 @@ well-shaped tools; typography; the visual grammar of
 early-20th-century European design. Topics out of scope: product
 announcements, hot takes, career advice.
 
-The public site itself carries no editorial register at all — only
-metadata and ciphertext. Subjects are always the literal string
-`Subject: ...`, so even the title of a piece does not leak.
+The public site itself carries almost no editorial register — only the
+classic shell, the fixed placeholder, and ciphertext. Subjects are
+always the literal string `Subject: ...`, so even the title of a piece
+does not leak.
 
 ## Visual language
 
-The site renders as a plain mail client, deliberately ugly in the
-way real `.eml` files are ugly. Monospace everywhere. Minimal
-chrome. The reference points are early Pine/Mutt screenshots and
-the raw output of `gpg --decrypt`. Concretely:
+The site renders as a small literary page, not a webmail imitation.
+The reference points are classic personal sites, quiet book typography,
+and source artifacts shown without apology. Concretely:
 
-- A near-white page with near-black text. A single muted accent for
-  rule lines and the inbox hover state. No second typeface, no
-  ornaments, no display headings.
-- A single monospace family for the entire site (system
-  `ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace`).
-- Each post page has two regions, separated by a horizontal rule:
-  a `<dl class='eml-headers'>` table of `From / To / Date /
-  Content-Type` rows, then a `<pre class='eml-body'>` containing
-  the multipart-encrypted body verbatim, including the
-  `-----BEGIN PGP MESSAGE-----` armor.
-- The homepage is an `<ol class='inbox'>` of rows; each row shows
-  `From`, `Date`, and a link whose text is `Subject: ...`.
-- No JavaScript. No webfonts. No images on any rendered page —
-  every image in a post is encrypted as a MIME attachment inside
-  the ciphertext, never exposed.
+- A near-white page with near-black text, restrained width, generous
+  leading, and minimal navigation.
+- Serif body typography for the shell; monospace only for the encrypted
+  body.
+- The homepage is a plain list of links whose text is always
+  `Subject: ...`.
+- Each post page has a classic article shell with the fixed heading
+  `Subject: ...`, followed by `<pre class='eml-body'>` containing the
+  multipart-encrypted body verbatim after HTML escaping.
+- No JavaScript. No webfonts. No images on any rendered page — every
+  image in a post is encrypted as a MIME attachment inside the
+  ciphertext, never exposed.
 
 Explicit anti-patterns:
 
-- No card grids, no hero, no featured tile.
-- No gradients, no blurred blobs, no glassmorphism.
-- No decorative emoji. No badges. No social-embed chrome.
-- Nothing that suggests the site is trying to be read by a casual
-  visitor. The aesthetic should communicate, immediately, that
-  this page is correspondence and not an article.
+- No card grids, hero sections, featured tiles, badges, or social chrome.
+- No gradients, blurred blobs, glassmorphism, or decorative emoji.
+- No plaintext excerpts, summaries, descriptions, or real titles.
 
 ## Information architecture
 
-- **Homepage.** A list of envelopes. Rendered by
-  `render_inbox_page` in [src/Logic.v](src/Logic.v). Each row is:
-  `From`, `Date`, `Subject: ...` as a link to `/<slug>/`. Sorted
-  by `Date` descending.
-- **Post page.** Headers table on top, ciphertext `<pre>` below.
+- **Homepage.** A list of opaque entries. Rendered by
+  `render_inbox_page` in [src/Logic.v](src/Logic.v). Each row links to
+  `/<slug>/` with the literal text `Subject: ...`. Sorted by a hidden
+  key: timestamp slugs first, otherwise the generated date key.
+- **Post page.** Classic shell on top, ciphertext `<pre>` below.
   Rendered by `render_eml_page` in [src/Logic.v](src/Logic.v). The
   `<pre>` contains the body of the `.eml` byte-for-byte after HTML
   escaping; nothing is reformatted.
 - **URL shape.** Each message lives at `/<slug>/`. The slug is the
   basename of the `.eml` file in `posts-encrypted/`.
-- **Visible headers.** `From`, `To`, `Date`, `MIME-Version`,
-  `Content-Type`. Everything else (`Subject`, any `X-` headers,
-  `Message-ID`) is suppressed at render time so it cannot leak
-  metadata, and the public `Subject:` is always literally `...`.
+- **Visible metadata.** The public title/link text is always literally
+  `Subject: ...`. Sender, recipient, date, message id, and real subject
+  are suppressed from the public HTML and from newly generated outer
+  envelopes.
 
 ## What is verified today
 
@@ -111,9 +105,10 @@ What currently holds:
   `_site/` tree.
 - `scripts/test-roundtrip.sh` confirms end-to-end that the OCaml
   encrypt/decrypt tools round-trip a Markdown post and a binary
-  attachment byte-for-byte through `gpg`, that the resulting
-  armored body contains a PKESK packet, and that the rendered HTML
-  contains the armor and never an `<img>` or a real subject line.
+  attachment byte-for-byte through `gpg`, that the resulting armored
+  body contains a PKESK packet, and that the public output contains the
+  armor and never an `<img>`, real subject line, or outer sender/date
+  metadata.
 
 What is *not* verified today:
 
@@ -137,10 +132,10 @@ the cryptography.
 
 Verification work I consider worth doing, in rough order:
 
-1. A narrowly-scoped theorem about `render_eml_page`: every visible
-   header value passes through `html_escape`, and no character
-   outside the ciphertext alphabet (`A–Z a–z 0–9 + / = -` plus
-   newline) appears inside `<pre class='eml-body'>`.
+1. A narrowly-scoped theorem about `render_eml_page`: parsed header
+   values are not rendered, the public subject is the literal
+   placeholder, and the body crosses into HTML only through
+   `html_escape`.
 2. A proof that `parse_eml` and the unparser used by the OCaml
    tool agree on the boundary (headers / blank line / body) for
    the subset of messages we generate.

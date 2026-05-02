@@ -46,6 +46,10 @@ if [[ ${#emls[@]} -gt 0 ]]; then
             echo "pre-commit: refusing $eml; expected RFC 3156 multipart/encrypted envelope" >&2
             exit 1
         fi
+        if git show ":$eml" | tr -d '\r' | grep -Eq '^(From|To|Date): '; then
+            echo "pre-commit: refusing $eml; outer envelope exposes sender, recipient, or date metadata" >&2
+            exit 1
+        fi
     done
 fi
 staged=()

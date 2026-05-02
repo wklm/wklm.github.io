@@ -8,14 +8,13 @@ Deployed at <https://wklm.github.io>.
 
 ## What the site is
 
-Every page on the site is, literally, a PGP-encrypted email. The
-homepage is a mail-client-style inbox with `From`, `Date`, and
-`Subject: ...` rows; each entry links to a page that shows the RFC
-5322 headers of one message and, below them, the
-`-----BEGIN PGP MESSAGE-----` armor of the ciphertext. The only way
-to read a post is to copy the armored block and run
-`gpg --decrypt`. A reader who is not a listed recipient sees opaque
-ciphertext.
+Every post on the site is, literally, a PGP-encrypted email rendered
+inside a classic, restrained blog shell. The homepage lists opaque
+entries whose visible title is always `Subject: ...`; each entry links
+to a page whose public text is the same placeholder and a
+`-----BEGIN PGP MESSAGE-----` ciphertext block. The only way to read a
+post is to copy the armored block and run `gpg --decrypt`. A reader who
+is not a listed recipient sees opaque ciphertext.
 
 ## Authoring model
 
@@ -44,8 +43,8 @@ the author and up to three declared recipients.
 
 All other keys are left for the author's own reference inside the
 encrypted body — they are never leaked, because the body is never
-rendered. The outer envelope always carries `Subject: ...` so no
-metadata leaks through it.
+rendered. The outer envelope carries only `Subject: ...` plus the MIME
+headers needed for RFC 3156 framing.
 
 ### Image references
 
@@ -71,10 +70,19 @@ Auth:   none
 The hostname `fuji` is an SSH alias on this Mac, not normal macOS DNS, so
 Mail.app must use the Tailscale IP unless MagicDNS is enabled system-wide.
 Write a normal plaintext email. The fuji container encrypts the body in
-memory with a mounted public key secret, writes only
-`posts-encrypted/*.eml`, and pushes the commit. If a script sends an
-already-armored PGP message, the container stores only `Subject` plus the
-armor block.
+memory with the checked-in public key, wraps it in an RFC 3156 envelope with
+only `Subject: ...` visible, writes only `posts-encrypted/*.eml`, and pushes
+the commit.
+
+For a smoke test of that SMTP path:
+
+```bash
+python3 scripts/send_test.py
+```
+
+The script accepts `--host`, `--port`, `--from`, `--to`, and `--subject`; the
+same values can be supplied via `BLOG_SMTP_HOST`, `BLOG_SMTP_PORT`,
+`BLOG_SMTP_FROM`, `BLOG_SMTP_TO`, and `BLOG_SMTP_SUBJECT`.
 
 ### Local Git Hook
 
@@ -101,8 +109,9 @@ git commit -m "new: my slug"
 
 1. `smtp/listener.py` (Docker on fuji). Receives normal SMTP from
    Mail.app over Tailscale, encrypts the message body in memory with
-   GnuPG and the checked-in public key, writes `posts-encrypted/*.eml`,
-   commits, and pushes. No private key lives on fuji.
+   GnuPG and the checked-in public key, wraps it as RFC 3156
+   `multipart/encrypted`, writes `posts-encrypted/*.eml`, commits, and
+   pushes. No private key lives on fuji.
 2. `tools/encrypt_post.ml` (OCaml). Parses the frontmatter, resolves
    `recipients`, builds a `multipart/mixed` inner MIME tree, pipes
    it to `gpg --sign --encrypt --armor --local-user <author>
@@ -124,14 +133,16 @@ git commit -m "new: my slug"
 ## Verification claims
 
 - Rocq type-checks `src/Logic.v`; every recursion is structural or
-  fuel-bounded.
+  fuel-bounded. This check is run in Docker, not against host-local
+  Rocq/coqc installations.
 - Crane extracts the Rocq definitions to C++23 and clang accepts
   the result.
 - `scripts/test-roundtrip.sh` runs end to end with an ephemeral GPG
   keyring: it confirms byte-for-byte round-trip of the Markdown and
   image, confirms a PKESK packet is present in the armored body,
-  and confirms the rendered HTML contains no `<img>` tag, contains
-  the armor, and shows only `Subject: ...` on the inbox.
+  builds and runs the Rocq/Crane generator in Docker, and confirms the
+  rendered HTML contains no `<img>` tag, contains the armor, and shows
+  only `Subject: ...` publicly.
 - **The encryption itself is not formally verified.** OpenPGP is
   delegated to GnuPG, which is the same trust boundary any PGP
   email client operates under. No verified OpenPGP implementation
@@ -142,12 +153,22 @@ git commit -m "new: my slug"
 
 ## Build
 
+The Rocq/Crane generator is built and run exclusively inside Docker. Host-side
+opam/dune is only for the small OCaml authoring tools.
+
 ```bash
 docker build -t crane-blog .
-docker run --name crane-blog-run crane-blog
-docker cp crane-blog-run:/home/opam/crane-blog/_site ./_site
-docker rm crane-blog-run
+mkdir -p _site
+docker run --rm \
+  -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
+  -v "$PWD/_site:/site/_site" \
+  crane-blog
 ```
+
+Publishing a new encrypted post does not rebuild Rocq/Crane. CI pulls the
+published runtime generator image and mounts the new `posts-encrypted/` tree.
+The slow image rebuild runs only when `Dockerfile`, `dune-project`, `src/`, or
+`.dockerignore` changes.
 
 Pinned: opam 2.5, OCaml 5.4, Rocq 9.0.0, `coq-itree`, `coq-paco`,
 `coq-ext-lib`, `rocq-crane` (from upstream), GnuPG 2.x.
@@ -155,18 +176,20 @@ Pinned: opam 2.5, OCaml 5.4, Rocq 9.0.0, `coq-itree`, `coq-paco`,
 Iterative work:
 
 ```bash
-docker run --rm -it -v "$PWD":/home/opam/crane-blog crane-blog bash
+docker build --target builder -t crane-blog-builder .
+docker run --rm -it -v "$PWD":/home/opam/crane-blog crane-blog-builder bash
 eval $(opam env) && dune build src/blog_generator.exe
 ./_build/default/src/blog_generator.exe
 ```
 
 ## Deploy
 
-`.github/workflows/deploy.yml` runs on every push to `main`: builds
-the image, runs the container (reading only the already-ciphertext
-`posts-encrypted/` tree), `docker cp`s `_site` out, uploads via
-`actions/upload-pages-artifact`, publishes via
-`actions/deploy-pages`. CI never holds private keys.
+`.github/workflows/deploy.yml` runs on every push to `main`. If the generator
+changed, CI rebuilds and publishes the runtime generator image to GHCR. For a
+post-only commit, CI pulls the existing image, mounts the already-ciphertext
+`posts-encrypted/` tree plus `_site/`, runs the generator, uploads via
+`actions/upload-pages-artifact`, and publishes via `actions/deploy-pages`. CI
+never holds private keys.
 
 ## Credits
 

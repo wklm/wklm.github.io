@@ -1,5 +1,7 @@
-# Use a clean OCaml image to install specific Coq/Rocq version
-FROM ocaml/opam:debian-13-ocaml-5.4
+# syntax=docker/dockerfile:1.7
+
+# Build the Rocq/Crane generator once in a toolchain image.
+FROM ocaml/opam:debian-13-ocaml-5.4 AS builder
 
 # Install system dependencies
 USER root
@@ -32,8 +34,9 @@ RUN opam install -y dune
 # Install Coq 9.0.0 specifically to support rocq-crane requirements
 RUN opam install -y coq=9.0.0 coq-itree coq-paco coq-ext-lib
 
-# Clone, remove tests, and install rocq-crane
-RUN git clone https://github.com/bloomberg/crane.git rocq-crane-src \
+# Clone, remove tests, and install rocq-crane.
+ARG CRANE_REF=main
+RUN git clone --depth 1 --branch "$CRANE_REF" https://github.com/bloomberg/crane.git rocq-crane-src \
     && cd rocq-crane-src \
     && rm -rf .git tests \
     && opam pin add -y .
@@ -52,10 +55,17 @@ COPY --chown=opam:opam src/ ./src/
 # Build: compile Rocq -> extract C++ -> compile binary.
 RUN eval $(opam env) && dune build src/blog_generator.exe
 
-# Posts are runtime data for the already-built generator.
-COPY --chown=opam:opam posts-encrypted/ ./posts-encrypted/
+# Runtime image: no Rocq, no opam switch, no source tree, no posts.
+FROM debian:13-slim AS runtime
 
-# Run the generator on ./posts by default.  We clear any stale _site/
-# that may have been copied in from the build context before running so
-# the tree written by the extracted binary is the only output.
-CMD ["sh", "-c", "eval $(opam env) && rm -rf _site && ./_build/default/src/blog_generator.exe"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /site
+COPY --from=builder /home/opam/crane-blog/_build/default/src/blog_generator.exe /usr/local/bin/blog_generator
+
+# posts-encrypted/ and _site/ are mounted at runtime.  Clean only the
+# contents of _site so the mount point itself survives.
+CMD ["sh", "-c", "mkdir -p posts-encrypted _site && (rm -rf _site/* _site/.[!.]* _site/..?* 2>/dev/null || true) && blog_generator"]

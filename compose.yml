@@ -1,7 +1,8 @@
 # Crane Blog SMTP listener, deployed on fuji via `docker compose up -d`.
 # Receives one envelope per email, encrypts normal Mail.app plaintext in memory,
-# writes only the encrypted .eml to posts-encrypted/, and pushes a commit to the
-# blog repo. No plaintext is committed or written to disk.
+# wraps it as RFC 3156 multipart/encrypted, writes only the encrypted .eml to
+# posts-encrypted/, and pushes a commit to the blog repo. No plaintext is
+# committed or written to disk.
 
 services:
   smtp:
