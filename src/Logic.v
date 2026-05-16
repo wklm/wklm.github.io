@@ -491,7 +491,7 @@ Definition stylesheet_core : string :=
 
 Definition stylesheet_decrypt : string :=
   concat_all (
-    "#decrypt-ui{display:none;margin:2rem 0;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    "#decrypt-ui{margin:2rem 0;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
     "#decrypt-ui label{display:block;margin-bottom:.25rem}" ::
     "#private-key{width:100%;padding:.75rem;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;line-height:1.45;border:1px solid var(--rule);background:var(--paper);color:var(--ink);resize:vertical}" ::
     "#decrypt-button{margin-top:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer}" ::
