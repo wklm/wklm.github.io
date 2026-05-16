@@ -139,17 +139,24 @@ jobs:
             image="ghcr.io/${{ github.repository_owner }}/crane-blog-generator:${{ github.sha }}"
           fi
           docker pull "$image"
-          docker run --rm \
-            -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
-            -v "$PWD/_site:/site/_site" \
-            "$image"
+           docker run --rm \
+             -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
+             -v "$PWD/static:/site/static:ro" \
+             -v "$PWD/_site:/site/_site" \
+             "$image"
 
       - name: Check generated site policy
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -i '<img\|<script' _site; then
-            echo 'Generated site contains forbidden rendered elements' >&2
+          if grep -R -i '<img' _site; then
+            echo 'Generated site contains <img> tags' >&2
+            exit 1
+          fi
+          unapproved=$(grep -R '<script' _site | grep -v 'static/openpgp.min.js\|static/openpgp_bridge.js\|static/decrypt.js' || true)
+          if [[ -n "$unapproved" ]]; then
+            echo 'Generated site contains unapproved <script> tags:' >&2
+            echo "$unapproved" >&2
             exit 1
           fi
           if grep -R '<dt>Subject</dt>' _site; then
