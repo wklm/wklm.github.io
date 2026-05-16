@@ -417,9 +417,9 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "<footer class='post-colophon'></footer>" ::
       "</article>" ::
       "<noscript><p class='decrypt-fallback'>To read, copy the block above and run <code>gpg --decrypt</code>.</p></noscript>" ::
-      "<script src='" :: prefix :: "static/openpgp.min.js' defer></script>" ::
-      "<script src='" :: prefix :: "static/openpgp_bridge.js' defer></script>" ::
-      "<script src='" :: prefix :: "static/decrypt.js' defer></script>" ::
+      "<script src='" :: prefix :: "static/openpgp.min.js?v=1' defer></script>" ::
+      "<script src='" :: prefix :: "static/openpgp_bridge.js?v=1' defer></script>" ::
+      "<script src='" :: prefix :: "static/decrypt.js?v=2' defer></script>" ::
       "</main>" :: nil) in
   page_shell "../" title "essay eml-page" "index" "../index.html" body.
 
@@ -446,9 +446,9 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       concat_all (render_inbox_rows eps) ::
       "</ul>" :: "</main>" ::
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
-      "<script src='static/openpgp.min.js' defer></script>" ::
-      "<script src='static/openpgp_bridge.js' defer></script>" ::
-      "<script src='static/decrypt.js' defer></script>" :: nil) in
+      "<script src='static/openpgp.min.js?v=1' defer></script>" ::
+      "<script src='static/openpgp_bridge.js?v=1' defer></script>" ::
+      "<script src='static/decrypt.js?v=2' defer></script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
 
 (* ---- Stylesheet --------------------------------------------------
