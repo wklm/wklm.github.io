@@ -373,13 +373,13 @@ Definition page_shell (depth page_title body_class nav_label nav_href body_conte
   concat_all (
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'><meta http-equiv='Cache-Control' content='no-store'>" ::
     "<title>" :: html_escape page_title ::
-    (if string_eqb page_title "wklm.github.io" then "" else " — wklm.github.io") ::
+    (if string_eqb page_title "wklm.online" then "" else " — wklm.online") ::
     "</title>" ::
     "<link rel='stylesheet' href='" :: html_escape (rel_stylesheet depth) :: "'>" ::
     "</head><body class='" :: body_class :: "'>" ::
     "<a class='skip-link' href='#main'>skip to text</a>" ::
     "<div class='page-shell'>" ::
-    "<header class='site-header'><a class='site-mark' href='" :: html_escape (rel_index depth) :: "'>wklm.github.io</a>" ::
+    "<header class='site-header'><a class='site-mark' href='" :: html_escape (rel_index depth) :: "'>wklm.online</a>" ::
     (if is_empty nav_label then ""
      else concat_all ("<nav class='site-nav'><a href='" :: html_escape nav_href :: "'>" :: html_escape nav_label :: "</a></nav>" :: nil)) ::
     "</header>" ::
@@ -449,7 +449,7 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       "<script src='static/openpgp.min.js' defer></script>" ::
       "<script src='static/openpgp_bridge.js' defer></script>" ::
       "<script src='static/decrypt.js' defer></script>" :: nil) in
-  page_shell "" "wklm.github.io" "home" "" "" body.
+  page_shell "" "wklm.online" "home" "" "" body.
 
 (* ---- Stylesheet --------------------------------------------------
    Restores the pre-email visual language: a small literary page, Georgia
