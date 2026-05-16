@@ -11,6 +11,7 @@
  (synopsis "A verified static site generator using Crane")
  (description "A verified static site generator using Crane Rocq plugin.")
  (depends
-  (dune (>= 3.21))
-  (coq (>= 9.0))
-  (rocq-crane (>= 0.1))))
+   (dune (>= 3.21))
+   (coq (>= 9.0))
+   (js_of_ocaml (>= 5.0))
+   (rocq-crane (>= 0.1))))

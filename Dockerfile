@@ -1,5 +1,45 @@
 # syntax=docker/dockerfile:1.7
 
+# ──────────────────────────────────────────────────────────────────────
+# JS compilation stage — builds decrypt.js from OCaml via js_of_ocaml
+# and vendors OpenPGP.js.  Placed first so that [--target js] builds
+# only this stage without touching the heavy Rocq/Crane toolchain.
+FROM ocaml/opam:debian-13-ocaml-5.4 AS js
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libgmp-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+USER opam
+RUN opam update && opam install -y ocamlfind js_of_ocaml js_of_ocaml-ppx
+
+# Download OpenPGP.js (vendored)
+RUN curl -fsSL -o /tmp/openpgp.min.js \
+    https://unpkg.com/openpgp@6.2.0/dist/openpgp.min.js
+
+USER root
+WORKDIR /home/opam/crane-blog
+RUN chown opam:opam /home/opam/crane-blog
+USER opam
+
+COPY --chown=opam:opam static/ ./static/
+RUN cp /tmp/openpgp.min.js static/openpgp.min.js
+
+RUN eval $(opam env) && \
+    cd /tmp && mkdir -p build && cd build && \
+    echo '(lang dune 3.21)' > dune-project && \
+    echo '(name crane_js)' >> dune-project && \
+    echo '(executable (name decrypt) (modes js) (libraries js_of_ocaml) (preprocess (pps js_of_ocaml-ppx)))' > dune && \
+    cp /home/opam/crane-blog/static/decrypt.ml . && \
+    dune build decrypt.bc.js && \
+    chmod u+w /home/opam/crane-blog/static/decrypt.js 2>/dev/null || true && \
+    cp _build/default/decrypt.bc.js /home/opam/crane-blog/static/decrypt.js
+
+USER root
+CMD ["sh", "-c", "mkdir -p /out && cp /home/opam/crane-blog/static/decrypt.js /out/decrypt.js && cp /home/opam/crane-blog/static/openpgp.min.js /out/openpgp.min.js"]
+
+# ──────────────────────────────────────────────────────────────────────
 # Build the Rocq/Crane generator once in a toolchain image.
 FROM ocaml/opam:debian-13-ocaml-5.4 AS builder
 
@@ -13,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang-format \
     gnupg \
     libgmp-dev \
+    libssl-dev \
     libstdc++-14-dev \
     linux-libc-dev \
     pkg-config \
@@ -55,11 +96,13 @@ COPY --chown=opam:opam src/ ./src/
 # Build: compile Rocq -> extract C++ -> compile binary.
 RUN eval $(opam env) && dune build src/blog_generator.exe
 
+# ──────────────────────────────────────────────────────────────────────
 # Runtime image: no Rocq, no opam switch, no source tree, no posts.
 FROM debian:13-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libssl3 \
     libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
