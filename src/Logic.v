@@ -253,6 +253,11 @@ Definition empty_ep : EncryptedPost :=
 
 Definition public_subject : string := "Subject: ...".
 
+(* Truncated SHA-256 fingerprint of the ciphertext body, used as the
+   inbox link label.  The Rocq definition is identity; the C++ helper
+   [sha256_trunc_std] in [blog_helpers.h] provides the real hash. *)
+Definition sha256_trunc (s : string) : string := s.
+
 Definition month_key (m : string) : string :=
   if string_eqb m "Jan" then "01"
   else if string_eqb m "Feb" then "02"
@@ -366,7 +371,7 @@ Definition parse_eml (slug raw : string) : EncryptedPost :=
 
 Definition page_shell (depth page_title body_class nav_label nav_href body_content : string) : string :=
   concat_all (
-    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'>" ::
+    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'><meta http-equiv='Cache-Control' content='no-store'>" ::
     "<title>" :: html_escape page_title ::
     (if string_eqb page_title "wklm.github.io" then "" else " — wklm.github.io") ::
     "</title>" ::
@@ -382,26 +387,49 @@ Definition page_shell (depth page_title body_class nav_label nav_href body_conte
     "</div></body></html>" :: nil).
 
 (* The public subject is not data.  Even if a bad [.eml] contains a real
-   [Subject] header, public pages render only the fixed placeholder. *)
+   [Subject] header, public pages render only the fixed placeholder.
+   The page now includes an in-browser decryption UI powered by
+   js_of_ocaml + OpenPGP.js, with a noscript fallback to the traditional
+   [gpg --decrypt] workflow. *)
 Definition render_eml_page (ep : EncryptedPost) : string :=
   let title := public_subject in
+  let prefix := "../" in
   let body :=
     concat_all (
       "<main id='main' class='post eml'>" ::
-      "<article>" ::
+      "<div id='encrypted-shell' class='envelope'>" ::
       "<header class='post-header'>" ::
       "<h1>" :: html_escape public_subject :: "</h1>" ::
       "</header>" ::
-      "<pre class='eml-body'>" :: html_escape ep.(ep_body) :: "</pre>" ::
-      "</article></main>" :: nil) in
+      "<pre class='eml-body' id='ciphertext'>" :: html_escape ep.(ep_body) :: "</pre>" ::
+      "</div>" ::
+      "<div id='decrypt-ui'>" ::
+      "<label for='private-key'>Private key</label>" ::
+      "<textarea id='private-key' rows='8' placeholder='-----BEGIN PGP PRIVATE KEY BLOCK-----...'></textarea>" ::
+      "<button id='decrypt-button'>Decrypt</button>" ::
+      "<button id='clear-key-button'>Clear key</button>" ::
+      "<p id='decrypt-error' class='decrypt-error'></p>" ::
+      "</div>" ::
+      "<article id='decrypted-content'>" ::
+      "<header><h1 id='real-title'></h1><p id='real-meta'></p></header>" ::
+      "<div id='real-body'></div>" ::
+      "<div id='real-images'></div>" ::
+      "<footer class='post-colophon'></footer>" ::
+      "</article>" ::
+      "<noscript><p class='decrypt-fallback'>To read, copy the block above and run <code>gpg --decrypt</code>.</p></noscript>" ::
+      "<script src='" :: prefix :: "static/openpgp.min.js' defer></script>" ::
+      "<script src='" :: prefix :: "static/openpgp_bridge.js' defer></script>" ::
+      "<script src='" :: prefix :: "static/decrypt.js' defer></script>" ::
+      "</main>" :: nil) in
   page_shell "../" title "essay eml-page" "index" "../index.html" body.
 
 Definition inbox_row (ep : EncryptedPost) : string :=
   concat_all (
     "<li>" ::
     "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
-    html_escape public_subject ::
+    html_escape (sha256_trunc ep.(ep_body)) ::
     "</a>" ::
+    "<span class='inbox-status' data-slug='" :: html_escape ep.(ep_slug) :: "'></span>" ::
     "</li>" :: nil).
 
 Fixpoint render_inbox_rows (eps : list EncryptedPost) : list string :=
@@ -416,7 +444,11 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       "<main id='main' class='index'>" ::
       "<ul class='posts'>" ::
       concat_all (render_inbox_rows eps) ::
-      "</ul>" :: "</main>" :: nil) in
+      "</ul>" :: "</main>" ::
+      "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
+      "<script src='static/openpgp.min.js' defer></script>" ::
+      "<script src='static/openpgp_bridge.js' defer></script>" ::
+      "<script src='static/decrypt.js' defer></script>" :: nil) in
   page_shell "" "wklm.github.io" "home" "" "" body.
 
 (* ---- Stylesheet --------------------------------------------------
@@ -424,7 +456,7 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
    body text, neutral paper, and a restrained index.  The encrypted envelope
    remains visible, but as a quiet source artifact inside the old essay shell
    instead of a mail-client imitation. *)
-Definition stylesheet : string :=
+Definition stylesheet_core : string :=
   concat_all (
     ":root{--paper:#fafafa;--ink:#141414;--muted:#6b6b6b;--rule:#d9d9d9;--accent:#141414}" ::
     "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#e8e8e8}}" ::
@@ -453,8 +485,31 @@ Definition stylesheet : string :=
     ".index .posts li{margin:.35em 0}" ::
     ".index .posts a{text-decoration:none}" ::
     ".index .posts a:hover{text-decoration:underline}" ::
+    ".inbox-subject{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem}" ::
     "@media (max-width:32rem){.page-shell{padding:1.25rem 1rem 3rem}.site-header{margin-bottom:2rem}.index .posts li{margin:.8em 0}}" ::
     "@media print{.site-nav{display:none}body{background:#fff;color:#000}a{text-decoration:none;color:#000}}" :: nil).
+
+Definition stylesheet_decrypt : string :=
+  concat_all (
+    "#decrypt-ui{display:none;margin:2rem 0;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    "#decrypt-ui label{display:block;margin-bottom:.25rem}" ::
+    "#private-key{width:100%;padding:.75rem;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;line-height:1.45;border:1px solid var(--rule);background:var(--paper);color:var(--ink);resize:vertical}" ::
+    "#decrypt-button{margin-top:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer}" ::
+    "#decrypt-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}" ::
+    "#clear-key-button{display:none;margin-top:.5rem;margin-left:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--rule);background:var(--paper);color:var(--muted);cursor:pointer}" ::
+    ".decrypt-error{margin-top:.5rem;color:#c0392b;display:none}" ::
+    ".decrypt-fallback{color:var(--muted);font-size:.82rem}" ::
+    ".decrypt-fallback code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.78rem}" ::
+    "#decrypted-content{display:none;margin-top:2rem}" ::
+    "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
+    "#real-body img{max-width:100%;height:auto}" ::
+    ".post-colophon{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--rule);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.65rem;color:var(--muted);white-space:pre-wrap}" ::
+    ".inbox-status::after{content:' ✉';color:var(--muted)}" ::
+    ".inbox-status.unlocked::after{content:' 📜';color:var(--muted)}" ::
+    ".inbox-status-msg{color:var(--muted);font-size:.82rem;font-family:-apple-system,Helvetica,Arial,sans-serif}" :: nil).
+
+Definition stylesheet : string :=
+  cat stylesheet_core stylesheet_decrypt.
 
 (* ---- IO pipeline ------------------------------------------------- *)
 
@@ -495,9 +550,18 @@ Fixpoint write_eml_pages (output_dir : string) (eps : list EncryptedPost) : IO u
 
 (* [run] is the extracted entry point.  It reads the ciphertext tree
    from [./posts-encrypted/], emits one page per [.eml] under
-   [_site/<slug>/], plus the inbox index and stylesheet.  No plaintext
-   attachments are copied anywhere; every byte of the original post
-   lives inside the armored body. *)
+   [_site/<slug>/], plus the inbox index and stylesheet.  Static
+   assets under [./static/] are copied to [_site/static/] verbatim
+   so that the browser-side decryption JS is served. *)
+Fixpoint copy_static_files (files : list string) : IO unit :=
+  match files with
+  | nil => Ret tt
+  | name :: rest =>
+      content <- read (cat "./static/" name) ;;
+      _ <- write_file (cat "./_site/static/" name) content ;;
+      copy_static_files rest
+  end.
+
 Definition run : IO unit :=
   files <- list_directory "./posts-encrypted" ;;
   let eml_paths := map (fun name => cat "./posts-encrypted/" name)
@@ -508,7 +572,10 @@ Definition run : IO unit :=
   _ <- create_directory "./_site/styles" ;;
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
   _ <- write_file (index_output_path "./_site") (render_inbox_page eps) ;;
-  write_eml_pages "./_site" eps.
+  _ <- write_eml_pages "./_site" eps ;;
+  _ <- create_directory "./_site/static" ;;
+  static_files <- list_directory "./static" ;;
+  copy_static_files (filter (fun name => negb (is_empty name)) static_files).
 
 Set Warnings "-crane-extraction-default-directory".
 
@@ -516,5 +583,8 @@ Set Warnings "-crane-extraction-default-directory".
    revision.  The Coq definition is kept for proof-level reasoning; only
    the C++ call site is redirected to the helper in [blog_helpers.h]. *)
 Crane Extract Inlined Constant concat_all => "concat_all_std(%a0)" From "blog_helpers.h".
+
+(* Truncated SHA-256 fingerprint of ciphertext body for inbox labels. *)
+Crane Extract Inlined Constant sha256_trunc => "sha256_trunc_std(%a0)" From "blog_helpers.h".
 
 Crane Extraction "blog" run.

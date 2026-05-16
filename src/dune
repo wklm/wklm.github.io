@@ -21,4 +21,5 @@ int main() {
  (action (bash "\
 clang++ -std=c++2b -O2 -fbracket-depth=1024 \
   -I . -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
+  -lssl -lcrypto \
   -o blog_generator.exe")))
