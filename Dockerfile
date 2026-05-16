@@ -32,7 +32,7 @@ RUN eval $(opam env) && \
     echo '(name crane_js)' >> dune-project && \
     echo '(executable (name decrypt) (modes js) (libraries js_of_ocaml) (preprocess (pps js_of_ocaml-ppx)))' > dune && \
     cp /home/opam/crane-blog/static/decrypt.ml . && \
-    dune build decrypt.bc.js && \
+    JSOO_TARGET_ENV=browser dune build decrypt.bc.js && \
     chmod u+w /home/opam/crane-blog/static/decrypt.js 2>/dev/null || true && \
     cp _build/default/decrypt.bc.js /home/opam/crane-blog/static/decrypt.js
 
