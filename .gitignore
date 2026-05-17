@@ -25,3 +25,4 @@ posts/
 *.key
 secret*
 passphrase*
+tools/encrypt_post

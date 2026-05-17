@@ -66,7 +66,7 @@ RUN eval $(opam env) && \
     cp src/crane_crypto.ml tools/ && \
     echo '(lang dune 3.21)' > tools/dune-project && \
     echo '(name crane_tools)' >> tools/dune-project && \
-    echo '(executables (names encrypt_post) (libraries unix cstruct mirage-crypto mirage-crypto-ec mirage-crypto-rng digestif base64))' > tools/dune && \
+    echo '(executables (names encrypt_post) (libraries unix cstruct mirage-crypto mirage-crypto-ec mirage-crypto-rng mirage-crypto-rng.unix digestif base64))' > tools/dune && \
     dune build tools/encrypt_post.exe
 
 USER root

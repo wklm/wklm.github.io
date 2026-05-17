@@ -2,6 +2,10 @@
    Wraps mirage_crypto_ec (ECDH P-256), mirage_crypto (AES-GCM),
    and digestif (SHA-256). *)
 
+(* Initialize the RNG — required by mirage-crypto-ec for key generation *)
+let () =
+  Mirage_crypto_rng_unix.use_default ()
+
 (* ---- P-256 ECDH ---- *)
 
 let ecdh_p256_generate () =
@@ -29,7 +33,11 @@ let ecdh_p256_agree sk_bytes pk_bytes =
 
 let random_bytes n =
   if n <= 0 then "" else
-  Mirage_crypto_rng.generate n
+  let ic = open_in_bin "/dev/urandom" in
+  let buf = Bytes.create n in
+  really_input ic buf 0 n;
+  close_in ic;
+  Bytes.unsafe_to_string buf
 
 (* ---- AES-256-GCM ---- *)
 

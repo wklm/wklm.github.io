@@ -7,7 +7,7 @@
 (library
  (name crane_crypto)
  (modules crane_crypto)
- (libraries mirage-crypto mirage-crypto-ec mirage-crypto-rng digestif base64))
+ (libraries mirage-crypto mirage-crypto-ec mirage-crypto-rng mirage-crypto-rng.unix digestif base64))
 
 (rule
  (with-stdout-to main.cpp
