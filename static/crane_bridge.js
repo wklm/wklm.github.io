@@ -154,17 +154,35 @@
     return compressed;
   }
 
+  function _bufToBase64Url(buf) {
+    var binary = "";
+    for (var i = 0; i < buf.length; i++) {
+      binary += String.fromCharCode(buf[i]);
+    }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+
+  // Convert a 65-byte uncompressed SEC1 ECDH public key to JWK
+  function _rawPubToJwk(raw) {
+    return {
+      kty: "EC",
+      crv: "P-256",
+      x: _bufToBase64Url(raw.slice(1, 33)),
+      y: _bufToBase64Url(raw.slice(33, 65))
+    };
+  }
+
   // ---- HPKE decrypt using Web Crypto ----
 
-  // HPKE-base decrypt: derive CEK from ECDH(priv, encapsulated_pub), then AES-GCM decrypt.
-  // ct_package: nonce(12) || ciphertext || tag(16)
   async function _hpkeDecrypt(privKeyJwk, encPubRaw, ctPackage) {
+    // Import encapsulated key as JWK (universally supported, unlike raw)
+    var encPubJwk = _rawPubToJwk(encPubRaw);
     var encPub;
     try {
       encPub = await crypto.subtle.importKey(
-        "raw", encPubRaw,
+        "jwk", encPubJwk,
         { name: "ECDH", namedCurve: "P-256" },
-        false, ["deriveBits"]
+        false, []
       );
     } catch (e) {
       throw new Error("import encPub failed: " + e + " (len=" + encPubRaw.length + ")");
