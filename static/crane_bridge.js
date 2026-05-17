@@ -388,6 +388,7 @@
         var keyId = await _keyId(compressedPub);
 
         // Step 2: Create WebAuthn passkey
+        var challenge = new TextEncoder().encode("crane-enroll-" + keyId);
         var cred = await navigator.credentials.create({
           publicKey: {
             rp: { name: "wklm.online" },
@@ -396,6 +397,7 @@
               name: "reader-" + keyId,
               displayName: "Crane Blog Reader"
             },
+            challenge: challenge,
             pubKeyCredParams: [
               { type: "public-key", alg: -7 },  // ES256
               { type: "public-key", alg: -8 }   // EdDSA (for Apple Touch ID)
