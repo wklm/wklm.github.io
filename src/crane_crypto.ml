@@ -9,12 +9,12 @@ let () =
 (* ---- P-256 ECDH ---- *)
 
 let ecdh_p256_generate () =
-  let sk, pk = Mirage_crypto_ec.P256.Dh.gen_key ~compress:true () in
+  let sk, pk = Mirage_crypto_ec.P256.Dh.gen_key ~compress:false () in
   (pk, Mirage_crypto_ec.P256.Dh.secret_to_octets sk)
 
 let ecdh_p256_public_key sk_bytes =
   match
-    Mirage_crypto_ec.P256.Dh.secret_of_octets ~compress:true sk_bytes
+    Mirage_crypto_ec.P256.Dh.secret_of_octets ~compress:false sk_bytes
   with
   | Ok (_sk, pk) -> pk
   | Error _ -> ""
