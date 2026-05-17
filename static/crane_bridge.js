@@ -591,12 +591,11 @@
           matchingWrap.wrapped
         );
 
-        // 6. Decrypt body
-        var decrypted = await _hpkeDecrypt(
-          matchingKey.privkeyJwk,
-          new Uint8Array(0), // not used for body decryption
-          meta.ctBytes
-        );
+        // 6. Decrypt body using the unwrapped CEK
+        var nonce = meta.ctBytes.slice(0, 12);
+        var tag = meta.ctBytes.slice(meta.ctBytes.length - 16);
+        var ct = meta.ctBytes.slice(12, meta.ctBytes.length - 16);
+        var decrypted = await _aesGcmDecrypt(unwrappedCek, nonce, ct, tag);
 
         var decoder = new TextDecoder();
         var plaintext = decoder.decode(decrypted);
