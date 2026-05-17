@@ -446,8 +446,13 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       concat_all (render_inbox_rows eps) ::
       "</ul>" :: "</main>" ::
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
+      "<div id='enroll-ui'>" ::
+      "<button id='enroll-button'>Enroll Reader Key</button>" ::
+      "<p id='enroll-status'></p>" ::
+      "</div>" ::
       "<script src='static/crane_bridge.js?v=1' defer></script>" ::
-      "<script src='static/decrypt.js?v=4' defer></script>" :: nil) in
+      "<script src='static/decrypt.js?v=4' defer></script>" ::
+      "<script src='static/enroll.js?v=1' defer></script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
 
 (* ---- Enrollment page ----------------------------------------------- *)
