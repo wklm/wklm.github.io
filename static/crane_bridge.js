@@ -164,8 +164,14 @@
       { name: "ECDH", namedCurve: "P-256" },
       false, ["deriveBits"]
     );
+    // Clean JWK: strip fields that conflict with explicit usages
+    var jwk = JSON.parse(JSON.stringify(privKeyJwk));
+    delete jwk.key_ops;
+    delete jwk.use;
+    delete jwk.alg;
+    delete jwk.ext;
     var privKey = await crypto.subtle.importKey(
-      "jwk", privKeyJwk,
+      "jwk", jwk,
       { name: "ECDH", namedCurve: "P-256" },
       false, ["deriveBits"]
     );
@@ -515,10 +521,10 @@
 
   window.crane_decryptPost = function (callback) {
     (async function () {
-      var diag = [];  // diagnostic messages
+      var diag = [];
       try {
         var cipherEl = document.getElementById("ciphertext");
-        if (!cipherEl) { _showError("No ciphertext element found on page."); try { callback(""); } catch (_) { } return; }
+        if (!cipherEl) { _showError("No ciphertext element found on page."); return; }
 
         var meta = _parseDecryptMeta(cipherEl);
         diag.push("keyIds: [" + meta.keyIds.join(",") + "]");
@@ -527,7 +533,6 @@
 
         if (!meta.ctBytes) {
           _showError("No ciphertext found in envelope. " + diag.join("; "));
-          try { callback(""); } catch (_) { }
           return;
         }
 
@@ -535,7 +540,7 @@
         diag.push("enrolled: " + enrolledKeys.length + " keys");
         if (enrolledKeys.length === 0) {
           _showError("No reader key found on this device. Visit the enrollment page to create one. (" + diag.join("; ") + ")");
-          try { callback(""); } catch (_) { } return;
+          return;
         }
 
         var enrolledIds = enrolledKeys.map(function(k) { return k.id; }).join(",");
@@ -553,7 +558,7 @@
         }
         if (!matchingKey) {
           _showError("Your enrolled key is not a recipient for this post. " + diag.join("; "));
-          try { callback(""); } catch (_) { } return;
+          return;
         }
         diag.push("matched: " + matchingKey.id);
 
@@ -583,7 +588,6 @@
           }
         }
 
-        // 5. Unwrap CEK
         var unwrappedCek = await _hpkeDecrypt(
           matchingKey.privkeyJwk, matchingWrap.ek, matchingWrap.wrapped
         );
@@ -591,10 +595,9 @@
 
         if (!unwrappedCek) {
           _showError("Failed to unwrap the content encryption key. " + diag.join("; "));
-          try { callback(""); } catch (_) { } return;
+          return;
         }
 
-        // 6. Decrypt body using the unwrapped CEK
         var nonce = meta.ctBytes.slice(0, 12);
         var tag = meta.ctBytes.slice(meta.ctBytes.length - 16);
         var ct = meta.ctBytes.slice(12, meta.ctBytes.length - 16);
@@ -603,7 +606,7 @@
 
         if (!decrypted) {
           _showError("Failed to decrypt the post body. " + diag.join("; "));
-          try { callback(""); } catch (_) { } return;
+          return;
         }
 
         var decoder = new TextDecoder();
@@ -611,7 +614,6 @@
         try { callback(plaintext); } catch (_) { callback(""); }
       } catch (e) {
         _showError("Unexpected error: " + e + ". " + diag.join("; "));
-        try { callback(""); } catch (_) { }
       }
     })();
   };
