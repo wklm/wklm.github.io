@@ -418,7 +418,7 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "<footer class='post-colophon'></footer>" ::
       "</article>" ::
       "<noscript><p class='decrypt-fallback'>To read, you need JavaScript enabled for client-side decryption.</p></noscript>" ::
-      "<script src='" :: prefix :: "static/crane_bridge.js?v=1' defer></script>" ::
+      "<script src='" :: prefix :: "static/crane_bridge.js?v=2' defer></script>" ::
       "<script src='" :: prefix :: "static/decrypt.js?v=4' defer></script>" ::
       "</main>" :: nil) in
   page_shell "../" title "essay eml-page" "index" "../index.html" body.
@@ -450,7 +450,7 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       "<button id='enroll-button'>Enroll Reader Key</button>" ::
       "<p id='enroll-status'></p>" ::
       "</div>" ::
-      "<script src='static/crane_bridge.js?v=1' defer></script>" ::
+      "<script src='static/crane_bridge.js?v=2' defer></script>" ::
       "<script src='static/decrypt.js?v=4' defer></script>" ::
       "<script src='static/enroll.js?v=1' defer></script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
@@ -484,7 +484,7 @@ Definition render_enroll_page : string :=
       "<p id='enroll-existing-status'></p>" ::
       "<p id='enroll-existing-info'></p>" ::
       "</div>" ::
-      "<script src='" :: prefix :: "static/crane_bridge.js?v=1' defer></script>" ::
+      "<script src='" :: prefix :: "static/crane_bridge.js?v=2' defer></script>" ::
       "<script src='" :: prefix :: "static/enroll.js?v=1' defer></script>" ::
       "</main>" :: nil) in
   page_shell "../" "Reader Enrollment" "enroll-page" "index" "../index.html" body.
