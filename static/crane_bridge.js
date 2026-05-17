@@ -212,8 +212,10 @@
     );
     var shared = new Uint8Array(sharedBits);
 
-    // HKDF to derive CEK
-    var cek = await _hkdfSha256("", shared, HPKE_INFO, 32);
+    // Custom KDF matching crane_crypto.ml hkdf_sha256:
+    //   PRK = SHA-256(32 zero bytes || shared_secret)
+    //   CEK = SHA-256(PRK || "crane-blog-wrap-v1" || 0x01)
+    var cek = await _customKdf(shared, WRAP_INFO);
 
     // AES-GCM decrypt
     var nonce = ctPackage.slice(0, 12);
@@ -223,20 +225,21 @@
     return await _aesGcmDecrypt(cek, nonce, ct, tag);
   }
 
-  // HKDF-SHA256: extract-then-expand
-  async function _hkdfSha256(saltStr, ikmBytes, infoBytes, length) {
-    var ikm = await crypto.subtle.importKey(
-      "raw", ikmBytes, "HKDF", false, ["deriveBits"]
-    );
-    var salt = saltStr === ""
-      ? new Uint8Array(32) // zeros
-      : new TextEncoder().encode(saltStr);
-
-    return new Uint8Array(await crypto.subtle.deriveBits(
-      { name: "HKDF", hash: "SHA-256", salt: salt, info: infoBytes },
-      ikm,
-      length * 8
-    ));
+  // Custom KDF — matches crane_crypto.ml hkdf_sha256:
+  //   PRK = SHA-256(32 zero bytes || ikm)
+  //   OKM = SHA-256(PRK || info || 0x01)
+  async function _customKdf(ikm, info) {
+    var salt = new Uint8Array(32);
+    var prkInput = new Uint8Array(32 + ikm.length);
+    prkInput.set(salt, 0);
+    prkInput.set(ikm, 32);
+    var prk = new Uint8Array(await crypto.subtle.digest("SHA-256", prkInput));
+    var infoEncoded = typeof info === "string" ? new TextEncoder().encode(info) : info;
+    var expandInput = new Uint8Array(32 + infoEncoded.length + 1);
+    expandInput.set(prk, 0);
+    expandInput.set(infoEncoded, 32);
+    expandInput[32 + infoEncoded.length] = 1;
+    return new Uint8Array(await crypto.subtle.digest("SHA-256", expandInput));
   }
 
   // AES-256-GCM decrypt
