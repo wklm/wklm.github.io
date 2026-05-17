@@ -468,15 +468,37 @@
   window.crane_decryptPost = function (callback) {
     (async function () {
       try {
-        // 1. Parse decrypt metadata from page
         var cipherEl = document.getElementById("ciphertext");
         if (!cipherEl) { try { callback(""); } catch (_) { } return; }
         var meta = _parseDecryptMeta(cipherEl);
-        if (!meta.ctBytes) { try { callback(""); } catch (_) { } return; }
+
+        if (!meta.ctBytes) {
+          // Show error directly in the DOM (bypass OCaml callback which may
+          // fail silently if the js_of_ocaml bridge has issues).
+          var errEl = document.getElementById("decrypt-error");
+          var statusEl = document.getElementById("decrypt-status");
+          if (errEl) {
+            errEl.style.display = "block";
+            errEl.textContent = "This post uses an encryption format not supported by your browser. "
+              + "Posts encrypted before the HPKE migration must be re-encrypted.";
+          }
+          if (statusEl) { statusEl.textContent = ""; }
+          try { callback(""); } catch (_) { }
+          return;
+        }
 
         // 2. Get enrolled keys from IndexedDB
         var enrolledKeys = await _dbGetAll(STORE_NAME);
-        if (enrolledKeys.length === 0) { try { callback(""); } catch (_) { } return; }
+        if (enrolledKeys.length === 0) {
+          var stEl = document.getElementById("decrypt-status");
+          var errEl = document.getElementById("decrypt-error");
+          if (stEl) { stEl.textContent = ""; }
+          if (errEl) {
+            errEl.style.display = "block";
+            errEl.textContent = "No reader key found on this device. Visit the enrollment page to create one."
+          }
+          try { callback(""); } catch (_) { } return;
+        }
 
         // 3. Find a matching key
         var matchingKey = null;
