@@ -354,50 +354,46 @@ let markdown_to_html body =
   let buf = Buffer.create (String.length body + 1024) in
   let n = String.length body in
   let i = ref 0 in
-  let in_para = ref false in
-  let in_list = ref false in
   let emit s = Buffer.add_string buf s in
   let skip_blanks () =
     while !i < n && (body.[!i] = '\n' || body.[!i] = '\r') do incr i done
   in
-  let rec scan_inline start =
-    if start >= n then ""
+  (* scan_inline: returns (html_snippet, new_position) relative to body *)
+  let rec scan_inline pos =
+    if pos >= n then ("", pos)
     else
-      let c = body.[start] in
-      if c = '*' && start + 1 < n && body.[start + 1] = '*' then begin
-        let j = ref (start + 2) in
+      let c = body.[pos] in
+      if c = '*' && pos + 1 < n && body.[pos + 1] = '*' then begin
+        let j = ref (pos + 2) in
         let found = ref false in
         while !j + 1 < n && not !found do
           if body.[!j] = '*' && body.[!j + 1] = '*' then found := true
           else incr j
         done;
-        if !found then begin
-          i := !j + 2;
-          "<strong>" ^ html_escape_line (String.sub body (start + 2) (!j - start - 2)) ^ "</strong>"
-        end else begin
-          i := start + 1;
-          "*"
-        end
-      end else if c = '*' && (start = 0 || body.[start - 1] = ' ' || body.[start - 1] = '\n') then begin
-        let j = ref (start + 1) in
+        if !found then
+          ("<strong>" ^ html_escape_line (String.sub body (pos + 2) (!j - pos - 2)) ^ "</strong>", !j + 2)
+        else
+          ("*", pos + 1)
+      end else if c = '*' && (pos = 0 || body.[pos - 1] = ' ' || body.[pos - 1] = '\n' || body.[pos - 1] = '\r') then begin
+        let j = ref (pos + 1) in
         let found = ref false in
         while !j < n && not !found do
-          if body.[!j] = '*' && (!j + 1 >= n || body.[!j + 1] = ' ' || body.[!j + 1] = '\n' || body.[!j + 1] = '\r') then found := true
+          if body.[!j] = '*' then
+            let next = !j + 1 in
+            if next >= n || body.[next] = ' ' || body.[next] = '\n' || body.[next] = '\r' then found := true
+            else incr j
           else incr j
         done;
-        if !found then begin
-          i := !j + 1;
-          "<em>" ^ html_escape_line (String.sub body (start + 1) (!j - start - 1)) ^ "</em>"
-        end else begin
-          i := start + 1;
-          "*"
-        end
-      end else begin
-        i := start + 1;
-        html_escape_char_line body start
-      end
+        if !found then
+          ("<em>" ^ html_escape_line (String.sub body (pos + 1) (!j - pos - 1)) ^ "</em>", !j + 1)
+        else
+          ("*", pos + 1)
+      end else
+        (html_escape_char_line body pos, pos + 1)
   in
   skip_blanks ();
+  let in_para = ref false in
+  let in_list = ref false in
   while !i < n do
     let line_start = !i in
     let line_end = ref line_start in
@@ -412,19 +408,23 @@ let markdown_to_html body =
     end else if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
       if not !in_list then (emit "<ul>\n"; in_list := true);
       emit "<li>";
-      let inline_start = ref 2 in
-      while !inline_start < String.length line do
-        emit (scan_inline !inline_start)
+      let pos = ref 2 in
+      while !pos < String.length line do
+        let html, next = scan_inline !pos in
+        emit html;
+        pos := next
       done;
       emit "</li>\n"
     end else begin
       if !in_list then (emit "</ul>\n"; in_list := false);
       if not !in_para then (emit "<p>"; in_para := true);
-      let inline_start = ref 0 in
-      while !inline_start < String.length line do
-        emit (scan_inline !inline_start)
+      let pos = ref 0 in
+      while !pos < String.length line do
+        let html, next = scan_inline !pos in
+        emit html;
+        pos := next
       done;
-      if !i < n then emit "\n"
+      emit "\n"
     end
   done;
   if !in_list then emit "</ul>\n";
