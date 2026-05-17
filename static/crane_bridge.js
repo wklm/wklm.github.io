@@ -330,6 +330,21 @@
     return parts;
   }
 
+  function _scanBoundary(text) {
+    var lines = text.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.length > 4 && line.substring(0, 2) === "--") {
+        // Must not be the closing marker "--BOUNDARY--"
+        if (line.substring(line.length - 2) !== "--") {
+          // Strip leading "--"
+          return line.substring(2);
+        }
+      }
+    }
+    return "";
+  }
+
   function _parseDecryptMeta(ciphertextElement) {
     var text = ciphertextElement.textContent || "";
     var result = _parseHeaders(text);
@@ -338,12 +353,36 @@
     var pkeys = result.headers["public-keys"] || "";
     var keyIds = pkeys ? pkeys.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
 
-    // Get Content-Type boundary
+    // Get Content-Type boundary (from headers, or scan body markers)
     var ct = result.headers["content-type"] || "";
     var boundary = _extractBoundary(ct);
+    if (!boundary) {
+      boundary = _scanBoundary(text);
+    }
 
     var wraps = {};
     var ctBytes = null;
+
+    function _parseWrapsStr(wrapsStr) {
+      wrapsStr.split(",").forEach(function (entry) {
+        var c = entry.trim().split(":");
+        if (c.length === 3) {
+          wraps[c[0].trim()] = {
+            ek: _hexToBuf(c[1].trim()),
+            wrapped: _hexToBuf(c[2].trim())
+          };
+        }
+      });
+    }
+
+    // If Public-Keys not in headers, derive key IDs from Wraps value
+    if (keyIds.length === 0 && result.headers["wraps"]) {
+      result.headers["wraps"].split(",").forEach(function (entry) {
+        var kid = entry.trim().split(":")[0];
+        if (kid) keyIds.push(kid.trim());
+      });
+      _parseWrapsStr(result.headers["wraps"]);
+    }
 
     if (boundary) {
       var bodyText = result.lines.slice(result.bodyStart).join("\n");
@@ -355,16 +394,8 @@
         var partBody = partResult.lines.slice(partResult.bodyStart).join("\n");
 
         if (pct.indexOf("application/wrapped-keys") >= 0) {
-          var wrapsStr = partResult.headers["wraps"] || "";
-          wrapsStr.split(",").forEach(function (entry) {
-            var c = entry.trim().split(":");
-            if (c.length === 3) {
-              wraps[c[0].trim()] = {
-                ek: _hexToBuf(c[1].trim()),
-                wrapped: _hexToBuf(c[2].trim())
-              };
-            }
-          });
+          var wrapsHeader = partResult.headers["wraps"] || "";
+          _parseWrapsStr(wrapsHeader);
         } else if (pct.indexOf("application/aes-gcm") >= 0) {
           var cte = (partResult.headers["content-transfer-encoding"] || "").toLowerCase();
           if (cte === "base64") {
