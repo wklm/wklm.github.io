@@ -164,8 +164,14 @@
       { name: "ECDH", namedCurve: "P-256" },
       false, ["deriveBits"]
     );
+    // Clean JWK: strip fields that conflict with explicit usages
+    var jwk = JSON.parse(JSON.stringify(privKeyJwk));
+    delete jwk.key_ops;
+    delete jwk.use;
+    delete jwk.alg;
+    delete jwk.ext;
     var privKey = await crypto.subtle.importKey(
-      "jwk", privKeyJwk,
+      "jwk", jwk,
       { name: "ECDH", namedCurve: "P-256" },
       false, ["deriveBits"]
     );
