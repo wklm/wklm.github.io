@@ -604,8 +604,9 @@
   //   runtime.crane_foo(args)
   // where runtime = globalThis.jsoo_runtime.  The runtime object is a
   // plain literal set by the OCaml-compiled JS at load time.  We
-  // intercept that assignment so the bridge functions land on the
-  // same object the OCaml code reads from.
+  // keep a permanent getter/setter pair so the sprinkling survives
+  // all assignments (the OCaml code may reassign jsoo_runtime in
+  // nested scopes).
   (function () {
     var _jsoo = globalThis.jsoo_runtime;
     var _deps = {
@@ -618,28 +619,19 @@
       crane_decryptPost:         window.crane_decryptPost,
       crane_decryptBody:         window.crane_decryptBody
     };
-    // Sprinkle the bridge functions onto a runtime object.
     function _sprinkle(rt) {
       for (var k in _deps) {
         if (_deps[k]) rt[k] = _deps[k];
       }
     }
-    // If jsoo_runtime already exists (unlikely at this point, but safe).
-    if (_jsoo) { _sprinkle(_jsoo); return; }
-    // Intercept the first write to globalThis.jsoo_runtime.
+    if (_jsoo) { _sprinkle(_jsoo); }
     Object.defineProperty(globalThis, "jsoo_runtime", {
       configurable: true,
+      enumerable: true,
       get: function () { return _jsoo; },
       set: function (v) {
-        _jsoo = v;
         _sprinkle(v);
-        // Restore to a plain writable property so the OCaml runtime
-        // (and future OCaml modules on the same page) sees a normal object.
-        Object.defineProperty(globalThis, "jsoo_runtime", {
-          configurable: true,
-          writable: true,
-          value: v
-        });
+        _jsoo = v;
       }
     });
   })();
