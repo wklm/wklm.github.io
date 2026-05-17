@@ -10,16 +10,24 @@ posts/
 posts-encrypted/
 scripts/
 smtp/
-tools/
 compose.yml
 firebase-debug.log
 README.md
 brief.md
+keys/
+user_pasted.asc
+*.vo
+*.vok
+*.vos
+*.glob
+*.aux
+.lia.cache
 
 # Never send local key material or secrets into the Docker build context.
 *.asc
 *.gpg
 *.pgp
 *.key
+*.priv
 secret*
 passphrase*

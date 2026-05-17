@@ -2,11 +2,10 @@
 """
 Crane Blog SMTP listener.
 
-Receives one envelope, encrypts normal Mail.app plaintext in memory with the
-author's public key, wraps it in a canonical RFC 3156 multipart/encrypted
-message, writes posts-encrypted/<UTC-isoZ>.eml, and pushes the commit to the
-blog repo. Authentication is by Tailscale ACL plus an optional MAIL FROM
-allowlist.
+Receives one envelope, writes it as a markdown post with frontmatter,
+encrypts via the `encrypt_post` tool (HPKE with per-reader wrapped keys),
+and pushes the commit to the blog repo.  Replaces the old gpg-based
+RFC 3156 PGP/MIME pipeline.
 """
 import asyncio
 import datetime as dt
@@ -30,7 +29,9 @@ BRANCH = os.environ.get("BLOG_BRANCH", "main")
 HOST = os.environ.get("SMTP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SMTP_PORT", "2525"))
 ALLOW = {a.strip().lower() for a in os.environ.get("BLOG_ALLOW_FROM", "").split(",") if a.strip()}
-GPG_RECIPIENT = os.environ.get("BLOG_GPG_RECIPIENT", "B2467F312C5F4BDCDF50D57993F51309D4C9372A")
+PUBLIC_KEYS = os.environ.get("BLOG_PUBLIC_KEYS", "")
+AUTHOR_KEY_ID = os.environ.get("CRANE_BLOG_AUTHOR_KEY_ID", "")
+ENCRYPT_POST = os.environ.get("ENCRYPT_POST_BIN", "encrypt_post")
 
 log = logging.getLogger("crane-blog-smtp")
 _git_lock = asyncio.Lock()
@@ -68,77 +69,41 @@ def _plain_body(msg) -> str:
     return str(msg.get_payload() or "")
 
 
-def _header_line(name: str, value: str) -> str:
-    return f"{name}: {value.replace(chr(13), ' ').replace(chr(10), ' ').strip()}\r\n"
-
-
-def _encrypt(text: str) -> str:
-    proc = subprocess.run(
-        [
-            "gpg",
-            "--batch",
-            "--yes",
-            "--trust-model",
-            "always",
-            "--no-auto-key-retrieve",
-            "--armor",
-            "--encrypt",
-            "-r",
-            GPG_RECIPIENT,
-        ],
-        input=text.encode("utf-8"),
+def _encrypt_post(md_path: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [ENCRYPT_POST, "--stage", md_path],
+        cwd=REPO,
         check=True,
         capture_output=True,
+        text=True,
     )
-    return proc.stdout.decode("ascii")
 
-def _encrypted_envelope(envelope: Envelope, now: dt.datetime) -> bytes:
-    incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
-    sender = _header(incoming, "From", envelope.mail_from or "unknown")
-    recipients = _header(incoming, "To", ", ".join(envelope.rcpt_tos or []) or "blog@wklm.github.io")
-    date = format_datetime(now)
-    subject = _header(incoming, "Subject", "Untitled")
-    body = _plain_body(incoming)
-    inner = "".join(
-        [
-            _header_line("From", sender),
-            _header_line("To", recipients),
-            _header_line("Date", date),
-            _header_line("Subject", subject),
-            "MIME-Version: 1.0\r\n",
-            "Content-Type: text/plain; charset=utf-8\r\n",
-            "Content-Transfer-Encoding: 8bit\r\n",
-            "\r\n",
-            body,
-            "" if body.endswith("\n") else "\r\n",
-        ]
-    )
-    armor = _encrypt(inner)
-    ts = now.strftime("%Y%m%dT%H%M%SZ")
-    boundary = f"=_cb_smtp_{ts}_="
-    outer = "".join(
-        [
-            "Subject: ...\r\n",
-            "MIME-Version: 1.0\r\n",
-            f'Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="{boundary}"\r\n',
-            "\r\n",
-            "This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).\r\n",
-            f"--{boundary}\r\n",
-            "Content-Type: application/pgp-encrypted\r\n",
-            "Content-Description: PGP/MIME version identification\r\n",
-            "\r\n",
-            "Version: 1\r\n",
-            f"--{boundary}\r\n",
-            "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n",
-            "Content-Description: OpenPGP encrypted message\r\n",
-            "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n",
-            "\r\n",
-            armor,
-            "" if armor.endswith("\n") else "\r\n",
-            f"--{boundary}--\r\n",
-        ]
-    )
-    return outer.encode("utf-8")
+
+def _slug_from_subject(subject: str, ts: str) -> str:
+    import re
+    slug = subject.lower()
+    slug = re.sub(r'[^a-z0-9]+', '-', slug)
+    slug = slug.strip('-')
+    if not slug or len(slug) > 64:
+        slug = ts
+    return slug[:64]
+
+
+def _build_md(sender: str, subject: str, body: str, date: str, public_keys: str) -> str:
+    frontmatter = "---\n"
+    frontmatter += f"title: {subject}\n"
+    frontmatter += f"slug: {_slug_from_subject(subject, dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ'))}\n"
+    frontmatter += f"author: {sender}\n"
+    frontmatter += f"date: {date}\n"
+    if public_keys:
+        frontmatter += f"public-keys: {public_keys}\n"
+    elif AUTHOR_KEY_ID:
+        frontmatter += f"public-keys: {AUTHOR_KEY_ID}\n"
+    frontmatter += "---\n\n"
+    frontmatter += body
+    if not body.endswith("\n"):
+        frontmatter += "\n"
+    return frontmatter
 
 
 class Handler:
@@ -151,31 +116,52 @@ class Handler:
         if ALLOW and sender not in ALLOW:
             log.warning("reject: sender not in allowlist")
             return "550 sender not allowed"
+
         now = dt.datetime.now(dt.timezone.utc)
         ts = now.strftime("%Y%m%dT%H%M%SZ")
-        rel = Path("posts-encrypted") / f"{ts}.eml"
+
         try:
-            post_bytes = _encrypted_envelope(envelope, now)
-            log.info("encrypted plaintext message for %s", GPG_RECIPIENT)
-        except subprocess.CalledProcessError as e:
-            log.error("gpg failed: %s\nstderr: %s", e, e.stderr.decode("utf-8", errors="replace"))
-            return "451 encryption failed"
+            incoming = BytesParser(policy=policy.default).parsebytes(envelope.content or b"")
+        except Exception as e:
+            log.error("parse failed: %s", e)
+            return "550 cannot parse message"
+
+        subject = _header(incoming, "Subject", "Untitled")
+        body = _plain_body(incoming)
+        date = format_datetime(now)
+
+        if not body:
+            log.warning("empty body, rejecting")
+            return "550 message has no body"
+
+        # Check for X-Crane-Public-Keys header in the email
+        email_public_keys = _header(incoming, "X-Crane-Public-Keys", "")
+        public_keys = email_public_keys or PUBLIC_KEYS
+
+        md_content = _build_md(sender, subject, body, date, public_keys)
+        md_rel = Path("posts") / f"{ts}.md"
 
         async with _git_lock:
             try:
                 _git("fetch", "origin", BRANCH)
                 _git("reset", "--hard", f"origin/{BRANCH}")
-                target = REPO / rel
+                target = REPO / md_rel
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(post_bytes)
-                _git("add", str(rel))
+                target.write_text(md_content, encoding="utf-8")
+                _git("add", str(md_rel))
+
+                # Run encrypt_post to produce the encrypted .eml in posts-encrypted/
+                enc_result = _encrypt_post(str(md_rel))
+                log.info("encrypted post: %s", enc_result.stdout.strip())
+
+                _git("add", "posts-encrypted/")
                 _git("commit", "-m", f"post: {ts} (via smtp)")
                 _git("push", "origin", f"HEAD:{BRANCH}")
             except subprocess.CalledProcessError as e:
-                log.error("git failed: %s\nstderr: %s", e, e.stderr)
-                return f"451 git failed: {e.stderr.strip()[:180]}"
+                log.error("command failed: %s\nstderr: %s", e, e.stderr)
+                return f"451 processing failed: {e.stderr.strip()[:180]}"
 
-        log.info("published %s", rel)
+        log.info("published %s", md_rel)
         return "250 OK"
 
 
@@ -186,7 +172,7 @@ async def amain() -> None:
         stream=sys.stdout,
     )
     logging.getLogger("mail.log").setLevel(logging.WARNING)
-    log.info("repo=%s branch=%s allow=%s", REPO, BRANCH, sorted(ALLOW) or "*")
+    log.info("repo=%s branch=%s allow=%s public_keys=%s", REPO, BRANCH, sorted(ALLOW) or "*", PUBLIC_KEYS or "author-only")
     controller = Controller(Handler(), hostname=HOST, port=PORT, server_hostname=BANNER)
     controller.start()
     log.info("listening on %s:%d", HOST, PORT)

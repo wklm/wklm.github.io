@@ -388,9 +388,10 @@ Definition page_shell (depth page_title body_class nav_label nav_href body_conte
 
 (* The public subject is not data.  Even if a bad [.eml] contains a real
    [Subject] header, public pages render only the fixed placeholder.
-   The page now includes an in-browser decryption UI powered by
-   js_of_ocaml + OpenPGP.js, with a noscript fallback to the traditional
-   [gpg --decrypt] workflow. *)
+   
+   Browser-side decryption uses WebAuthn + Web Crypto API (via crane_bridge.js)
+   to authenticate the reader, retrieve their ECDH key from IndexedDB,
+   HPKE-unwrap the CEK, and AES-GCM decrypt the body. *)
 Definition render_eml_page (ep : EncryptedPost) : string :=
   let title := public_subject in
   let prefix := "../" in
@@ -404,11 +405,11 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "<pre class='eml-body' id='ciphertext'>" :: html_escape ep.(ep_body) :: "</pre>" ::
       "</div>" ::
       "<div id='decrypt-ui'>" ::
-      "<label for='private-key'>Private key</label>" ::
-      "<textarea id='private-key' rows='8' placeholder='-----BEGIN PGP PRIVATE KEY BLOCK-----...'></textarea>" ::
+      "<p class='decrypt-hint'>You need a reader key enrolled on this device to decrypt this post.</p>" ::
       "<button id='decrypt-button'>Decrypt</button>" ::
-      "<button id='clear-key-button'>Clear key</button>" ::
+      "<p id='decrypt-status'></p>" ::
       "<p id='decrypt-error' class='decrypt-error'></p>" ::
+      "<button id='clear-key-button'>Clear</button>" ::
       "</div>" ::
       "<article id='decrypted-content'>" ::
       "<header><h1 id='real-title'></h1><p id='real-meta'></p></header>" ::
@@ -416,10 +417,9 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "<div id='real-images'></div>" ::
       "<footer class='post-colophon'></footer>" ::
       "</article>" ::
-      "<noscript><p class='decrypt-fallback'>To read, copy the block above and run <code>gpg --decrypt</code>.</p></noscript>" ::
-      "<script src='" :: prefix :: "static/openpgp.min.js?v=1' defer></script>" ::
-      "<script src='" :: prefix :: "static/openpgp_bridge.js?v=1' defer></script>" ::
-      "<script src='" :: prefix :: "static/decrypt.js?v=2' defer></script>" ::
+      "<noscript><p class='decrypt-fallback'>To read, you need JavaScript enabled for client-side decryption.</p></noscript>" ::
+      "<script src='" :: prefix :: "static/crane_bridge.js?v=1' defer></script>" ::
+      "<script src='" :: prefix :: "static/decrypt.js?v=3' defer></script>" ::
       "</main>" :: nil) in
   page_shell "../" title "essay eml-page" "index" "../index.html" body.
 
@@ -446,10 +446,49 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       concat_all (render_inbox_rows eps) ::
       "</ul>" :: "</main>" ::
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
-      "<script src='static/openpgp.min.js?v=1' defer></script>" ::
-      "<script src='static/openpgp_bridge.js?v=1' defer></script>" ::
-      "<script src='static/decrypt.js?v=2' defer></script>" :: nil) in
+      "<script src='static/crane_bridge.js?v=1' defer></script>" ::
+      "<script src='static/decrypt.js?v=3' defer></script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
+
+(* ---- Enrollment page ----------------------------------------------- *)
+
+Definition render_enroll_page : string :=
+  let prefix := "../" in
+  let body :=
+    concat_all (
+      "<main id='main' class='enroll'>" ::
+      "<h1>Reader Enrollment</h1>" ::
+      "<p>To read encrypted posts, you need a reader keypair enrolled on this device. "
+        :: "Clicking the button below will create a WebAuthn passkey and an ECDH P-256 "
+        :: "encryption keypair stored in your browser.</p>" ::
+      "<div id='enroll-ui'>" ::
+      "<button id='enroll-button'>Enroll Reader Key</button>" ::
+      "<p id='enroll-status'></p>" ::
+      "</div>" ::
+      "<div id='enroll-result' style='display:none'>" ::
+      "<h2>Your Reader Public Key</h2>" ::
+      "<p>Send this key ID to the blog author to be added as a recipient:</p>" ::
+      "<p><strong>Key ID:</strong> <code id='reader-key-id'></code></p>" ::
+      "<p>Full public key (for reference):</p>" ::
+      "<pre id='reader-pubkey-hex' class='pubkey-display'></pre>" ::
+      "<p class='enroll-note'>The private key never leaves this device. "
+        :: "You will be asked to authenticate with your passkey to decrypt posts.</p>" ::
+      "</div>" ::
+      "<div id='enroll-existing' style='display:none'>" ::
+      "<h2>Already Enrolled</h2>" ::
+      "<p id='enroll-existing-status'></p>" ::
+      "<p id='enroll-existing-info'></p>" ::
+      "</div>" ::
+      "<script src='" :: prefix :: "static/crane_bridge.js?v=1' defer></script>" ::
+      "<script src='" :: prefix :: "static/enroll.js?v=1' defer></script>" ::
+      "</main>" :: nil) in
+  page_shell "../" "Reader Enrollment" "enroll-page" "index" "../index.html" body.
+
+Definition enroll_output_path (output_dir : string) : string :=
+  cat output_dir "/enroll/index.html".
+
+Definition enroll_dir_output_path (output_dir : string) : string :=
+  cat output_dir "/enroll".
 
 (* ---- Stylesheet --------------------------------------------------
    Restores the pre-email visual language: a small literary page, Georgia
@@ -492,14 +531,13 @@ Definition stylesheet_core : string :=
 Definition stylesheet_decrypt : string :=
   concat_all (
     "#decrypt-ui{margin:2rem 0;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
-    "#decrypt-ui label{display:block;margin-bottom:.25rem}" ::
-    "#private-key{width:100%;padding:.75rem;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;line-height:1.45;border:1px solid var(--rule);background:var(--paper);color:var(--ink);resize:vertical}" ::
-    "#decrypt-button{margin-top:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer}" ::
+    ".decrypt-hint{color:var(--muted);margin-bottom:.75rem}" ::
+    "#decrypt-button{margin-top:.25rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer}" ::
     "#decrypt-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}" ::
+    "#decrypt-status{margin-top:.4rem;color:var(--muted)}" ::
     "#clear-key-button{display:none;margin-top:.5rem;margin-left:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--rule);background:var(--paper);color:var(--muted);cursor:pointer}" ::
     ".decrypt-error{margin-top:.5rem;color:#c0392b;display:none}" ::
     ".decrypt-fallback{color:var(--muted);font-size:.82rem}" ::
-    ".decrypt-fallback code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.78rem}" ::
     "#decrypted-content{display:none;margin-top:2rem}" ::
     "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
     "#real-body img{max-width:100%;height:auto}" ::
@@ -508,8 +546,21 @@ Definition stylesheet_decrypt : string :=
     ".inbox-status.unlocked::after{content:' 📜';color:var(--muted)}" ::
     ".inbox-status-msg{color:var(--muted);font-size:.82rem;font-family:-apple-system,Helvetica,Arial,sans-serif}" :: nil).
 
+Definition stylesheet_enroll : string :=
+  concat_all (
+    "#enroll-ui{margin:2rem 0}" ::
+    "#enroll-button{padding:.5rem 1.25rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.88rem;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;border-radius:4px}" ::
+    "#enroll-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}" ::
+    "#enroll-status{margin-top:.5rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    "#enroll-result{margin:2rem 0}" ::
+    "#enroll-result code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.88rem;background:var(--rule);padding:.15rem .35rem;border-radius:2px}" ::
+    ".pubkey-display{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.7rem;background:var(--rule);padding:1rem;overflow-x:auto;word-break:break-all;border:1px solid var(--rule)}" ::
+    ".enroll-note{color:var(--muted);font-size:.82rem;font-family:-apple-system,Helvetica,Arial,sans-serif;margin-top:1.5rem}" ::
+    "#enroll-existing{margin:2rem 0;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    "#enroll-existing-info{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;background:var(--rule);padding:.75rem;overflow-x:auto}" :: nil).
+
 Definition stylesheet : string :=
-  cat stylesheet_core stylesheet_decrypt.
+  cat stylesheet_core (cat stylesheet_decrypt stylesheet_enroll).
 
 (* ---- IO pipeline ------------------------------------------------- *)
 
@@ -573,6 +624,8 @@ Definition run : IO unit :=
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
   _ <- write_file (index_output_path "./_site") (render_inbox_page eps) ;;
   _ <- write_eml_pages "./_site" eps ;;
+  _ <- create_directory (enroll_dir_output_path "./_site") ;;
+  _ <- write_file (enroll_output_path "./_site") render_enroll_page ;;
   _ <- create_directory "./_site/static" ;;
   static_files <- list_directory "./static" ;;
   copy_static_files (filter (fun name => negb (is_empty name)) static_files).

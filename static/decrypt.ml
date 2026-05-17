@@ -1,10 +1,16 @@
-(* Browser-side PGP decryption module — compiled to JavaScript by js_of_ocaml.
-   Zero Js.Unsafe.  All JS interop via typed [external] declarations.
+(* Browser-side decryption module — compiled to JavaScript by js_of_ocaml.
+   Replaces the PGP/OpenPGP.js pipeline.  Uses the Web Crypto API and
+   WebAuthn via the crane_bridge.js JavaScript bridge.
+
+   The page embeds decryption metadata as attributes on the ciphertext
+   element and JSON data islands.  The bridge reads these and performs
+   the actual HPKE unwrap + AES-GCM decrypt.
+
    Pure MIME parsing mirrors src/Decrypt.v extraction. *)
 
 open Js_of_ocaml
 
-(* ======== Pure MIME parser ============================================ *)
+(* ======== Pure MIME parser (extracted from Decrypt.v) ================= *)
 
 let split_on_char c s =
   let len = String.length s in
@@ -125,26 +131,39 @@ let split_headers_body raw =
   | None -> (raw, "")
   | Some (hi, bi) -> (String.sub raw 0 hi, String.sub raw bi (n - bi))
 
-let extract_pgp_armor eml_body =
-  let _hdrs, body = split_headers_body eml_body in
-  let body_trimmed = trim body in
-  if String.length body_trimmed >= 2
-     && body_trimmed.[0] = '-' && body_trimmed.[1] = '-' then begin
-    let hdrs_block, full_body = split_headers_body eml_body in
-    let hdrs = parse_headers_raw hdrs_block in
-    let ct = hdr_lookup "Content-Type" hdrs in
-    let boundary = extract_boundary ct in
-    if boundary = "" then body
-    else
-      let parts = split_multipart (trim full_body) boundary in
-      match parts with
-      | _ :: second :: _ ->
-          let _, part_body = split_headers_body second in
-          trim_part_terminator part_body
-      | _ -> body
-  end else body
+(* Extract HPKE metadata from the .eml body:
+   - Public-Keys header value (comma-separated key IDs)
+   - wrapped_keys part content (keyid:ekhex:wrappedhex per line)
+   - ciphertext part content (base64 encoded) *)
+let parse_hpke_envelope eml_body =
+  let hdrs_block, body = split_headers_body eml_body in
+  let hdrs = parse_headers_raw hdrs_block in
+  let ct = hdr_lookup "Content-Type" hdrs in
+  let boundary = extract_boundary ct in
+  if boundary = "" then ("", "", "")
+  else
+    let parts = split_multipart (trim body) boundary in
+    let wraps = ref "" in
+    let ct_b64 = ref "" in
+    List.iter (fun part ->
+      let part = trim_part_terminator part in
+      let ph, pb = split_headers_body part in
+      let phdrs = parse_headers_raw ph in
+      let pct = String.lowercase_ascii (hdr_lookup "Content-Type" phdrs) in
+      if starts_with pct "application/wrapped-keys" then begin
+        wraps := hdr_lookup "Wraps" phdrs
+      end else if starts_with pct "application/aes-gcm" then begin
+        let cte = String.lowercase_ascii (hdr_lookup "Content-Transfer-Encoding" phdrs) in
+        if cte = "base64" then
+          ct_b64 := trim pb
+        else
+          ct_b64 := pb
+      end
+    ) parts;
+    let pkeys = hdr_lookup "Public-Keys" hdrs in
+    (pkeys, !wraps, !ct_b64)
 
-(* ======== Inline base64 decode ======================================== *)
+(* ======== Inner MIME extraction (unchanged from original) ============== *)
 
 let b64_chars =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -180,8 +199,6 @@ let strip_base64_ws s =
     | _ -> Buffer.add_char buf c
   ) s;
   Buffer.contents buf
-
-(* ======== Inner MIME extraction ======================================= *)
 
 let extract_inner_text inner_mime =
   let hdrs_block, body = split_headers_body inner_mime in
@@ -242,22 +259,24 @@ let extract_inner_text inner_mime =
     ) parts;
     (hdr_lookup "Subject" hdrs, !text, List.rev !images)
 
-(* ======== Typed FFI bridge (zero Js.Unsafe) =========================== *)
+(* ======== Typed FFI bridge (zero Js.Unsafe) ============================ *)
 
-external crane_decryptWithCallback
-  :  string -> string -> (Js.js_string Js.t -> unit) Js.callback -> unit
-  = "crane_decryptWithCallback"
+external crane_decryptPost
+  :  (Js.js_string Js.t -> unit) Js.callback -> unit
+  = "crane_decryptPost"
 
 external crane_sessionStorageGet : string -> string
   = "crane_sessionStorageGet"
-
 external crane_sessionStorageSet : string -> string -> unit
   = "crane_sessionStorageSet"
-
 external crane_sessionStorageRemove : string -> unit
   = "crane_sessionStorageRemove"
 
-(* ======== DOM helpers ================================================= *)
+external crane_decryptBody
+  :  string -> string -> (Js.js_string Js.t -> unit) Js.callback -> unit
+  = "crane_decryptBody"
+
+(* ======== DOM helpers ================================================== *)
 
 let el_by_id id =
   try Some (Dom_html.getElementById id) with _ -> None
@@ -276,14 +295,6 @@ let hide_el id =
   | Some el -> el##.style##.display := Js.string "none"
   | None -> ()
 
-let el_value id =
-  match el_by_id id with
-  | Some el ->
-      (match Js.Opt.to_option (Dom_html.CoerceTo.textarea el) with
-       | Some ta -> Js.to_string (ta##.value)
-       | None -> el_text el)
-  | None -> ""
-
 let set_html id html =
   match el_by_id id with
   | Some el -> el##.innerHTML := Js.string html
@@ -294,9 +305,9 @@ let set_text id text =
   | Some el -> el##.innerHTML := Js.string text
   | None -> ()
 
-(* ======== Post-page logic ============================================= *)
+(* ======== Post-page logic ============================================== *)
 
-let render_decrypted plaintext key_armor =
+let render_decrypted plaintext =
   let subject, body_text, images = extract_inner_text plaintext in
   hide_el "encrypted-shell";
   hide_el "decrypt-ui";
@@ -311,55 +322,49 @@ let render_decrypted plaintext key_armor =
       let img_names = List.map (fun (name, _data) -> name) images in
       set_text "real-images" ("Attachments: " ^ String.concat ", " img_names)
     end
-  end;
-  crane_sessionStorageSet "crane_key" key_armor
+  end
 
-let do_decrypt armor key_armor =
-  let callback = Js.wrap_callback (fun result ->
+let decrypt_with_bridge () =
+  let cb = Js.wrap_callback (fun result ->
     let s = Js.to_string result in
     if s = "" then begin
       crane_sessionStorageRemove "crane_key";
       show_el "decrypt-ui";
       show_el "decrypt-error";
       set_text "decrypt-error"
-        "Decryption failed. Make sure the key is correct and you are a listed recipient."
+        ("Decryption failed. Make sure you have a reader key enrolled "
+       ^ "and your key is listed as a recipient for this post.")
     end else
-      render_decrypted s key_armor
+      render_decrypted s
   ) in
-  crane_decryptWithCallback armor key_armor callback
+  crane_decryptPost cb
 
 let init_post_page () =
   match el_by_id "ciphertext" with
   | None -> ()
-  | Some ciphertext_el ->
-    let ciphertext = el_text ciphertext_el in
-    let armor = extract_pgp_armor ciphertext in
-    let saved_key = crane_sessionStorageGet "crane_key" in
-    if saved_key <> "" then begin
-      do_decrypt armor saved_key;
-      show_el "clear-key-button"
+  | Some _ciphertext_el ->
+    let encrypted_key = crane_sessionStorageGet "crane_decrypted" in
+    if encrypted_key = "1" then begin
+      (* Already decrypted in a previous session visit *)
+      show_el "decrypt-ui";
+      set_text "decrypt-error" "This post was decrypted in an earlier session.";
+      hide_el "decrypt-error"
     end else begin
       show_el "decrypt-ui";
       match el_by_id "decrypt-button" with
       | Some btn ->
           btn##.onclick := Dom.handler (fun _ev ->
-            let key_text = el_value "private-key" in
-            if key_text = "" then begin
-              show_el "decrypt-error";
-              set_text "decrypt-error" "Paste a PGP private key first."
-            end else begin
-              hide_el "decrypt-error";
-              do_decrypt armor key_text
-            end;
+            hide_el "decrypt-error";
+            set_text "decrypt-status" "Decrypting...";
+            decrypt_with_bridge ();
             Js._false
           )
       | None -> ();
       match el_by_id "clear-key-button" with
       | Some clr ->
           clr##.onclick := Dom.handler (fun _ev ->
-            crane_sessionStorageRemove "crane_key";
+            crane_sessionStorageRemove "crane_decrypted";
             hide_el "decrypted-content";
-            hide_el "decrypt-ui";
             hide_el "clear-key-button";
             show_el "encrypted-shell";
             show_el "decrypt-ui";
@@ -375,7 +380,7 @@ let init_inbox_page () =
   if saved_key <> "" then
     set_html "inbox-status-msg" "All posts are readable with your key."
 
-(* ======== Entry point ================================================= *)
+(* ======== Entry point ================================================== *)
 
 let () =
   match el_by_id "ciphertext" with

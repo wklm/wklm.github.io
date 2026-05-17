@@ -8,7 +8,7 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/wojtek/crane_blog}"
 KNOWN_HOSTS="/home/wojtek/.ssh/known_hosts"
-AUTHOR_PUBKEY="/home/wojtek/crane_blog_secrets/author.pub"
+KEYS_DIR="/home/wojtek/crane_blog_keys"
 
 # 1. Decommission the legacy systemd unit (host-installed python listener).
 if systemctl list-unit-files | grep -q '^crane_blog_smtp\.service'; then
@@ -37,10 +37,9 @@ if ! grep -q '^github.com ' "${KNOWN_HOSTS}" 2>/dev/null; then
 fi
 
 # 4. Bring the compose stack up.
-if [ ! -r "${AUTHOR_PUBKEY}" ]; then
-    echo "missing ${AUTHOR_PUBKEY}" >&2
-    echo "export the author public key on your laptop and copy it there before deploying" >&2
-    exit 1
+if [ ! -d "${KEYS_DIR}" ] || [ -z "$(ls -A "${KEYS_DIR}" 2>/dev/null)" ]; then
+    echo "Warning: keys directory ${KEYS_DIR} is empty or missing" >&2
+    echo "Place reader public key files (*.pub) there before deploying" >&2
 fi
 
 cd "${REPO_DIR}"
@@ -61,4 +60,4 @@ echo "  TLS:    off"
 echo "  Auth:   none"
 echo ""
 echo "The container accepts normal plaintext email, encrypts it in memory with"
-echo "the mounted author public key, and commits only posts-encrypted/*.eml."
+echo "the mounted reader public keys, and commits only posts-encrypted/*.eml."

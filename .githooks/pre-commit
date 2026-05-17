@@ -3,9 +3,9 @@
 # posts-encrypted/<slug>.eml, stage the ciphertext, and unstage the
 # plaintext. The plaintext never enters a commit.
 #
-# Crypto is done by gpg. MIME framing and the glue around it are
-# built by the OCaml executable tools/encrypt_post, which is part of
-# this repo's dune build tree.
+# Crypto is done via crane_crypto (mirage_crypto). MIME framing and
+# the glue around it are built by the OCaml executable
+# tools/encrypt_post, which is part of this repo's dune build tree.
 set -euo pipefail
 
 repo="$(git rev-parse --show-toplevel)"
@@ -42,8 +42,12 @@ if [[ ${#emls[@]} -gt 0 ]]; then
             echo "pre-commit: refusing $eml; outer Subject must be literal ..." >&2
             exit 1
         fi
-        if ! git show ":$eml" | tr -d '\r' | grep -qi '^Content-Type: multipart/encrypted;.*protocol="application/pgp-encrypted"'; then
-            echo "pre-commit: refusing $eml; expected RFC 3156 multipart/encrypted envelope" >&2
+        if ! git show ":$eml" | tr -d '\r' | grep -qi '^Content-Type: multipart/hpke+wrapped'; then
+            echo "pre-commit: refusing $eml; expected HPKE multipart/hpke+wrapped envelope" >&2
+            exit 1
+        fi
+        if ! git show ":$eml" | tr -d '\r' | grep -q 'Public-Keys: '; then
+            echo "pre-commit: refusing $eml; missing Public-Keys header" >&2
             exit 1
         fi
         if git show ":$eml" | tr -d '\r' | grep -Eq '^(From|To|Date): '; then

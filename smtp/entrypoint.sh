@@ -1,22 +1,18 @@
 #!/bin/sh
 # Crane Blog SMTP container entrypoint.
 # Ensures /repo is a fresh clone of $BLOG_REPO_URL, then execs the listener.
+# No GPG keyring needed — encryption is handled by the encrypt_post OCaml binary.
 set -eu
 
 : "${BLOG_REPO_URL:?BLOG_REPO_URL is required}"
 : "${BLOG_REPO_PATH:=/repo}"
 : "${BLOG_BRANCH:=main}"
-: "${GNUPGHOME:=/gnupg}"
-: "${BLOG_AUTHOR_PUBKEY:=/run/secrets/author.pub}"
+: "${KEYS_DIR:=/keys}"
 
-mkdir -p "${GNUPGHOME}"
-chmod 700 "${GNUPGHOME}"
-export GNUPGHOME
-if [ ! -r "${BLOG_AUTHOR_PUBKEY}" ]; then
-    echo "entrypoint: missing public key at ${BLOG_AUTHOR_PUBKEY}" >&2
-    exit 1
+# Validate keys directory has at least the author's public key
+if [ ! -d "${KEYS_DIR}" ] || [ -z "$(ls -A "${KEYS_DIR}" 2>/dev/null)" ]; then
+    echo "entrypoint: warning: keys directory ${KEYS_DIR} is empty or missing" >&2
 fi
-gpg --batch --import "${BLOG_AUTHOR_PUBKEY}" >/dev/null 2>&1
 
 # Configure git identity from env (GIT_*_NAME / GIT_*_EMAIL also work but
 # `git commit` ignores GIT_AUTHOR_NAME without a configured user.email).

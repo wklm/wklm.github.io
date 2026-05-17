@@ -108,12 +108,12 @@ jobs:
               echo "$eml does not have outer Subject: ..." >&2
               exit 1
             fi
-            if ! grep -qi '^Content-Type: multipart/encrypted;.*protocol="application/pgp-encrypted"' <<<"$clean"; then
-              echo "$eml is not an RFC 3156 multipart/encrypted envelope" >&2
+            if ! grep -qi '^Content-Type: multipart/hpke+wrapped' <<<"$clean"; then
+              echo "$eml is not an HPKE multipart/hpke+wrapped envelope" >&2
               exit 1
             fi
-            if ! grep -q 'BEGIN PGP MESSAGE' <<<"$clean"; then
-              echo "$eml is missing PGP armor" >&2
+            if ! grep -q 'Public-Keys: ' <<<"$clean"; then
+              echo "$eml is missing Public-Keys header" >&2
               exit 1
             fi
             if grep -Eq '^(From|To|Date): ' <<<"$clean"; then
@@ -153,7 +153,7 @@ jobs:
             echo 'Generated site contains <img> tags' >&2
             exit 1
           fi
-          unapproved=$(grep -R '<script' _site | grep -v 'static/openpgp.min.js\|static/openpgp_bridge.js\|static/decrypt.js' || true)
+          unapproved=$(grep -R '<script' _site | grep -v 'static/crane_bridge.js\|static/decrypt.js\|static/enroll.js' || true)
           if [[ -n "$unapproved" ]]; then
             echo 'Generated site contains unapproved <script> tags:' >&2
             echo "$unapproved" >&2

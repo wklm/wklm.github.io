@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # test-roundtrip.sh -- end-to-end check of the encryption pipeline.
-# Creates an ephemeral GPG home, an author key, encrypts a fixture
-# post + image via tools/encrypt_post, decrypts via
-# tools/decrypt_post, and diffs the round-tripped bytes against the
-# originals.  Also lint-checks the output page HTML for metadata
-# leaks.
+# Creates an ephemeral keys directory, generates a reader keypair,
+# encrypts a fixture post + image via tools/encrypt_post, decrypts
+# via the browser-side bridge, and diffs the round-tripped bytes
+# against the originals.  Also lint-checks the output page HTML for
+# metadata leaks.
+#
+# NOTE: This test currently needs updating for the HPKE-based system.
+# The encrypt_post tool now uses Crane_crypto instead of gpg.
+# Decryption requires a browser with Web Crypto + WebAuthn support
+# (not a CLI tool).
 set -euo pipefail
 
 repo="$(git rev-parse --show-toplevel)"
