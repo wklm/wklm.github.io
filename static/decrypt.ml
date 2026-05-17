@@ -305,31 +305,9 @@ let set_text id text =
   | Some el -> el##.innerHTML := Js.string text
   | None -> ()
 
-(* ======== Minimal markdown-to-HTML ==================================== *)
+(* ======== Minimal markdown cleanup ==================================== *)
 
-(* HTML-escape helpers for inline text *)
-let html_escape_line s =
-  let buf = Buffer.create (String.length s) in
-  String.iter (fun c ->
-    match c with
-    | '&' -> Buffer.add_string buf "&amp;"
-    | '<' -> Buffer.add_string buf "&lt;"
-    | '>' -> Buffer.add_string buf "&gt;"
-    | '"' -> Buffer.add_string buf "&quot;"
-    | _ -> Buffer.add_char buf c
-  ) s;
-  Buffer.contents buf
-
-let html_escape_char_line s pos =
-  match s.[pos] with
-  | '&' -> "&amp;"
-  | '<' -> "&lt;"
-  | '>' -> "&gt;"
-  | '"' -> "&quot;"
-  | c -> String.make 1 c
-
-(* Strip YAML-style frontmatter: everything between the first "---\n"
-   and the next "\n---\n" or "\n---\r\n".  Returns the body after. *)
+(* Strip YAML-style frontmatter: everything between "---\n" and "\n---\n" *)
 let strip_frontmatter s =
   if not (starts_with s "---\n" || starts_with s "---\r\n") then s
   else
@@ -348,87 +326,33 @@ let strip_frontmatter s =
     | None -> s
     | Some body_start -> String.sub s body_start (n - body_start)
 
-(* Convert basic markdown to HTML: **bold**, *italic*, - lists, paragraphs *)
-let markdown_to_html body =
-  let body = strip_frontmatter body in
-  let buf = Buffer.create (String.length body + 1024) in
-  let n = String.length body in
+(* HTML-escape and convert double-newlines to </p><p> *)
+let body_to_html s =
+  let s = strip_frontmatter s in
+  let buf = Buffer.create (String.length s + 256) in
+  let n = String.length s in
   let i = ref 0 in
-  let emit s = Buffer.add_string buf s in
-  let skip_blanks () =
-    while !i < n && (body.[!i] = '\n' || body.[!i] = '\r') do incr i done
-  in
-  (* scan_inline: returns (html_snippet, new_position) relative to body *)
-  let rec scan_inline pos =
-    if pos >= n then ("", pos)
-    else
-      let c = body.[pos] in
-      if c = '*' && pos + 1 < n && body.[pos + 1] = '*' then begin
-        let j = ref (pos + 2) in
-        let found = ref false in
-        while !j + 1 < n && not !found do
-          if body.[!j] = '*' && body.[!j + 1] = '*' then found := true
-          else incr j
-        done;
-        if !found then
-          ("<strong>" ^ html_escape_line (String.sub body (pos + 2) (!j - pos - 2)) ^ "</strong>", !j + 2)
-        else
-          ("*", pos + 1)
-      end else if c = '*' && (pos = 0 || body.[pos - 1] = ' ' || body.[pos - 1] = '\n' || body.[pos - 1] = '\r') then begin
-        let j = ref (pos + 1) in
-        let found = ref false in
-        while !j < n && not !found do
-          if body.[!j] = '*' then
-            let next = !j + 1 in
-            if next >= n || body.[next] = ' ' || body.[next] = '\n' || body.[next] = '\r' then found := true
-            else incr j
-          else incr j
-        done;
-        if !found then
-          ("<em>" ^ html_escape_line (String.sub body (pos + 1) (!j - pos - 1)) ^ "</em>", !j + 1)
-        else
-          ("*", pos + 1)
-      end else
-        (html_escape_char_line body pos, pos + 1)
-  in
-  skip_blanks ();
-  let in_para = ref false in
-  let in_list = ref false in
+  Buffer.add_string buf "<p>";
   while !i < n do
-    let line_start = !i in
-    let line_end = ref line_start in
-    while !line_end < n && body.[!line_end] <> '\n' && body.[!line_end] <> '\r' do incr line_end done;
-    let line = String.sub body line_start (!line_end - line_start) in
-    let line = String.trim line in
-    i := !line_end;
-    skip_blanks ();
-    if line = "" then begin
-      if !in_list then (emit "</ul>\n"; in_list := false)
-      else if !in_para then (emit "</p>\n"; in_para := false)
-    end else if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
-      if not !in_list then (emit "<ul>\n"; in_list := true);
-      emit "<li>";
-      let pos = ref 2 in
-      while !pos < String.length line do
-        let html, next = scan_inline !pos in
-        emit html;
-        pos := next
-      done;
-      emit "</li>\n"
+    let c = s.[!i] in
+    if c = '\n' then begin
+      incr i;
+      if !i < n && s.[!i] = '\n' then begin
+        incr i;
+        Buffer.add_string buf "</p><p>"
+      end else
+        Buffer.add_string buf "<br>"
     end else begin
-      if !in_list then (emit "</ul>\n"; in_list := false);
-      if not !in_para then (emit "<p>"; in_para := true);
-      let pos = ref 0 in
-      while !pos < String.length line do
-        let html, next = scan_inline !pos in
-        emit html;
-        pos := next
-      done;
-      emit "\n"
+      (match c with
+       | '&' -> Buffer.add_string buf "&amp;"
+       | '<' -> Buffer.add_string buf "&lt;"
+       | '>' -> Buffer.add_string buf "&gt;"
+       | '"' -> Buffer.add_string buf "&quot;"
+       | _ -> Buffer.add_char buf c);
+      incr i
     end
   done;
-  if !in_list then emit "</ul>\n";
-  if !in_para then emit "</p>";
+  Buffer.add_string buf "</p>";
   Buffer.contents buf
 
 (* ======== Post-page logic ============================================== *)
@@ -443,7 +367,7 @@ let render_decrypted plaintext =
     set_text "real-body" "(The decrypted message contained no readable text.)"
   end else begin
     set_text "real-title" subject;
-    set_html "real-body" (markdown_to_html body_text);
+    set_html "real-body" (body_to_html body_text);
     if images <> [] then begin
       let img_names = List.map (fun (name, _data) -> name) images in
       set_text "real-images" ("Attachments: " ^ String.concat ", " img_names)
