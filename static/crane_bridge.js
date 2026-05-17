@@ -506,42 +506,41 @@
 
   // ---- Decrypt: authenticate + unwrap + decrypt ----
 
+  function _showError(msg) {
+    var el = document.getElementById("decrypt-error");
+    var st = document.getElementById("decrypt-status");
+    if (el) { el.style.display = "block"; el.textContent = msg; }
+    if (st) { st.textContent = ""; }
+  }
+
   window.crane_decryptPost = function (callback) {
     (async function () {
+      var diag = [];  // diagnostic messages
       try {
         var cipherEl = document.getElementById("ciphertext");
-        if (!cipherEl) { try { callback(""); } catch (_) { } return; }
+        if (!cipherEl) { _showError("No ciphertext element found on page."); try { callback(""); } catch (_) { } return; }
+
         var meta = _parseDecryptMeta(cipherEl);
+        diag.push("keyIds: [" + meta.keyIds.join(",") + "]");
+        diag.push("wraps keys: [" + Object.keys(meta.wraps).join(",") + "]");
+        diag.push("ctBytes: " + (meta.ctBytes ? meta.ctBytes.length + " bytes" : "null"));
 
         if (!meta.ctBytes) {
-          // Show error directly in the DOM (bypass OCaml callback which may
-          // fail silently if the js_of_ocaml bridge has issues).
-          var errEl = document.getElementById("decrypt-error");
-          var statusEl = document.getElementById("decrypt-status");
-          if (errEl) {
-            errEl.style.display = "block";
-            errEl.textContent = "This post uses an encryption format not supported by your browser. "
-              + "Posts encrypted before the HPKE migration must be re-encrypted.";
-          }
-          if (statusEl) { statusEl.textContent = ""; }
+          _showError("No ciphertext found in envelope. " + diag.join("; "));
           try { callback(""); } catch (_) { }
           return;
         }
 
-        // 2. Get enrolled keys from IndexedDB
         var enrolledKeys = await _dbGetAll(STORE_NAME);
+        diag.push("enrolled: " + enrolledKeys.length + " keys");
         if (enrolledKeys.length === 0) {
-          var stEl = document.getElementById("decrypt-status");
-          var errEl = document.getElementById("decrypt-error");
-          if (stEl) { stEl.textContent = ""; }
-          if (errEl) {
-            errEl.style.display = "block";
-            errEl.textContent = "No reader key found on this device. Visit the enrollment page to create one."
-          }
+          _showError("No reader key found on this device. Visit the enrollment page to create one. (" + diag.join("; ") + ")");
           try { callback(""); } catch (_) { } return;
         }
 
-        // 3. Find a matching key
+        var enrolledIds = enrolledKeys.map(function(k) { return k.id; }).join(",");
+        diag.push("enrolled IDs: [" + enrolledIds + "]");
+
         var matchingKey = null;
         var matchingWrap = null;
         for (var i = 0; i < enrolledKeys.length; i++) {
@@ -552,9 +551,12 @@
             break;
           }
         }
-        if (!matchingKey) { try { callback(""); } catch (_) { } return; }
+        if (!matchingKey) {
+          _showError("Your enrolled key is not a recipient for this post. " + diag.join("; "));
+          try { callback(""); } catch (_) { } return;
+        }
+        diag.push("matched: " + matchingKey.id);
 
-        // 4. WebAuthn authentication
         var passkeys = await _dbGetAll(PASKEY_STORE);
         var matchedPasskey = null;
         for (var j = 0; j < passkeys.length; j++) {
@@ -563,6 +565,7 @@
             break;
           }
         }
+        diag.push("passkey: " + (matchedPasskey ? "found" : "none"));
 
         if (matchedPasskey) {
           try {
@@ -570,37 +573,44 @@
             await navigator.credentials.get({
               publicKey: {
                 challenge: new TextEncoder().encode("crane-decrypt-challenge"),
-                allowCredentials: [{
-                  id: credId,
-                  type: "public-key"
-                }],
+                allowCredentials: [{ id: credId, type: "public-key" }],
                 timeout: 60000,
                 userVerification: "preferred"
               }
             });
           } catch (authErr) {
-            // WebAuthn failed, but we might still allow decryption if the user
-            // has the key stored (graceful fallback for browsers without passkeys)
+            diag.push("WebAuthn: " + authErr);
           }
         }
 
         // 5. Unwrap CEK
         var unwrappedCek = await _hpkeDecrypt(
-          matchingKey.privkeyJwk,
-          matchingWrap.ek,
-          matchingWrap.wrapped
+          matchingKey.privkeyJwk, matchingWrap.ek, matchingWrap.wrapped
         );
+        diag.push("CEK unwrapped: " + (unwrappedCek ? unwrappedCek.length + " bytes" : "FAILED"));
+
+        if (!unwrappedCek) {
+          _showError("Failed to unwrap the content encryption key. " + diag.join("; "));
+          try { callback(""); } catch (_) { } return;
+        }
 
         // 6. Decrypt body using the unwrapped CEK
         var nonce = meta.ctBytes.slice(0, 12);
         var tag = meta.ctBytes.slice(meta.ctBytes.length - 16);
         var ct = meta.ctBytes.slice(12, meta.ctBytes.length - 16);
         var decrypted = await _aesGcmDecrypt(unwrappedCek, nonce, ct, tag);
+        diag.push("decrypted: " + (decrypted ? decrypted.length + " bytes" : "FAILED"));
+
+        if (!decrypted) {
+          _showError("Failed to decrypt the post body. " + diag.join("; "));
+          try { callback(""); } catch (_) { } return;
+        }
 
         var decoder = new TextDecoder();
         var plaintext = decoder.decode(decrypted);
         try { callback(plaintext); } catch (_) { callback(""); }
       } catch (e) {
+        _showError("Unexpected error: " + e + ". " + diag.join("; "));
         try { callback(""); } catch (_) { }
       }
     })();
