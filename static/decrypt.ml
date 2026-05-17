@@ -305,6 +305,132 @@ let set_text id text =
   | Some el -> el##.innerHTML := Js.string text
   | None -> ()
 
+(* ======== Minimal markdown-to-HTML ==================================== *)
+
+(* HTML-escape helpers for inline text *)
+let html_escape_line s =
+  let buf = Buffer.create (String.length s) in
+  String.iter (fun c ->
+    match c with
+    | '&' -> Buffer.add_string buf "&amp;"
+    | '<' -> Buffer.add_string buf "&lt;"
+    | '>' -> Buffer.add_string buf "&gt;"
+    | '"' -> Buffer.add_string buf "&quot;"
+    | _ -> Buffer.add_char buf c
+  ) s;
+  Buffer.contents buf
+
+let html_escape_char_line s pos =
+  match s.[pos] with
+  | '&' -> "&amp;"
+  | '<' -> "&lt;"
+  | '>' -> "&gt;"
+  | '"' -> "&quot;"
+  | c -> String.make 1 c
+
+(* Strip YAML-style frontmatter: everything between the first "---\n"
+   and the next "\n---\n" or "\n---\r\n".  Returns the body after. *)
+let strip_frontmatter s =
+  if not (starts_with s "---\n" || starts_with s "---\r\n") then s
+  else
+    let after_open = if starts_with s "---\r\n" then 5 else 4 in
+    let n = String.length s in
+    let rec find_closing i =
+      if i + 4 > n then None
+      else if s.[i] = '\n' && i + 4 <= n
+           && s.[i+1] = '-' && s.[i+2] = '-' && s.[i+3] = '-' then
+        if i + 4 < n && s.[i+4] = '\n' then Some (i + 5)
+        else if i + 5 < n && s.[i+4] = '\r' && s.[i+5] = '\n' then Some (i + 6)
+        else find_closing (i + 1)
+      else find_closing (i + 1)
+    in
+    match find_closing after_open with
+    | None -> s
+    | Some body_start -> String.sub s body_start (n - body_start)
+
+(* Convert basic markdown to HTML: **bold**, *italic*, - lists, paragraphs *)
+let markdown_to_html body =
+  let body = strip_frontmatter body in
+  let buf = Buffer.create (String.length body + 1024) in
+  let n = String.length body in
+  let i = ref 0 in
+  let in_para = ref false in
+  let in_list = ref false in
+  let emit s = Buffer.add_string buf s in
+  let skip_blanks () =
+    while !i < n && (body.[!i] = '\n' || body.[!i] = '\r') do incr i done
+  in
+  let rec scan_inline start =
+    if start >= n then ""
+    else
+      let c = body.[start] in
+      if c = '*' && start + 1 < n && body.[start + 1] = '*' then begin
+        let j = ref (start + 2) in
+        let found = ref false in
+        while !j + 1 < n && not !found do
+          if body.[!j] = '*' && body.[!j + 1] = '*' then found := true
+          else incr j
+        done;
+        if !found then begin
+          i := !j + 2;
+          "<strong>" ^ html_escape_line (String.sub body (start + 2) (!j - start - 2)) ^ "</strong>"
+        end else begin
+          i := start + 1;
+          "*"
+        end
+      end else if c = '*' && (start = 0 || body.[start - 1] = ' ' || body.[start - 1] = '\n') then begin
+        let j = ref (start + 1) in
+        let found = ref false in
+        while !j < n && not !found do
+          if body.[!j] = '*' && (!j + 1 >= n || body.[!j + 1] = ' ' || body.[!j + 1] = '\n' || body.[!j + 1] = '\r') then found := true
+          else incr j
+        done;
+        if !found then begin
+          i := !j + 1;
+          "<em>" ^ html_escape_line (String.sub body (start + 1) (!j - start - 1)) ^ "</em>"
+        end else begin
+          i := start + 1;
+          "*"
+        end
+      end else begin
+        i := start + 1;
+        html_escape_char_line body start
+      end
+  in
+  skip_blanks ();
+  while !i < n do
+    let line_start = !i in
+    let line_end = ref line_start in
+    while !line_end < n && body.[!line_end] <> '\n' && body.[!line_end] <> '\r' do incr line_end done;
+    let line = String.sub body line_start (!line_end - line_start) in
+    let line = String.trim line in
+    i := !line_end;
+    skip_blanks ();
+    if line = "" then begin
+      if !in_list then (emit "</ul>\n"; in_list := false)
+      else if !in_para then (emit "</p>\n"; in_para := false)
+    end else if String.length line >= 2 && line.[0] = '-' && line.[1] = ' ' then begin
+      if not !in_list then (emit "<ul>\n"; in_list := true);
+      emit "<li>";
+      let inline_start = ref 2 in
+      while !inline_start < String.length line do
+        emit (scan_inline !inline_start)
+      done;
+      emit "</li>\n"
+    end else begin
+      if !in_list then (emit "</ul>\n"; in_list := false);
+      if not !in_para then (emit "<p>"; in_para := true);
+      let inline_start = ref 0 in
+      while !inline_start < String.length line do
+        emit (scan_inline !inline_start)
+      done;
+      if !i < n then emit "\n"
+    end
+  done;
+  if !in_list then emit "</ul>\n";
+  if !in_para then emit "</p>";
+  Buffer.contents buf
+
 (* ======== Post-page logic ============================================== *)
 
 let render_decrypted plaintext =
@@ -317,7 +443,7 @@ let render_decrypted plaintext =
     set_text "real-body" "(The decrypted message contained no readable text.)"
   end else begin
     set_text "real-title" subject;
-    set_text "real-body" body_text;
+    set_html "real-body" (markdown_to_html body_text);
     if images <> [] then begin
       let img_names = List.map (fun (name, _data) -> name) images in
       set_text "real-images" ("Attachments: " ^ String.concat ", " img_names)
