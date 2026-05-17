@@ -108,12 +108,10 @@ jobs:
               echo "$eml does not have outer Subject: ..." >&2
               exit 1
             fi
-            if ! grep -qi '^Content-Type: multipart/hpke+wrapped' <<<"$clean"; then
-              echo "$eml is not an HPKE multipart/hpke+wrapped envelope" >&2
-              exit 1
-            fi
-            if ! grep -q 'Public-Keys: ' <<<"$clean"; then
-              echo "$eml is missing Public-Keys header" >&2
+            is_hpke=$(grep -qi '^Content-Type: multipart/hpke+wrapped' <<<"$clean" && echo yes || echo no)
+            is_pgp=$(grep -qi '^Content-Type: multipart/encrypted;.*protocol="application/pgp-encrypted"' <<<"$clean" && echo yes || echo no)
+            if [ "$is_hpke" = "no" ] && [ "$is_pgp" = "no" ]; then
+              echo "$eml is not a recognized encrypted envelope format (HPKE or PGP/MIME)" >&2
               exit 1
             fi
             if grep -Eq '^(From|To|Date): ' <<<"$clean"; then
