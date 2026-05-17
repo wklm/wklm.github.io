@@ -397,10 +397,10 @@
               displayName: "Crane Blog Reader"
             },
             pubKeyCredParams: [
-              { type: "public-key", alg: -7 }  // ES256
+              { type: "public-key", alg: -7 },  // ES256
+              { type: "public-key", alg: -8 }   // EdDSA (for Apple Touch ID)
             ],
             authenticatorSelection: {
-              authenticatorAttachment: "platform",
               residentKey: "required",
               userVerification: "preferred"
             },
@@ -430,7 +430,13 @@
         });
         try { callback(result); } catch (_) { callback(""); }
       } catch (e) {
-        try { callback(""); } catch (_) { }
+        console.error("crane_enrollCreateReader failed:", e);
+        var msg = e.name ? (e.name + ": " + e.message) : String(e);
+        // Show error directly in the DOM
+        var stEl = document.getElementById("enroll-status");
+        if (stEl) { stEl.textContent = "Enrollment failed: " + msg; }
+        // Also pass to OCaml callback for consistency
+        try { callback(JSON.stringify({ error: msg })); } catch (_) { callback(""); }
       }
     })();
   };
@@ -442,8 +448,9 @@
         var keys = await _dbGetAll(STORE_NAME);
         var result = JSON.stringify({ enrolled: keys.length > 0, count: keys.length });
         try { callback(result); } catch (_) { callback(""); }
-      } catch (_) {
-        try { callback(""); } catch (_) { }
+      } catch (e) {
+        console.error("crane_enrollIsEnrolled failed:", e);
+        try { callback(JSON.stringify({ enrolled: false, error: String(e) })); } catch (_) { callback(""); }
       }
     })();
   };
@@ -457,8 +464,9 @@
           return { keyId: k.id, pubkeyHex: k.pubkey };
         });
         try { callback(JSON.stringify(pubkeys)); } catch (_) { callback(""); }
-      } catch (_) {
-        try { callback(""); } catch (_) { }
+      } catch (e) {
+        console.error("crane_enrollGetPubkeys failed:", e);
+        try { callback(JSON.stringify([])); } catch (_) { callback(""); }
       }
     })();
   };

@@ -62,67 +62,75 @@ let el_value id =
 let key_id = ref ""
 let pubkey_hex = ref ""
 
+(* Simple JSON-field extraction: look for "field":"value" *)
+let extract_field field s =
+  let pat = "\"" ^ field ^ "\":\"" in
+  let pat_len = String.length pat in
+  let rec find i =
+    if i + pat_len > String.length s then ""
+    else if String.sub s i pat_len = pat then
+      let start = i + pat_len in
+      match String.index_from_opt s start '"' with
+      | None -> ""
+      | Some e -> String.sub s start (e - start)
+    else find (i + 1)
+  in find 0
+
 let on_enroll_success json_str =
   let s = Js.to_string json_str in
   if s = "" then begin
     set_text "enroll-status" "Enrollment failed. Make sure your browser supports WebAuthn."
-  end else begin
-    (* Simple JSON-field extraction without a parser: look for "keyId":"..." *)
-    let rec extract_field field s =
-      let pat = "\"" ^ field ^ "\":\"" in
-      let pat_len = String.length pat in
-      let rec find i =
-        if i + pat_len > String.length s then ""
-        else if String.sub s i pat_len = pat then
-          let start = i + pat_len in
-          match String.index_from_opt s start '"' with
-          | None -> ""
-          | Some e -> String.sub s start (e - start)
-        else find (i + 1)
-      in find 0
-    in
-    key_id := extract_field "keyId" s;
-    pubkey_hex := extract_field "pubkeyHex" s;
-    if !key_id = "" || !pubkey_hex = "" then
-      set_text "enroll-status" "Failed to parse enrollment result."
-    else begin
-      hide_el "enroll-ui";
-      show_el "enroll-result";
-      set_text "reader-key-id" !key_id;
-      set_text "reader-pubkey-hex" !pubkey_hex;
+  end else
+    let err = extract_field "error" s in
+    if err <> "" then begin
+      set_text "enroll-status" ("Enrollment failed: " ^ err)
+    end else begin
+      key_id := extract_field "keyId" s;
+      pubkey_hex := extract_field "pubkeyHex" s;
+      if !key_id = "" || !pubkey_hex = "" then
+        set_text "enroll-status" "Failed to parse enrollment result."
+      else begin
+        hide_el "enroll-ui";
+        show_el "enroll-result";
+        set_text "reader-key-id" !key_id;
+        set_text "reader-pubkey-hex" !pubkey_hex;
+      end
     end
-  end
 
 let on_is_enrolled json_str =
   let s = Js.to_string json_str in
   if s = "" then
     set_text "enroll-status" "Failed to check enrollment status."
   else
-    let rec find_bool field s =
-      let pat = "\"" ^ field ^ "\":" in
-      let pat_len = String.length pat in
-      let rec find i =
-        if i + pat_len > String.length s then false
-        else if String.sub s i pat_len = pat then
-          String.sub s (i + pat_len) 4 = "true"
-        else find (i + 1)
-      in find 0
-    in
-    if find_bool "enrolled" s then begin
-      hide_el "enroll-ui";
-      set_text "enroll-existing-status" "You already have a reader key enrolled on this device.";
-      show_el "enroll-existing";
-      (* Fetch and display existing keys *)
-      let cb = Js.wrap_callback (fun result ->
-        let keys = Js.to_string result in
-        if keys <> "" then begin
-          set_text "enroll-existing-info" ("Enrolled keys: " ^ keys)
-        end
-      ) in
-      crane_enrollGetPubkeys cb
-    end else begin
-      show_el "enroll-ui"
-    end
+    let err = extract_field "error" s in
+    if err <> "" then begin
+      set_text "enroll-status" ("Enrollment check failed: " ^ err)
+    end else
+      let found =
+        let pat = "\"enrolled\":" in
+        let pat_len = String.length pat in
+        let rec find i =
+          if i + pat_len > String.length s then false
+          else if String.sub s i pat_len = pat then
+            String.sub s (i + pat_len) 4 = "true"
+          else find (i + 1)
+        in find 0
+      in
+      if found then begin
+        hide_el "enroll-ui";
+        set_text "enroll-existing-status" "You already have a reader key enrolled on this device.";
+        show_el "enroll-existing";
+        (* Fetch and display existing keys *)
+        let cb = Js.wrap_callback (fun result ->
+          let keys = Js.to_string result in
+          if keys <> "" then begin
+            set_text "enroll-existing-info" ("Enrolled keys: " ^ keys)
+          end
+        ) in
+        crane_enrollGetPubkeys cb
+      end else begin
+        show_el "enroll-ui"
+      end
 
 let () =
   match el_by_id "enroll-button" with
