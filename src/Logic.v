@@ -419,7 +419,7 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "</article>" ::
       "<noscript><p class='decrypt-fallback'>To read, you need JavaScript enabled for client-side decryption.</p></noscript>" ::
       "<script src='" :: prefix :: "static/crane_bridge.js?v=1' defer></script>" ::
-      "<script src='" :: prefix :: "static/decrypt.js?v=3' defer></script>" ::
+      "<script src='" :: prefix :: "static/decrypt.js?v=4' defer></script>" ::
       "</main>" :: nil) in
   page_shell "../" title "essay eml-page" "index" "../index.html" body.
 
@@ -447,7 +447,7 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       "</ul>" :: "</main>" ::
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
       "<script src='static/crane_bridge.js?v=1' defer></script>" ::
-      "<script src='static/decrypt.js?v=3' defer></script>" :: nil) in
+      "<script src='static/decrypt.js?v=4' defer></script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
 
 (* ---- Enrollment page ----------------------------------------------- *)
