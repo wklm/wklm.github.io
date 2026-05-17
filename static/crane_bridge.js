@@ -159,22 +159,32 @@
   // HPKE-base decrypt: derive CEK from ECDH(priv, encapsulated_pub), then AES-GCM decrypt.
   // ct_package: nonce(12) || ciphertext || tag(16)
   async function _hpkeDecrypt(privKeyJwk, encPubRaw, ctPackage) {
-    var encPub = await crypto.subtle.importKey(
-      "raw", encPubRaw,
-      { name: "ECDH", namedCurve: "P-256" },
-      false, ["deriveBits"]
-    );
+    var encPub;
+    try {
+      encPub = await crypto.subtle.importKey(
+        "raw", encPubRaw,
+        { name: "ECDH", namedCurve: "P-256" },
+        false, ["deriveBits"]
+      );
+    } catch (e) {
+      throw new Error("import encPub failed: " + e + " (len=" + encPubRaw.length + ")");
+    }
     // Clean JWK: strip fields that conflict with explicit usages
     var jwk = JSON.parse(JSON.stringify(privKeyJwk));
     delete jwk.key_ops;
     delete jwk.use;
     delete jwk.alg;
     delete jwk.ext;
-    var privKey = await crypto.subtle.importKey(
-      "jwk", jwk,
-      { name: "ECDH", namedCurve: "P-256" },
-      false, ["deriveBits"]
-    );
+    var privKey;
+    try {
+      privKey = await crypto.subtle.importKey(
+        "jwk", jwk,
+        { name: "ECDH", namedCurve: "P-256" },
+        false, ["deriveBits"]
+      );
+    } catch (e) {
+      throw new Error("import privKey failed: " + e);
+    }
 
     // ECDH key agreement
     var sharedBits = await crypto.subtle.deriveBits(
