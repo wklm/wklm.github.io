@@ -1,6 +1,13 @@
 // crane_bridge.js — Browser API bridge for Crane blog encryption.
-// Replaces openpgp_bridge.js.  All crypto is done via the Web Crypto API;
-// WebAuthn handles passkey-based reader identity.
+// All crypto is done via the Web Crypto API; WebAuthn handles
+// passkey-based reader identity.  MIME parsing and hex/base64 utilities
+// are specified by src/MimeLib.v and src/StringLib.v (Rocq); this JS
+// is the hand-written runtime bridge.
+//
+// Migration plan (Phase 3):
+//   Sections tagged [REPLACE:jsoo] below will be replaced by
+//   js_of_ocaml-compiled Rocq extraction from MimeLib.v.
+//   Sections tagged [KEEP:browser-api] are browser-specific and stay.
 //
 // Exported global functions (called from OCaml via js_of_ocaml externals):
 //   crane_sessionStorageGet(key) -> string
@@ -17,7 +24,7 @@
   const DB_NAME = "crane-blog-v2";
   const DB_VERSION = 1;
   const STORE_NAME = "reader-keys";
-  const PASKEY_STORE = "passkeys";
+  const PASSKEY_STORE = "passkeys";
 
   const HPKE_INFO = new TextEncoder().encode("crane-blog-hpke-v1");
   const WRAP_INFO = new TextEncoder().encode("crane-blog-wrap-v1");
@@ -46,8 +53,8 @@
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: "id" });
         }
-        if (!db.objectStoreNames.contains(PASKEY_STORE)) {
-          db.createObjectStore(PASKEY_STORE, { keyPath: "credentialId" });
+        if (!db.objectStoreNames.contains(PASSKEY_STORE)) {
+          db.createObjectStore(PASSKEY_STORE, { keyPath: "credentialId" });
         }
       };
       req.onsuccess = function () { resolve(req.result); };
@@ -91,6 +98,8 @@
     });
   }
 
+  // [REPLACE:jsoo] Hex utilities — specified by StringLib.v hex_encode.
+  // To be replaced by js_of_ocaml extraction from StringLib.v.
   // ---- Binary helpers ----
 
   function _bufToHex(buf) {
@@ -174,7 +183,7 @@
 
   // ---- HPKE decrypt using Web Crypto ----
 
-  async function _hpkeDecrypt(privKeyJwk, encPubRaw, ctPackage) {
+  async function _hpkeDecrypt(privKeyJwk, encPubRaw, ctPackage, aad) {
     // Import encapsulated key as JWK (universally supported, unlike raw)
     var encPubJwk = _rawPubToJwk(encPubRaw);
     var encPub;
@@ -212,23 +221,23 @@
     );
     var shared = new Uint8Array(sharedBits);
 
-    // Custom KDF matching crane_crypto.ml hkdf_sha256:
+    // Custom KDF matching crane_crypto.ml custom_kdf_sha256:
     //   PRK = SHA-256(32 zero bytes || shared_secret)
     //   CEK = SHA-256(PRK || "crane-blog-wrap-v1" || 0x01)
-    var cek = await _customKdf(shared, WRAP_INFO);
+    var cek = await customKdf(shared, WRAP_INFO);
 
     // AES-GCM decrypt
     var nonce = ctPackage.slice(0, 12);
     var tag = ctPackage.slice(ctPackage.length - 16);
     var ct = ctPackage.slice(12, ctPackage.length - 16);
 
-    return await _aesGcmDecrypt(cek, nonce, ct, tag);
+    return await _aesGcmDecrypt(cek, nonce, ct, tag, aad);
   }
 
-  // Custom KDF — matches crane_crypto.ml hkdf_sha256:
+  // Custom KDF — matches crane_crypto.ml custom_kdf_sha256:
   //   PRK = SHA-256(32 zero bytes || ikm)
   //   OKM = SHA-256(PRK || info || 0x01)
-  async function _customKdf(ikm, info) {
+  async function customKdf(ikm, info) {
     var salt = new Uint8Array(32);
     var prkInput = new Uint8Array(32 + ikm.length);
     prkInput.set(salt, 0);
@@ -243,15 +252,19 @@
   }
 
   // AES-256-GCM decrypt
-  async function _aesGcmDecrypt(keyBytes, nonce, ciphertext, tag) {
+  async function _aesGcmDecrypt(keyBytes, nonce, ciphertext, tag, aad) {
     var key = await crypto.subtle.importKey(
       "raw", keyBytes,
       { name: "AES-GCM", length: 256 },
       false, ["decrypt"]
     );
     var combined = _concatBufs(ciphertext, tag);
+    var params = { name: "AES-GCM", iv: nonce, tagLength: 128 };
+    if (aad && aad.length > 0) {
+      params.additionalData = aad;
+    }
     var plaintext = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: nonce, tagLength: 128 },
+      params,
       key,
       combined
     );
@@ -382,6 +395,8 @@
     return "";
   }
 
+  // [REPLACE:jsoo] MIME envelope parser — to be replaced by
+  // extracted MimeLib.v via js_of_ocaml.  Hand-written for now.
   function _parseDecryptMeta(ciphertextElement) {
     var text = ciphertextElement.textContent || "";
     var result = _parseHeaders(text);
@@ -480,7 +495,7 @@
 
         // Step 3: Store passkey reference
         var rawId = new Uint8Array(cred.rawId);
-        await _dbPut(PASKEY_STORE, {
+        await _dbPut(PASSKEY_STORE, {
           credentialId: _bufToHex(rawId),
           keyId: keyId
         });
@@ -593,7 +608,7 @@
         }
         diag.push("matched: " + matchingKey.id);
 
-        var passkeys = await _dbGetAll(PASKEY_STORE);
+        var passkeys = await _dbGetAll(PASSKEY_STORE);
         var matchedPasskey = null;
         for (var j = 0; j < passkeys.length; j++) {
           if (passkeys[j].keyId === matchingKey.id) {
@@ -615,13 +630,21 @@
               }
             });
           } catch (authErr) {
-            diag.push("WebAuthn: " + authErr);
+            _showError("WebAuthn authentication failed. Please authenticate to decrypt this post. Error: " + authErr);
+            return;
           }
         }
 
         var unwrappedCek = await _hpkeDecrypt(
-          matchingKey.privkeyJwk, matchingWrap.ek, matchingWrap.wrapped
+          matchingKey.privkeyJwk, matchingWrap.ek, matchingWrap.wrapped,
+          new TextEncoder().encode(matchingKey.id)
         );
+        if (!unwrappedCek) {
+          unwrappedCek = await _hpkeDecrypt(
+            matchingKey.privkeyJwk, matchingWrap.ek, matchingWrap.wrapped,
+            null
+          );
+        }
         diag.push("CEK unwrapped: " + (unwrappedCek ? unwrappedCek.length + " bytes" : "FAILED"));
 
         if (!unwrappedCek) {
@@ -632,7 +655,13 @@
         var nonce = meta.ctBytes.slice(0, 12);
         var tag = meta.ctBytes.slice(meta.ctBytes.length - 16);
         var ct = meta.ctBytes.slice(12, meta.ctBytes.length - 16);
-        var decrypted = await _aesGcmDecrypt(unwrappedCek, nonce, ct, tag);
+        var pathParts = window.location.pathname.replace(/\/$/, "").split("/");
+        var slug = pathParts[pathParts.length - 1] || "post";
+        var decrypted = await _aesGcmDecrypt(unwrappedCek, nonce, ct, tag,
+          new TextEncoder().encode(slug));
+        if (!decrypted) {
+          decrypted = await _aesGcmDecrypt(unwrappedCek, nonce, ct, tag, null);
+        }
         diag.push("decrypted: " + (decrypted ? decrypted.length + " bytes" : "FAILED"));
 
         if (!decrypted) {

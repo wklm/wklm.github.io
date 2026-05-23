@@ -3,7 +3,7 @@
    Crypto is delegated to Crane_crypto (mirage_crypto + digestif).
    Replaces the old gpg-based RFC 3156 PGP/MIME pipeline. *)
 
-open Pgp_mime
+open Io_helpers
 
 let usage () =
   prerr_endline "usage: encrypt_post [--stage] <posts/slug.md> [...]";
@@ -132,26 +132,27 @@ let resolve_recipients meta =
 let hpke_encrypt pkR_raw plaintext =
   let epk_raw, esk_raw = Crane_crypto.ecdh_p256_generate () in
   let dh_raw = Crane_crypto.ecdh_p256_agree esk_raw pkR_raw in
-  let cek = Crane_crypto.hkdf_sha256 "" dh_raw "crane-blog-hpke-v1" 32 in
+  let cek = Crane_crypto.custom_kdf_sha256 "" dh_raw "crane-blog-hpke-v1" 32 in
   let nonce = Crane_crypto.random_bytes 12 in
   let ct, tag = Crane_crypto.aes_256_gcm_encrypt cek nonce plaintext "" in
   (epk_raw, nonce ^ ct ^ tag)
 
 (* HPKE wrap CEK for a recipient.
    Returns (encapsulated_key_raw, wrapped_package) *)
-let hpke_wrap_cek cek pkR_raw =
+let hpke_wrap_cek cek pkR_raw key_id =
   let epk_raw, esk_raw = Crane_crypto.ecdh_p256_generate () in
   let dh_raw = Crane_crypto.ecdh_p256_agree esk_raw pkR_raw in
-  let wrapping_key = Crane_crypto.hkdf_sha256 "" dh_raw "crane-blog-wrap-v1" 32 in
+  let wrapping_key = Crane_crypto.custom_kdf_sha256 "" dh_raw "crane-blog-wrap-v1" 32 in
   let nonce = Crane_crypto.random_bytes 12 in
-  let wrapped, tag = Crane_crypto.aes_256_gcm_encrypt wrapping_key nonce cek "" in
+  let wrapped, tag = Crane_crypto.aes_256_gcm_encrypt wrapping_key nonce cek key_id in
   (epk_raw, nonce ^ wrapped ^ tag)
 
 (* AES-256-GCM encrypt the post body with the CEK.
-   Returns nonce(12) || ciphertext || tag(16) *)
-let encrypt_body cek body =
+   Returns nonce(12) || ciphertext || tag(16).
+   AAD binds the ciphertext to a specific post slug. *)
+let encrypt_body cek body slug =
   let nonce = Crane_crypto.random_bytes 12 in
-  let ct, tag = Crane_crypto.aes_256_gcm_encrypt cek nonce body "" in
+  let ct, tag = Crane_crypto.aes_256_gcm_encrypt cek nonce body slug in
   nonce ^ ct ^ tag
 
 (* ---- RFC 5322 Date -------------------------------------------------- *)
@@ -296,12 +297,12 @@ let encrypt_one ~stage md_path =
 
   (* Generate CEK and encrypt body *)
   let cek = Crane_crypto.random_bytes 32 in
-  let ct_package = encrypt_body cek inner_mime in
+  let ct_package = encrypt_body cek inner_mime slug in
 
   (* Wrap CEK for each recipient *)
   let wrapped_entries =
     List.map (fun (keyid, _hex, raw_pk) ->
-      let ek_raw, wrapped_pkg = hpke_wrap_cek cek raw_pk in
+      let ek_raw, wrapped_pkg = hpke_wrap_cek cek raw_pk keyid in
       (keyid, hex_encode ek_raw, hex_encode wrapped_pkg)
     ) public_keys
   in

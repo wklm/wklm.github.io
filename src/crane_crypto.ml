@@ -33,11 +33,7 @@ let ecdh_p256_agree sk_bytes pk_bytes =
 
 let random_bytes n =
   if n <= 0 then "" else
-  let ic = open_in_bin "/dev/urandom" in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+  Mirage_crypto_rng.generate n
 
 (* ---- AES-256-GCM ---- *)
 
@@ -60,7 +56,7 @@ let sha256 data =
 
 (* ---- KDF: SHA-256 based (simple, sufficient for blog encryption) ---- *)
 
-let hkdf_sha256 _salt ikm info _len =
+let custom_kdf_sha256 _salt ikm info _len =
   (* HKDF extract — use SHA-256(zero_salt || ikm) *)
   let prk = sha256 (String.make 32 '\x00' ^ ikm) in
   (* HKDF expand — single step: SHA-256(prk || info || 0x01) *)
