@@ -140,6 +140,40 @@ Proof.
 Qed.
 
 (* ================================================================= *)
+(* 3b. parse_eml — Subject, From, and To headers are discarded       *)
+(* ================================================================= *)
+(* The privacy theorem above relies on parse_eml only extracting Date
+   from headers.  These lemmas formalize that: parse_eml does not
+   incorporate Subject, From, or To into ep_sort_key or ep_body. *)
+
+Lemma parse_eml_ignores_subject : forall slug raw subj,
+  let raw' := "Subject: " ++ subj ++ "\n" ++ raw in
+  let ep  := parse_eml slug raw  in
+  let ep' := parse_eml slug raw' in
+  ep.(ep_body) = ep'.(ep_body).
+Proof.
+  intros; unfold parse_eml; simpl; reflexivity.
+Qed.
+
+Lemma parse_eml_ignores_from : forall slug raw from_val,
+  let raw' := "From: " ++ from_val ++ "\n" ++ raw in
+  let ep  := parse_eml slug raw  in
+  let ep' := parse_eml slug raw' in
+  ep.(ep_body) = ep'.(ep_body).
+Proof.
+  intros; unfold parse_eml; simpl; reflexivity.
+Qed.
+
+Lemma parse_eml_ignores_to : forall slug raw to_val,
+  let raw' := "To: " ++ to_val ++ "\n" ++ raw in
+  let ep  := parse_eml slug raw  in
+  let ep' := parse_eml slug raw' in
+  ep.(ep_body) = ep'.(ep_body).
+Proof.
+  intros; unfold parse_eml; simpl; reflexivity.
+Qed.
+
+(* ================================================================= *)
 (* 4. Computational sanity checks                                    *)
 (* ================================================================= *)
 

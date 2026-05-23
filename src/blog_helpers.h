@@ -22,26 +22,8 @@
 // which is O(n^2) in the total output length; this version walks the list
 // twice -- once to sum the sizes, once to append -- so the allocation count
 // is bounded by a single [reserve] plus one [std::string] output.
-template <typename List>
-inline std::string concat_all_std(const std::shared_ptr<List>& xs) {
-    using Nil = typename List::Nil;
-    using Cons = typename List::Cons;
-    std::size_t total = 0;
-    for (auto p = xs; p && !std::holds_alternative<Nil>(p->v()); ) {
-        const auto& c = std::get<Cons>(p->v());
-        total += c.d_a0.size();
-        p = c.d_a1;
-    }
-    std::string out;
-    out.reserve(total);
-    for (auto p = xs; p && !std::holds_alternative<Nil>(p->v()); ) {
-        const auto& c = std::get<Cons>(p->v());
-        out.append(c.d_a0);
-        p = c.d_a1;
-    }
-    return out;
-}
-
+//
+// Crane generates List<T> with Cons fields: T a; unique_ptr<List<T>> l;
 template <typename List>
 inline std::string concat_all_std(const List& xs) {
     using Nil = typename List::Nil;
@@ -49,15 +31,15 @@ inline std::string concat_all_std(const List& xs) {
     std::size_t total = 0;
     for (auto p = &xs; p && !std::holds_alternative<Nil>(p->v()); ) {
         const auto& c = std::get<Cons>(p->v());
-        total += c.d_a0.size();
-        p = c.d_a1.get();
+        total += c.a.size();
+        p = c.l.get();
     }
     std::string out;
     out.reserve(total);
     for (auto p = &xs; p && !std::holds_alternative<Nil>(p->v()); ) {
         const auto& c = std::get<Cons>(p->v());
-        out.append(c.d_a0);
-        p = c.d_a1.get();
+        out.append(c.a);
+        p = c.l.get();
     }
     return out;
 }
