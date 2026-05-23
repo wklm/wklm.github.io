@@ -302,7 +302,7 @@ let set_html id html =
 
 let set_text id text =
   match el_by_id id with
-  | Some el -> el##.innerHTML := Js.string text
+  | Some el -> el##.textContent := Js.some (Js.string text)
   | None -> ()
 
 (* ======== Minimal markdown cleanup ==================================== *)
