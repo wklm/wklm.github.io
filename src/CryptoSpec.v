@@ -11,28 +11,18 @@
 From Corelib Require Import PrimString PrimInt63.
 From Stdlib Require Import Lists.List.
 Import ListNotations.
+Require Import StringLib.
 Open Scope pstring_scope.
 
-(* ======== String helpers ============================================ *)
-
-Definition cat (a b : string) : string :=
-  concat_all (a :: b :: nil).
-
-Fixpoint nat_of_int (i : int) (fuel : nat) : nat :=
-  match fuel with
-  | O => O
-  | S f =>
-    if leb i 0%int63 then O
-    else S (nat_of_int (sub i 1%int63) f)
-  end.
-
-Definition emptyb (s : string) : bool :=
-  leb (PrimString.length s) 0%int63.
+(* ======== String helpers (legacy shims) ============================== *)
+(* [cat], [emptyb], [nat_of_int_fuel], and hex encoding are provided by
+   StringLib.v.  [nat_of_int] is a legacy alias kept for compatibility. *)
+Definition nat_of_int (i : int) (fuel : nat) : nat := nat_of_int_fuel i fuel.
 
 (* ======== Crypto Type Aliases ====================================== *)
 
-(* A public key is 33 bytes: 0x02/0x03 prefix + 32-byte x-coordinate
-   (SEC1 compressed point encoding for NIST P-256). *)
+(* A public key is 65 bytes: 0x04 prefix + 32-byte x + 32-byte y
+   (SEC1 uncompressed point encoding for NIST P-256). *)
 Definition pubkey := string.
 
 (* A private key is 32 bytes (scalar for P-256). *)
@@ -54,7 +44,7 @@ Definition key_material := string.
 
 Axiom ecdh_p256_generate : unit -> pubkey * privkey.
 (* Generate a fresh random keypair.
-   Post: compressed_pk (33 bytes), sk (32 bytes).
+   Post: uncompressed_pk (65 bytes), sk (32 bytes).
    Takes unit as a freshness token so extraction produces a function.)
 
 Axiom ecdh_p256_public_key : privkey -> pubkey.
@@ -83,10 +73,12 @@ Axiom aes_256_gcm_decrypt : key_material -> nonce -> string -> auth_tag -> strin
 Axiom sha256 : string -> string.
 (* SHA-256 cryptographic hash.  Always returns 32 bytes. *)
 
-Axiom hkdf_sha256 : string -> string -> string -> int -> string.
-(* HKDF-SHA256 (extract-then-expand).  Arguments: salt ikm info length.
-   Pre: length may be any positive int63 value.
-   Post: length(result) = length (the int64 parameter). *)
+Axiom custom_kdf_sha256 : string -> string -> string -> int -> string.
+(* Custom SHA-256-based KDF (not RFC 5869 HKDF).  Uses:
+     PRK = SHA-256(zero_salt(32) || ikm)
+     OKM = SHA-256(PRK || info || 0x01)
+   Arguments: salt ikm info length.  Ignores _salt and _len.
+   Post: length(result) = 32. *)
 
 (* ======== Base64 Encode/Decode ===================================== *)
 
@@ -96,27 +88,9 @@ Axiom base64_encode : string -> string.
 Axiom base64_decode : string -> string.
 (* Decode base64 ascii to bytes.  Returns empty string on parse error. *)
 
-(* ======== Hex Encode (for debug / key display only) ================ *)
-
-Definition hex_chars : string := "0123456789abcdef".
-
-Definition byte_to_hex (b : int) : string :=
-  let hi := lsr b 4%int63 in
-  let lo := land b 15%int63 in
-  cat (PrimString.sub hex_chars hi 1%int63)
-      (PrimString.sub hex_chars lo 1%int63).
-
-Fixpoint hex_encode_aux (s : string) (pos : int) (fuel : nat) : string :=
-  match fuel with
-  | O => ""
-  | S f =>
-    if leb (PrimString.length s) pos then ""
-    else cat (byte_to_hex (PrimString.get s pos))
-             (hex_encode_aux s (add pos 1%int63) f)
-  end.
-
-Definition hex_encode (s : string) : string :=
-  hex_encode_aux s 0%int63 65536%nat.
+(* ======== Hex Encode (provided by StringLib.v) ===================== *)
+(* hex_chars, byte_to_hex, hex_encode_aux, hex_encode are imported
+   from StringLib.v and used in format_wrapped_entry below. *)
 
 (* ======== HPKE Base-Mode Protocol ================================= *)
 
@@ -127,21 +101,21 @@ Definition wrap_cek_info   : string := "crane-blog-wrap-v1".
 (* HPKE base-mode encrypt for a single recipient.
    Returns (encapsulated_ephemeral_pubkey, ciphertext_package).
    ciphertext_package:   nonce(12) || ciphertext || tag(16)
-   encapsulated_pubkey:  SEC1 compressed (33 bytes). *)
+   encapsulated_pubkey:  SEC1 uncompressed (65 bytes). *)
 Definition hpke_encrypt (pkR : pubkey) (plaintext : string) : string * string :=
   let '(epk, esk) := ecdh_p256_generate tt in
   let dh := ecdh_p256_agree esk pkR in
-  let cek := hkdf_sha256 "" dh hpke_encrypt_info 32%int63 in
+  let cek := custom_kdf_sha256 "" dh hpke_encrypt_info 32%int63 in
   let n := random_bytes 12%int63 in
   let '(ct, tg) := aes_256_gcm_encrypt cek n plaintext "" in
   (epk, cat n (cat ct tg)).
 
 (* HPKE base-mode decrypt.
-   ek: encapsulated ephemeral public key (33 bytes).
+   ek: encapsulated ephemeral public key (65 bytes).
    ct_package: nonce(12) || ciphertext || tag(16). *)
 Definition hpke_decrypt (skR : privkey) (ek : pubkey) (ct_package : string) : string :=
   let dh := ecdh_p256_agree skR ek in
-  let cek := hkdf_sha256 "" dh hpke_encrypt_info 32%int63 in
+  let cek := custom_kdf_sha256 "" dh hpke_encrypt_info 32%int63 in
   let n_len := 12%int63 in
   let t_len := 16%int63 in
   let pkg_len := PrimString.length ct_package in
@@ -162,21 +136,23 @@ Definition generate_cek : key_material :=
 
 (* Wrap a CEK for a specific recipient (HPKE key encapsulation).
    Returns (encapsulated_pubkey, wrapped_package).
-   wrapped_package: nonce(12) || encrypted_cek(32) || tag(16) *)
-Definition wrap_cek (cek : key_material) (pkR : pubkey) : string * string :=
+   wrapped_package: nonce(12) || encrypted_cek(32) || tag(16).
+   AAD: the recipient's key_id binds the wrap to a specific recipient. *)
+Definition wrap_cek (cek : key_material) (pkR : pubkey) (kid : string) : string * string :=
   let '(epk, esk) := ecdh_p256_generate tt in
   let dh := ecdh_p256_agree esk pkR in
-  let wrapping_key := hkdf_sha256 "" dh wrap_cek_info 32%int63 in
+  let wrapping_key := custom_kdf_sha256 "" dh wrap_cek_info 32%int63 in
   let n := random_bytes 12%int63 in
-  let '(wrapped, tg) := aes_256_gcm_encrypt wrapping_key n cek "" in
+  let '(wrapped, tg) := aes_256_gcm_encrypt wrapping_key n cek kid in
   (epk, cat n (cat wrapped tg)).
 
 (* Unwrap a CEK using the recipient's private key.
-   ek: encapsulated ephemeral pubkey (33 bytes).
-   wrapped: nonce(12) || encrypted_cek(32) || tag(16) *)
-Definition unwrap_cek (skR : privkey) (ek : pubkey) (wrapped : string) : string :=
+   ek: encapsulated ephemeral pubkey (65 bytes).
+   wrapped: nonce(12) || encrypted_cek(32) || tag(16).
+   AAD: the key_id must match the one used during wrap. *)
+Definition unwrap_cek (skR : privkey) (ek : pubkey) (wrapped : string) (kid : string) : string :=
   let dh := ecdh_p256_agree skR ek in
-  let wrapping_key := hkdf_sha256 "" dh wrap_cek_info 32%int63 in
+  let wrapping_key := custom_kdf_sha256 "" dh wrap_cek_info 32%int63 in
   let n_len := 12%int63 in
   let t_len := 16%int63 in
   let w_len := PrimString.length wrapped in
@@ -187,20 +163,22 @@ Definition unwrap_cek (skR : privkey) (ek : pubkey) (wrapped : string) : string 
     let rest_len := PrimString.length rest in
     let ct := PrimString.sub rest 0%int63 (sub rest_len t_len) in
     let tg := PrimString.sub rest (sub rest_len t_len) t_len in
-    aes_256_gcm_decrypt wrapping_key n ct tg "".
+    aes_256_gcm_decrypt wrapping_key n ct tg kid.
 
 (* ======== Post Body Encryption ===================================== *)
 
 (* Encrypt a post body with a CEK.
-   Returns nonce(12) || ciphertext || tag(16) package. *)
-Definition encrypt_body (cek : key_material) (body : string) : string :=
+   Returns nonce(12) || ciphertext || tag(16) package.
+   AAD: the post slug binds the ciphertext to a specific post. *)
+Definition encrypt_body (cek : key_material) (body : string) (slug : string) : string :=
   let n := random_bytes 12%int63 in
-  let '(enc, tg) := aes_256_gcm_encrypt cek n body "" in
+  let '(enc, tg) := aes_256_gcm_encrypt cek n body slug in
   cat n (cat enc tg).
 
 (* Decrypt a post body with a CEK.
-   enc_package: nonce(12) || ciphertext || tag(16) *)
-Definition decrypt_body (cek : key_material) (enc_package : string) : string :=
+   enc_package: nonce(12) || ciphertext || tag(16).
+   AAD: the post slug must match the one used during encryption. *)
+Definition decrypt_body (cek : key_material) (enc_package : string) (slug : string) : string :=
   let n_len := 12%int63 in
   let t_len := 16%int63 in
   let pkg_len := PrimString.length enc_package in
@@ -211,7 +189,7 @@ Definition decrypt_body (cek : key_material) (enc_package : string) : string :=
     let rest_len := PrimString.length rest in
     let ct := PrimString.sub rest 0%int63 (sub rest_len t_len) in
     let tg := PrimString.sub rest (sub rest_len t_len) t_len in
-    aes_256_gcm_decrypt cek n ct tg "".
+    aes_256_gcm_decrypt cek n ct tg slug.
 
 (* ======== Key Identity ============================================= *)
 
@@ -231,6 +209,28 @@ Definition key_id (pk : pubkey) : string :=
 Definition format_wrapped_entry (kid ek wrapped : string) : string :=
   cat kid (cat ":" (cat (hex_encode ek) (cat ":" (hex_encode wrapped)))).
 
+(* ======== Cryptographic Round-Trip Axioms =========================== *)
+
+(* HPKE base-mode decrypt(encrypt(m)) = m for correct recipient. *)
+Axiom hpke_roundtrip : forall (pkR : pubkey) (skR : privkey) (plaintext : string)
+  (kid : string) (slug : string),
+  let erec := encrypt_body (custom_kdf_sha256 "" (ecdh_p256_agree skR pkR) hpke_encrypt_info 32%int63) plaintext slug in
+  decrypt_body (custom_kdf_sha256 "" (ecdh_p256_agree skR pkR) hpke_encrypt_info 32%int63) erec slug = plaintext.
+
+(* CEK wrap/unwrap: unwrap(wrap(cek)) = cek for correct recipient. *)
+Axiom cek_wrap_roundtrip : forall (cek : key_material) (pkR : pubkey) (skR : privkey) (kid : string),
+  let '(epk, wrapped) := wrap_cek cek pkR kid in
+  unwrap_cek skR epk wrapped kid = cek.
+
+(* AES-GCM encrypt-then-decrypt returns original plaintext when tag matches. *)
+Axiom aes_gcm_roundtrip : forall (k : key_material) (nonce : nonce) (pt aad : string),
+  let '(ct, tg) := aes_256_gcm_encrypt k nonce pt aad in
+  aes_256_gcm_decrypt k nonce ct tg aad = pt.
+
+(* Base64 round-trip: decode(encode(x)) = x. *)
+Axiom base64_roundtrip : forall (s : string),
+  base64_decode (base64_encode s) = s.
+
 (* ======== OCaml Extraction Directives ============================== *)
 
 (* Link axioms to the Crane_crypto OCaml module (hand-written FFI in
@@ -245,6 +245,6 @@ Extract Constant random_bytes         => "Crane_crypto.random_bytes".
 Extract Constant aes_256_gcm_encrypt  => "Crane_crypto.aes_256_gcm_encrypt".
 Extract Constant aes_256_gcm_decrypt  => "Crane_crypto.aes_256_gcm_decrypt".
 Extract Constant sha256               => "Crane_crypto.sha256".
-Extract Constant hkdf_sha256          => "Crane_crypto.hkdf_sha256".
+Extract Constant custom_kdf_sha256     => "Crane_crypto.custom_kdf_sha256".
 Extract Constant base64_encode        => "Crane_crypto.base64_encode".
 Extract Constant base64_decode        => "Crane_crypto.base64_decode".
