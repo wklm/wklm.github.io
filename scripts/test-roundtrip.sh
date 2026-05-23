@@ -38,6 +38,7 @@ cleanup() {
     fi
     rm -rf "$scratch"
     rm -f posts/fixture.md posts/fixture.bin posts-encrypted/fixture.eml
+    rm -f posts/fixture-noaad.md posts-encrypted/fixture-noaad.eml
     rm -f "keys/${key_id:-}.pub"
 }
 trap cleanup EXIT
@@ -130,6 +131,89 @@ if [[ -n "$roundtripped_img_sha" && "$orig_img_sha" != "$roundtripped_img_sha" ]
     exit 1
 fi
 echo "round-trip OK"
+
+# ---- AAD backward-compat fallback test ----
+# Builds a second .eml encrypted with empty AAD (old format before the
+# key_id + slug AAD binding was added) and verifies decrypt_post's
+# fallback path handles it correctly.
+echo "Testing AAD backward-compat fallback..."
+
+# SPKI DER prefix for P-256 so openssl pkeyutl -derive can read the
+# raw uncompressed public key as a valid SubjectPublicKeyInfo.
+spki_prefix="3059301306072a8648ce3d020106082a8648ce3d030107034200"
+printf '%s%s' "$spki_prefix" "$pub_hex" | xxd -r -p > "$scratch/recipient.der"
+openssl pkey -pubin -inform DER -in "$scratch/recipient.der" \
+  -out "$scratch/recipient.pem" 2>/dev/null
+
+# Ephemeral keypair for the no-AAD wrap
+openssl ecparam -name prime256v1 -genkey -noout \
+  -out "$scratch/eph-noaad.pem" 2>/dev/null
+eph_pub_noaad_hex=$(openssl ec -in "$scratch/eph-noaad.pem" \
+  -pubout -conv_form uncompressed 2>/dev/null |
+  openssl pkey -pubin -outform DER 2>/dev/null |
+  tail -c 65 | xxd -p -c 999 | tr -d '\n')
+
+# Derive wrapping key via custom KDF (matches custom_kdf_sha256 in crane_crypto.ml)
+openssl pkeyutl -derive -inkey "$scratch/eph-noaad.pem" \
+  -peerkey "$scratch/recipient.pem" -out "$scratch/noaad-shared.bin" 2>/dev/null
+
+custom_kdf_hex() {
+  local info="$1"
+  local prk info_hex
+  prk=$( (printf '\x00%.0s' {1..32}; cat "$scratch/noaad-shared.bin") |
+    shasum -a 256 | cut -d' ' -f1)
+  info_hex=$(printf '%s' "$info" | xxd -p)
+  (printf '%s' "$prk" | xxd -r -p;
+   printf '%s' "$info_hex" | xxd -r -p;
+   printf '\x01') | shasum -a 256 | cut -d' ' -f1
+}
+
+wrap_key_hex=$(custom_kdf_hex "crane-blog-wrap-v1")
+
+# Wrap a random CEK with empty AAD
+cek_noaad_hex=$(openssl rand -hex 32)
+wrap_nonce_hex=$(openssl rand -hex 12)
+wrapped_pkg_hex="${wrap_nonce_hex}$(
+  printf '%s' "$cek_noaad_hex" | xxd -r -p |
+  openssl enc -aes-256-gcm -K "$wrap_key_hex" -iv "$wrap_nonce_hex" \
+    -nosalt 2>/dev/null | xxd -p -c 999 | tr -d '\n')"
+
+# Encrypt body with empty AAD
+noaad_body="Fallback AAD test body"
+body_nonce_hex=$(openssl rand -hex 12)
+ct_package_hex="${body_nonce_hex}$(
+  printf '%s' "$noaad_body" |
+  openssl enc -aes-256-gcm -K "$cek_noaad_hex" -iv "$body_nonce_hex" \
+    -nosalt 2>/dev/null | xxd -p -c 999 | tr -d '\n')"
+ct_b64=$(printf '%s' "$ct_package_hex" | xxd -r -p | base64 | tr -d '\n')
+
+noaad_key_id=$(printf '%s' "$pub_hex" | xxd -r -p | shasum -a 256 | cut -c 1-12)
+cat > "posts-encrypted/fixture-noaad.eml" <<EOF
+Content-Type: multipart/hpke+wrapped; boundary="---noaad"
+Public-Keys: $noaad_key_id
+
+-----noaad
+Content-Type: application/wrapped-keys
+Wraps: $noaad_key_id:$eph_pub_noaad_hex:$wrapped_pkg_hex
+
+-----noaad
+Content-Type: application/aes-gcm
+Content-Transfer-Encoding: base64
+
+$ct_b64
+-----noaad--
+EOF
+
+rm -f posts/fixture-noaad.md
+"$dec" "posts-encrypted/fixture-noaad.eml"
+noaad_result=$(cat posts/fixture-noaad.md)
+if [[ "$noaad_result" != "$noaad_body" ]]; then
+    echo "FAIL: AAD backward-compat fallback decryption produced wrong output" >&2
+    echo "expected: '$noaad_body'" >&2
+    echo "got:      '$noaad_result'" >&2
+    exit 1
+fi
+echo "AAD fallback OK"
 
 # ---- Docker: build Rocq/Crane generator and site ----
 if ! command -v docker >/dev/null 2>&1; then

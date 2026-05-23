@@ -115,9 +115,7 @@ let parse_hpke_envelope eml_body =
     | None -> failf "missing boundary in Content-Type: %s" ct_val
   in
   let parts = split_multipart body boundary in
-  let wraps = ref [] in
-  let ct_b64 = ref "" in
-  List.iter (fun part ->
+  let acc = List.fold_left (fun (wraps, ct_b64) part ->
     let part = trim_part_terminator part in
     let ph, pb = split_headers_body part in
     let phdrs = parse_headers ph in
@@ -133,26 +131,31 @@ let parse_hpke_envelope eml_body =
         | None -> failf "missing Wraps header in wrapped-keys part"
       in
       let entries = String.split_on_char ',' wline in
-      wraps := List.filter_map (fun e ->
+      let new_wraps = List.filter_map (fun e ->
         let e = trim e in
         match String.split_on_char ':' e with
         | [kid; ek_hex; w_hex] ->
           Some (trim kid, hex_decode (trim ek_hex), hex_decode (trim w_hex))
         | _ -> failf "malformed wraps entry: %s" e
       ) entries
+      in
+      (new_wraps @ wraps, ct_b64)
     end else if starts_with pct "application/aes-gcm" then begin
       let cte =
         match lookup "Content-Transfer-Encoding" phdrs with
         | Some s -> String.lowercase_ascii (trim s)
         | None -> "7bit"
       in
-      if cte = "base64" then
-        ct_b64 := trim pb
-      else
-        ct_b64 := pb
-    end
-  ) parts;
-  { public_keys = pkeys; wrapped_keys = !wraps; ct_package_b64 = !ct_b64 }
+      let ct =
+        if cte = "base64" then trim pb
+        else pb
+      in
+      (wraps, ct)
+    end else
+      (wraps, ct_b64)
+  ) ([], "") parts in
+  let wraps, ct_package_b64 = acc in
+  { public_keys = pkeys; wrapped_keys = wraps; ct_package_b64 }
 
 (* ---- Main ---- *)
 
@@ -178,17 +181,13 @@ let decrypt_one eml_path sk_bytes =
   in
 
   let cek =
-    let found = ref None in
-    List.iter (fun (kid, ek_bytes, wrapped_pkg) ->
-      match !found with
-      | Some _ -> ()
+    match List.fold_left (fun acc (kid, ek_bytes, wrapped_pkg) ->
+      match acc with
+      | Some _ -> acc
       | None ->
-        (try
-           let c = unwrap_cek sk_bytes ek_bytes wrapped_pkg kid in
-           found := Some c
-         with _ -> ())
-    ) env.wrapped_keys;
-    match !found with
+        (try Some (unwrap_cek sk_bytes ek_bytes wrapped_pkg kid)
+         with _ -> None)
+    ) None env.wrapped_keys with
     | Some c -> c
     | None -> failf "none of the wrapped keys could be unwrapped with this private key"
   in

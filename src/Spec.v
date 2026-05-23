@@ -144,7 +144,14 @@ Qed.
 (* ================================================================= *)
 (* The privacy theorem above relies on parse_eml only extracting Date
    from headers.  These lemmas formalize that: parse_eml does not
-   incorporate Subject, From, or To into ep_sort_key or ep_body. *)
+   incorporate Subject, From, or To into ep_sort_key or ep_body.     *)
+(*                                                                   *)
+(* IMPORTANT: these proofs are [simpl; reflexivity] — trivial only   *)
+(* because parse_eml is defined as a structural match.  If parse_eml *)
+(* is ever extended to handle additional headers or refactored to    *)
+(* use a different control flow, these proofs WILL break silently.   *)
+(* The lemmas should be reviewed (and likely rewritten) whenever     *)
+(* parse_eml changes. *)
 
 Lemma parse_eml_ignores_subject : forall slug raw subj,
   let raw' := "Subject: " ++ subj ++ "\n" ++ raw in
