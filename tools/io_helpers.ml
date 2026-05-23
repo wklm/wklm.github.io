@@ -383,58 +383,7 @@ let build_inner_mime
   Buffer.add_string out (Printf.sprintf "--%s--\r\n" b);
   Buffer.contents out
 
-(* Build the outer RFC 3156 envelope:
-     multipart/encrypted; protocol="application/pgp-encrypted"; boundary="Y"
-     --Y
-     Content-Type: application/pgp-encrypted
-     Content-Description: PGP/MIME version identification
-
-     Version: 1
-     --Y
-     Content-Type: application/octet-stream; name="encrypted.asc"
-     Content-Description: OpenPGP encrypted message
-     Content-Disposition: inline; filename="encrypted.asc"
-
-     <armored PGP MESSAGE, verbatim>
-     --Y--
-*)
-let build_outer_envelope
-    ~visible
-    ~armored
-    () =
-  let b = make_boundary () in
-  let out = Buffer.create 4096 in
-  List.iter (fun (k, v) ->
-    if k = "Subject" then Buffer.add_string out (header_line k v)
-  ) visible;
-  Buffer.add_string out "MIME-Version: 1.0\r\n";
-  Buffer.add_string out
-    (Printf.sprintf
-       "Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"%s\"\r\n"
-       b);
-  Buffer.add_string out "\r\n";
-  Buffer.add_string out
-    "This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156).\r\n";
-  Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
-  Buffer.add_string out "Content-Type: application/pgp-encrypted\r\n";
-  Buffer.add_string out "Content-Description: PGP/MIME version identification\r\n";
-  Buffer.add_string out "\r\n";
-  Buffer.add_string out "Version: 1\r\n";
-  Buffer.add_string out (Printf.sprintf "--%s\r\n" b);
-  Buffer.add_string out
-    "Content-Type: application/octet-stream; name=\"encrypted.asc\"\r\n";
-  Buffer.add_string out "Content-Description: OpenPGP encrypted message\r\n";
-  Buffer.add_string out
-    "Content-Disposition: inline; filename=\"encrypted.asc\"\r\n";
-  Buffer.add_string out "\r\n";
-  Buffer.add_string out armored;
-  if String.length armored = 0
-     || armored.[String.length armored - 1] <> '\n'
-  then Buffer.add_string out "\r\n";
-  Buffer.add_string out (Printf.sprintf "--%s--\r\n" b);
-  Buffer.contents out
-
-(* ---- Minimal MIME parser for decrypt ---------------------------- *)
+(* ---- Minimal MIME parser ---------------------------------------- *)
 
 (* Split a message into (headers, body).  Looks for CRLF CRLF or LF LF. *)
 let split_headers_body raw =
@@ -632,14 +581,3 @@ let extract_filename headers =
   in
   List.find_map scan candidates
 
-(* Return the Content-Type major/minor, lowercased. *)
-let content_type headers =
-  match lookup "Content-Type" headers with
-  | None -> "text/plain"
-  | Some v ->
-    let v =
-      match String.index_opt v ';' with
-      | None -> v
-      | Some i -> String.sub v 0 i
-    in
-    String.lowercase_ascii (trim v)

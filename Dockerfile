@@ -60,17 +60,19 @@ USER opam
 
 COPY --chown=opam:opam dune-project ./
 COPY --chown=opam:opam src/crane_crypto.ml src/
-COPY --chown=opam:opam tools/ tools/
+COPY --chown=opam:opam tools/encrypt_post.ml tools/
+COPY --chown=opam:opam tools/decrypt_post.ml tools/
+COPY --chown=opam:opam tools/io_helpers.ml tools/
 
 RUN eval $(opam env) && \
     cp src/crane_crypto.ml tools/ && \
     echo '(lang dune 3.21)' > tools/dune-project && \
     echo '(name crane_tools)' >> tools/dune-project && \
-    echo '(executables (names encrypt_post) (libraries unix cstruct mirage-crypto mirage-crypto-ec mirage-crypto-rng mirage-crypto-rng.unix digestif base64))' > tools/dune && \
-    dune build tools/encrypt_post.exe
+    echo '(executables (names encrypt_post decrypt_post) (libraries unix cstruct mirage-crypto mirage-crypto-ec mirage-crypto-rng mirage-crypto-rng.unix digestif base64))' > tools/dune && \
+    dune build tools/encrypt_post.exe tools/decrypt_post.exe
 
 USER root
-CMD ["sh", "-c", "mkdir -p /out && cp _build/default/tools/encrypt_post.exe /out/encrypt_post"]
+CMD ["sh", "-c", "mkdir -p /out && cp _build/default/tools/encrypt_post.exe _build/default/tools/decrypt_post.exe /out/"]
 
 # ──────────────────────────────────────────────────────────────────────
 # Build the Rocq/Crane generator once in a toolchain image.
@@ -141,6 +143,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /site
 COPY --from=builder /home/opam/crane-blog/_build/default/src/blog_generator.exe /usr/local/bin/blog_generator
 COPY --from=tools /home/opam/crane-blog/_build/default/tools/encrypt_post.exe /usr/local/bin/encrypt_post
+COPY --from=tools /home/opam/crane-blog/_build/default/tools/decrypt_post.exe /usr/local/bin/decrypt_post
 
 # posts-encrypted/ and _site/ are mounted at runtime.  Clean only the
 # contents of _site so the mount point itself survives.
