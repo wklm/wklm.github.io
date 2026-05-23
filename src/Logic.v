@@ -237,11 +237,10 @@ Definition dirname_output_path (output_dir slug : string) : string :=
    the slug, a non-rendered sort key, and the encrypted body.  Public
    pages never render sender, recipient, date, or real subject metadata.
 
-   [ep_body] is deliberately untouched: MIME boundaries, the
-   [application/pgp-encrypted] part, the armored
-   [-----BEGIN PGP MESSAGE-----] block, and the armor's CRC-24 trailer
-   all appear as they were written by [gpg].  The generator never
-   parses MIME semantics and never touches OpenPGP bytes. *)
+   [ep_body] is the raw HPKE MIME envelope: multipart boundaries,
+   the [application/wrapped-keys] part with per-reader CEK wraps, and
+   the [application/aes-gcm] ciphertext.  The generator never parses
+   MIME semantics and never touches cryptographic bytes. *)
 Record EncryptedPost : Type := mkEncryptedPost {
   ep_slug : string;
   ep_sort_key : string;

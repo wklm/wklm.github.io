@@ -3,18 +3,19 @@
 A static site generator whose core is written in
 [Rocq](https://rocq-prover.org) and extracted to C++ by
 [Bloomberg's Crane](https://github.com/bloomberg/crane). Posts are
-encrypted with OpenPGP before commit and rendered as PGP/MIME emails.
-Deployed at <https://wklm.github.io>.
+encrypted with HPKE (ECDH P-256 + AES-256-GCM) before commit and
+rendered as encrypted MIME envelopes. Deployed at
+<https://wklm.github.io>.
 
 ## What the site is
 
-Every post on the site is, literally, a PGP-encrypted email rendered
+Every post on the site is a HPKE-encrypted MIME envelope rendered
 inside a classic, restrained blog shell. The homepage lists opaque
-entries whose visible title is always `Subject: ...`; each entry links
-to a page whose public text is the same placeholder and a
-`-----BEGIN PGP MESSAGE-----` ciphertext block. The only way to read a
-post is to copy the armored block and run `gpg --decrypt`. A reader who
-is not a listed recipient sees opaque ciphertext.
+entries whose visible title is always `Subject: ...`; each link points
+to a page whose public text is the same placeholder and a ciphertext
+block. A reader who has enrolled a P-256 keypair in the browser can
+decrypt posts in-page via Web Crypto API. An unenrolled reader sees
+only opaque ciphertext.
 
 ## Authoring model
 
@@ -28,11 +29,11 @@ posts/                working-tree only; never committed
 posts-encrypted/      the only thing the remote ever sees
 ```
 
-Each `.eml` is an RFC 3156 `multipart/encrypted; protocol=
-"application/pgp-encrypted"` message. The inner payload is a
-`multipart/mixed` containing the original Markdown and every inline
-image as a base64 attachment, all signed-then-encrypted by `gpg` to
-the author and up to three declared recipients.
+Each `.eml` is a HPKE MIME envelope: a `multipart/hpke+wrapped`
+container with `application/wrapped-keys` (per-recipient CEK wraps)
+and `application/aes-gcm` (AES-256-GCM ciphertext) parts. The inner
+payload is a `multipart/mixed` containing the original Markdown and
+every inline image as a base64 attachment.
 
 ### Frontmatter keys
 
@@ -43,8 +44,8 @@ the author and up to three declared recipients.
 
 All other keys are left for the author's own reference inside the
 encrypted body — they are never leaked, because the body is never
-rendered. The outer envelope carries only `Subject: ...` plus the MIME
-headers needed for RFC 3156 framing.
+rendered. The outer envelope carries only `Subject: ...` plus the
+MIME headers needed for HPKE envelope framing.
 
 ### Image references
 
@@ -70,7 +71,7 @@ Auth:   none
 The hostname `fuji` is an SSH alias on this Mac, not normal macOS DNS, so
 Mail.app must use the Tailscale IP unless MagicDNS is enabled system-wide.
 Write a normal plaintext email. The fuji container encrypts the body in
-memory with the checked-in public key, wraps it in an RFC 3156 envelope with
+memory with the checked-in public key, wraps it in an HPKE envelope with
 only `Subject: ...` visible, writes only `posts-encrypted/*.eml`, and pushes
 the commit.
 
@@ -103,32 +104,38 @@ git commit -m "new: my slug"
 # To edit an existing post:
 ./_build/default/tools/decrypt_post.exe posts-encrypted/my-slug.eml
 # -> decrypted markdown + images land in posts/
+# You need your P-256 private key in CRANE_BLOG_PRIVATE_KEY env var.
 ```
 
 ## Pipeline
 
 1. `smtp/listener.py` (Docker on fuji). Receives normal SMTP from
-   Mail.app over Tailscale, encrypts the message body in memory with
-   GnuPG and the checked-in public key, wraps it as RFC 3156
-   `multipart/encrypted`, writes `posts-encrypted/*.eml`, commits, and
-   pushes. No private key lives on fuji.
+   Mail.app over Tailscale, encrypts the message body using HPKE
+   with the checked-in P-256 public keys, wraps it as a
+   `multipart/hpke+wrapped` MIME envelope, writes
+   `posts-encrypted/*.eml`, commits, and pushes. No private key lives
+   on fuji.
 2. `tools/encrypt_post.ml` (OCaml). Parses the frontmatter, resolves
-   `recipients`, builds a `multipart/mixed` inner MIME tree, pipes
-   it to `gpg --sign --encrypt --armor --local-user <author>
-   --recipient <author> --recipient …`, wraps the armored output in
-   the RFC 3156 envelope, writes `posts-encrypted/<slug>.eml`. No
-   crypto is implemented here; all OpenPGP work is done by `gpg`.
+   recipients, builds a `multipart/mixed` inner MIME tree, generates a
+   random 32-byte CEK, encrypts the body with AES-256-GCM, wraps the
+   CEK for each recipient via HPKE base-mode (ECDH P-256 + custom
+   SHA-256 KDF), and writes the `multipart/hpke+wrapped` envelope to
+   `posts-encrypted/<slug>.eml`. All crypto is delegated to
+   Crane_crypto (mirage-crypto + digestif).
 3. `.githooks/pre-commit` calls that tool with `--stage` for every
    staged `posts/*.md`.
 4. `src/Logic.v` (Rocq, extracted to C++) reads
    `./posts-encrypted/*.eml`, splits headers from body at the first
    blank line, and renders each file as a page whose `<pre>` holds
    the body verbatim. The generator is pure, total, and never
-   touches OpenPGP bytes — it only concatenates already-ciphertext
+   touches cryptographic bytes — it only concatenates already-ciphertext
    strings into HTML.
-5. `tools/decrypt_post.ml` is the local inverse: walks the MIME tree
-   in a `.eml`, pipes the armored part through `gpg --decrypt`,
-   writes the parts back to `posts/`.
+5. `tools/decrypt_post.ml` (OCaml) is the local inverse: parses the HPKE
+   envelope, unwraps the CEK using the local private key, decrypts the
+   body with AES-256-GCM, and writes the inner MIME parts back to `posts/`.
+6. `static/decrypt.ml` and `static/enroll.ml` (OCaml, compiled to
+   JavaScript by js_of_ocaml) provide browser-side decryption and reader
+   enrollment via Web Crypto API and WebAuthn passkeys.
 
 ## Verification claims
 
@@ -137,19 +144,16 @@ git commit -m "new: my slug"
   Rocq/coqc installations.
 - Crane extracts the Rocq definitions to C++23 and clang accepts
   the result.
-- `scripts/test-roundtrip.sh` runs end to end with an ephemeral GPG
-  keyring: it confirms byte-for-byte round-trip of the Markdown and
-  image, confirms a PKESK packet is present in the armored body,
-  builds and runs the Rocq/Crane generator in Docker, and confirms the
-  rendered HTML contains no `<img>` tag, contains the armor, and shows
-  only `Subject: ...` publicly.
-- **The encryption itself is not formally verified.** OpenPGP is
-  delegated to GnuPG, which is the same trust boundary any PGP
-  email client operates under. No verified OpenPGP implementation
-  exists today in any language; building on verified primitives
-  (e.g. HACL\*) would require re-implementing RFC 4880 framing,
-  which would contradict the goal of replicating PGP email
-  bit-for-bit.
+- `scripts/test-roundtrip.sh` runs end to end with an ephemeral
+  ECDH P-256 keypair: it generates a test key with openssl, encrypts a
+  fixture via `encrypt_post`, decrypts via `decrypt_post`, confirms
+  byte-for-byte round-trip, builds the Rocq/Crane generator in Docker,
+  and confirms the rendered HTML contains no leaks.
+- **The encryption itself is not formally verified.** The HPKE protocol
+  is specified in CryptoSpec.v with cryptographic axioms, but the OCaml
+  FFI (mirage-crypto), JavaScript bridge (Web Crypto API), and
+  openssl-backed C++ (sha256_trunc) are trust boundaries. No verified
+  ECDH/AES-GCM implementation exists in Rocq/Coq today.
 
 ## Build
 
@@ -171,7 +175,7 @@ The slow image rebuild runs only when `Dockerfile`, `dune-project`, `src/`, or
 `.dockerignore` changes.
 
 Pinned: opam 2.5, OCaml 5.4, Rocq 9.0.0, `coq-itree`, `coq-paco`,
-`coq-ext-lib`, `rocq-crane` (from upstream), GnuPG 2.x.
+`coq-ext-lib`, `rocq-crane` (from upstream), mirage-crypto, digestif.
 
 Iterative work:
 
@@ -194,5 +198,7 @@ never holds private keys.
 ## Credits
 
 [Crane](https://github.com/bloomberg/crane) is developed by
-Bloomberg; this repository uses it as an opam dependency. OpenPGP
-work is delegated to [GnuPG](https://gnupg.org/).
+Bloomberg; this repository uses it as an opam dependency. HPKE
+cryptography is delegated to
+[mirage-crypto](https://github.com/mirage/mirage-crypto) and
+[digestif](https://github.com/mirage/digestif).
