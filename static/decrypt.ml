@@ -305,6 +305,56 @@ let set_text id text =
   | Some el -> el##.innerHTML := Js.string text
   | None -> ()
 
+(* ======== Minimal markdown cleanup ==================================== *)
+
+(* Strip YAML-style frontmatter: everything between "---\n" and "\n---\n" *)
+let strip_frontmatter s =
+  if not (starts_with s "---\n" || starts_with s "---\r\n") then s
+  else
+    let after_open = if starts_with s "---\r\n" then 5 else 4 in
+    let n = String.length s in
+    let rec find_closing i =
+      if i + 4 > n then None
+      else if s.[i] = '\n' && i + 4 <= n
+           && s.[i+1] = '-' && s.[i+2] = '-' && s.[i+3] = '-' then
+        if i + 4 < n && s.[i+4] = '\n' then Some (i + 5)
+        else if i + 5 < n && s.[i+4] = '\r' && s.[i+5] = '\n' then Some (i + 6)
+        else find_closing (i + 1)
+      else find_closing (i + 1)
+    in
+    match find_closing after_open with
+    | None -> s
+    | Some body_start -> String.sub s body_start (n - body_start)
+
+(* HTML-escape and convert double-newlines to </p><p> *)
+let body_to_html s =
+  let s = strip_frontmatter s in
+  let buf = Buffer.create (String.length s + 256) in
+  let n = String.length s in
+  let i = ref 0 in
+  Buffer.add_string buf "<p>";
+  while !i < n do
+    let c = s.[!i] in
+    if c = '\n' then begin
+      incr i;
+      if !i < n && s.[!i] = '\n' then begin
+        incr i;
+        Buffer.add_string buf "</p><p>"
+      end else
+        Buffer.add_string buf "<br>"
+    end else begin
+      (match c with
+       | '&' -> Buffer.add_string buf "&amp;"
+       | '<' -> Buffer.add_string buf "&lt;"
+       | '>' -> Buffer.add_string buf "&gt;"
+       | '"' -> Buffer.add_string buf "&quot;"
+       | _ -> Buffer.add_char buf c);
+      incr i
+    end
+  done;
+  Buffer.add_string buf "</p>";
+  Buffer.contents buf
+
 (* ======== Post-page logic ============================================== *)
 
 let render_decrypted plaintext =
@@ -317,7 +367,7 @@ let render_decrypted plaintext =
     set_text "real-body" "(The decrypted message contained no readable text.)"
   end else begin
     set_text "real-title" subject;
-    set_text "real-body" body_text;
+    set_html "real-body" (body_to_html body_text);
     if images <> [] then begin
       let img_names = List.map (fun (name, _data) -> name) images in
       set_text "real-images" ("Attachments: " ^ String.concat ", " img_names)
