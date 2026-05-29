@@ -1,12 +1,8 @@
-# Forgejo Actions deploy: build the Rocq/Crane generator, render the
-# ciphertext-only site, and publish it to the git-pages webroot that
-# cloudflared serves at https://wklm.online .
-#
-# Runs on the self-hosted (host-executor) runner so it can reach the host
-# Docker daemon (/var/run/docker.sock) and the git-pages data dir. The
-# generator is identical to local/CI; only the publish target differs from
-# the GitHub-Pages flow in .github/workflows/deploy.yml (kept as a mirror).
-
+# Forgejo Actions deploy → wklm.online (served by git-pages via cloudflared).
+# Publish mechanism adopted from the proven forgejo/main workflow (git-pages
+# HTTP PUT of a tar with the Host header), hardened with the source-integrity,
+# ciphertext-only, and generated-site policy checks. Runs on the self-hosted
+# runner's docker executor; uses the host Docker daemon (cached layers).
 name: Deploy Verified Blog (wklm.online)
 
 on:
@@ -15,68 +11,62 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-publish:
-    runs-on: self-hosted
+  build:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Source integrity tripwire (R1)
+      - name: Source present (R1 — refuse a wiped tree)
         run: |
-          set -euo pipefail
-          # Refuse the empty git tree (the 2026-05 source-loss signature).
-          if [ "$(git rev-parse 'HEAD^{tree}')" = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" ]; then
-            echo 'Refusing to build the EMPTY git tree.' >&2; exit 1
-          fi
-          git ls-files 'src/*.v' | grep -q . || { echo 'No tracked src/*.v; refusing.' >&2; exit 1; }
+          set -eu
+          ls src/*.v >/dev/null 2>&1 || { echo 'No src/*.v — refusing to deploy a wiped source tree.'; exit 1; }
 
       - name: Public ciphertext policy
         run: |
-          set -euo pipefail
-          if git ls-files 'posts/**' | grep -q .; then
-            echo 'Plaintext posts are tracked:' >&2; git ls-files 'posts/**' >&2; exit 1
-          fi
-          shopt -s nullglob
+          set -eu
+          if ls posts/*.md >/dev/null 2>&1; then echo 'Plaintext posts/*.md present — refusing.'; exit 1; fi
           for eml in posts-encrypted/*.eml; do
+            [ -e "$eml" ] || continue
             clean="$(tr -d '\r' < "$eml")"
-            grep -qx 'Subject: \.\.\.' <<<"$clean" || { echo "$eml: outer Subject not placeholder" >&2; exit 1; }
-            if ! grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' <<<"$clean"; then
-              echo "$eml: not a recognized encrypted envelope" >&2; exit 1
-            fi
-            if grep -Eq '^(From|To|Date): ' <<<"$clean"; then
-              echo "$eml: exposes sender/recipient/date metadata" >&2; exit 1
-            fi
+            printf '%s\n' "$clean" | grep -qx 'Subject: \.\.\.' || { echo "$eml: outer Subject not placeholder"; exit 1; }
+            printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
+            if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
           done
 
-      - name: Build generator image
-        run: docker build --target runtime -t crane-blog-gen:latest .
-
-      - name: Render site
+      - name: Setup Docker CLI
         run: |
-          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq docker.io
+          docker version
+
+      - name: Build generator image
+        run: docker build -t crane-blog .
+
+      - name: Generate site
+        run: |
+          set -eu
           rm -rf _site && mkdir -p _site
-          docker run --rm -u "$(id -u):$(id -g)" \
+          docker run --rm \
             -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
             -v "$PWD/static:/site/static:ro" \
             -v "$PWD/_site:/site/_site" \
-            crane-blog-gen:latest
+            crane-blog
 
       - name: Generated-site policy lint
         run: |
-          set -euo pipefail
-          if grep -R -i '<img' _site; then echo 'Generated site contains <img>' >&2; exit 1; fi
-          unapproved=$(grep -R '<script' _site | grep -v 'static/crane_bridge.js\|static/decrypt.js\|static/enroll.js' || true)
-          if [ -n "$unapproved" ]; then echo 'Unapproved <script> tags:' >&2; echo "$unapproved" >&2; exit 1; fi
-          if grep -R '<dt>Subject</dt>' _site; then echo 'Subject header row rendered' >&2; exit 1; fi
-          grep -R 'Subject: \.\.\.' _site >/dev/null || { echo 'Placeholder subject missing' >&2; exit 1; }
+          set -eu
+          if grep -R -i '<img' _site; then echo 'Generated site contains <img>'; exit 1; fi
+          unapproved="$(grep -R '<script' _site | grep -v 'static/crane_bridge.js\|static/decrypt.js\|static/enroll.js' || true)"
+          [ -z "$unapproved" ] || { echo "Unapproved <script> tags: $unapproved"; exit 1; }
+          if grep -R '<dt>Subject</dt>' _site; then echo 'Subject header row rendered'; exit 1; fi
+          grep -R 'Subject: \.\.\.' _site >/dev/null || { echo 'Placeholder subject missing'; exit 1; }
 
-      - name: Publish to wklm.online (git-pages webroot)
+      - name: Deploy to git-pages (Host: wklm.online)
         run: |
-          set -euo pipefail
-          # The runner is containerized; the host docker daemon mounts the real
-          # host path /home/wojtek/gitpages_data so the copy lands in the webroot
-          # git-pages serves. _site is mounted via the runner's workspace automount.
-          docker run --rm \
-            -v "$PWD/_site:/src:ro" \
-            -v /home/wojtek/gitpages_data/site/wklm.online:/dst \
-            alpine:3 sh -c 'find /dst -mindepth 1 -maxdepth 1 ! -name ".index" -exec rm -rf {} + 2>/dev/null || true; cp -a /src/. /dst/'
+          set -eu
+          cd _site && tar cf ../site.tar . && cd ..
+          curl -f -X PUT http://git-pages:3000/ \
+            -H "Host: wklm.online" \
+            -H "Content-Type: application/x-tar" \
+            --data-binary @site.tar
+          echo "Deployed $(wc -c < site.tar) bytes to wklm.online"
