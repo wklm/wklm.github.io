@@ -25,6 +25,8 @@
 #include <string>
 #include <utility>
 #include <cstring>
+#include <cstdlib>
+#include <iostream>
 
 #include <openssl/evp.h>
 #include <openssl/ec.h>
@@ -322,4 +324,53 @@ inline std::string base64_decode(std::string s) {
         }
     }
     return out;
+}
+
+// ===========================================================================
+// Process-IO platform shim (backs IoEffects.v's [toolE]).
+//
+// Pure platform delegation — argv access, getenv, stderr, exit.  No domain
+// branching, no string/MIME/protocol construction (thin-shim test passes).
+// The globals are populated once by the dune-generated main.cpp:
+//     int main(int c, char** v) { tool_set_args(c, v); run(); }
+// Defined inline here (the single allowed FFI header) so the extracted
+// encrypt_post.cpp / decrypt_post.cpp can see the declarations via the
+// From "crypto_helpers.h" clauses in IoEffects.v.
+// ===========================================================================
+
+inline int   g_tool_argc = 0;
+inline char** g_tool_argv = nullptr;
+
+inline void tool_set_args(int argc, char** argv) {
+    g_tool_argc = argc;
+    g_tool_argv = argv;
+}
+
+// Number of argv entries (includes argv[0], the program name) as int64_t to
+// match Crane's int63 -> int64_t mapping.
+inline int64_t tool_arg_count() {
+    return static_cast<int64_t>(g_tool_argc);
+}
+
+// argv[i] as std::string; "" when out of range.
+inline std::string tool_arg_get(int64_t i) {
+    if (i < 0 || i >= g_tool_argc || g_tool_argv == nullptr) return std::string();
+    const char* a = g_tool_argv[i];
+    return a ? std::string(a) : std::string();
+}
+
+// getenv(name); "" when unset.
+inline std::string tool_getenv(const std::string& name) {
+    const char* v = std::getenv(name.c_str());
+    return v ? std::string(v) : std::string();
+}
+
+// Write to stderr (no trailing newline added).
+inline void tool_eprint(const std::string& s) {
+    std::cerr << s;
+}
+
+// Terminate the process with the given exit code (never returns).
+inline void tool_exit(int64_t code) {
+    std::exit(static_cast<int>(code));
 }
