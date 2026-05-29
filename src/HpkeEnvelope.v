@@ -93,7 +93,7 @@ Fixpoint split_colon_entry (s : string) (pos : int) (fuel : nat) : list string :
 
 Definition parse_wraps_entry (wraps_line : string) : list (string * string * string) :=
   let entries := parse_wraps_entries_aux wraps_line 0%int63 mime_fuel in
-  let rec go (e : list string) : list (string * string * string) :=
+  let fix go (e : list string) : list (string * string * string) :=
     match e with
     | [] => []
     | s :: rest =>
@@ -123,7 +123,7 @@ Definition build_hpke_envelope
   (ct_package_b64 : string)
   (boundary : string) : string :=
   let pkeys_line :=
-    let rec join (ks : list string) : string :=
+    let fix join (ks : list string) : string :=
       match ks with
       | [] => ""
       | [k] => k
@@ -132,7 +132,7 @@ Definition build_hpke_envelope
     in join public_keys
   in
   let wraps_line :=
-    let rec join_wraps (es : list (string * string * string)) : string :=
+    let fix join_wraps (es : list (string * string * string)) : string :=
       match es with
       | [] => ""
       | [(k, ek, w)] => cat k (cat ":" (cat ek (cat ":" w)))

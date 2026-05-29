@@ -51,7 +51,7 @@ Definition is_empty (s : string) : bool :=
   leb (PrimString.length s) 0%int63.
 
 Definition cat (a b : string) : string :=
-  PrimString.concat a b.
+  PrimString.cat a b.
 
 Definition emptyb (s : string) : bool :=
   leb (PrimString.length s) 0%int63.
@@ -71,7 +71,7 @@ Fixpoint starts_with_aux (s pref : string) (pos : int) (remaining : nat) : bool 
 
 Definition starts_with (s pref : string) : bool :=
   let pref_len :=
-    let rec go (i : int) (f : nat) : nat :=
+    let fix go(i : int) (f : nat) : nat :=
       match f with
       | O => O
       | S f' =>

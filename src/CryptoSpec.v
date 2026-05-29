@@ -1,14 +1,18 @@
 (* Verified cryptographic protocol specification for the Crane blog
-   HPKE-based encryption system.  Cryptographic primitives are axiomatic;
-   the OCaml extraction links them to Mirage_crypto / Digestif.  The
-   protocol composition (HPKE base mode, CEK wrap/unwrap, body
-   encrypt/decrypt) is defined and verified in Coq.
+   HPKE-based encryption system.  The nine cryptographic primitives are
+   axioms realized via Crane C++23 extraction by OpenSSL EVP in
+   [src/crypto_helpers.h] (FFI boundary C1).  The protocol composition
+   (HPKE base mode, CEK wrap/unwrap, body encrypt/decrypt) and the KDF are
+   pure ROCQ, defined and verified here.
 
-   This file is extracted to OCaml (not via Crane) and linked into the
-   encrypt_post and smtp_listener tools.  The site generator (Logic.v)
-   does not import this file; it only renders the encrypted blobs. *)
+   This file is imported by [EncryptPost.v] / [DecryptPost.v], which run the
+   actual [Crane Extraction]; CryptoSpec itself is a library (no entry point).
+   The site generator (Logic.v) does not import this file; it only renders
+   the encrypted blobs. *)
 
 From Corelib Require Import PrimString PrimInt63.
+Require Crane.Extraction.
+From Crane Require Import Mapping.Std.
 From Stdlib Require Import Lists.List.
 Import ListNotations.
 Require Import StringLib.
@@ -45,7 +49,7 @@ Definition key_material := string.
 Axiom ecdh_p256_generate : unit -> pubkey * privkey.
 (* Generate a fresh random keypair.
    Post: uncompressed_pk (65 bytes), sk (32 bytes).
-   Takes unit as a freshness token so extraction produces a function.)
+   Takes unit as a freshness token so extraction produces a function. *)
 
 Axiom ecdh_p256_public_key : privkey -> pubkey.
 (* Derive the public key from a private key. *)
@@ -73,12 +77,22 @@ Axiom aes_256_gcm_decrypt : key_material -> nonce -> string -> auth_tag -> strin
 Axiom sha256 : string -> string.
 (* SHA-256 cryptographic hash.  Always returns 32 bytes. *)
 
-Axiom custom_kdf_sha256 : string -> string -> string -> int -> string.
-(* Custom SHA-256-based KDF (not RFC 5869 HKDF).  Uses:
+(* [PrimString.make n c] builds an [n]-byte string of byte [c].  Crane has no
+   default realization, so we supply a From-less directive (std::string is in
+   the prelude; a [From] header would drag OpenSSL into the WASM build).  Used
+   to build the KDF's 32-byte zero salt and the 0x01 expand counter. *)
+Definition zero32 : string := PrimString.make 32%int63 0%int63.
+Definition byte01  : string := PrimString.make 1%int63 1%int63.
+
+(* Custom SHA-256-based KDF (not RFC 5869 HKDF).  Now a *pure ROCQ
+   definition* over [sha256] (was an axiom linked to Crane_crypto):
      PRK = SHA-256(zero_salt(32) || ikm)
      OKM = SHA-256(PRK || info || 0x01)
-   Arguments: salt ikm info length.  Ignores _salt and _len.
-   Post: length(result) = 32. *)
+   Arguments: salt ikm info length.  Ignores _salt and _len (kept for the
+   call-site signature).  Post: length(result) = 32. *)
+Definition custom_kdf_sha256 (_salt ikm info : string) (_len : int) : string :=
+  let prk := sha256 (cat zero32 ikm) in
+  sha256 (cat prk (cat info byte01)).
 
 (* ======== Base64 Encode/Decode ===================================== *)
 
@@ -231,20 +245,38 @@ Axiom aes_gcm_roundtrip : forall (k : key_material) (nonce : nonce) (pt aad : st
 Axiom base64_roundtrip : forall (s : string),
   base64_decode (base64_encode s) = s.
 
-(* ======== OCaml Extraction Directives ============================== *)
+(* ======== Crane C++ Extraction Directives ========================== *)
 
-(* Link axioms to the Crane_crypto OCaml module (hand-written FFI in
-   crypto_ffi.ml).  The OCaml module wraps Mirage_crypto and Digestif. *)
+(* The nine primitive axioms are realized natively by OpenSSL EVP in
+   [src/crypto_helpers.h] (FFI boundary C1).  Semantics match the retired
+   [src/crane_crypto.ml] exactly (uncompressed 65-byte pubkeys, 32-byte
+   scalars, nonce||ct||tag packaging, "" on error/mismatch).
 
-Extraction Language OCaml.
+   The two tuple-returning primitives ([ecdh_p256_generate],
+   [aes_256_gcm_encrypt]) have the helper return [std::pair] DIRECTLY, which is
+   exactly Crane's representation of Coq [prod] — so no prod-adapter IIFE is
+   needed.  [ecdh_p256_generate] drops its [tt] freshness token (no [%a0]). *)
 
-Extract Constant ecdh_p256_generate   => "Crane_crypto.ecdh_p256_generate".
-Extract Constant ecdh_p256_public_key => "Crane_crypto.ecdh_p256_public_key".
-Extract Constant ecdh_p256_agree      => "Crane_crypto.ecdh_p256_agree".
-Extract Constant random_bytes         => "Crane_crypto.random_bytes".
-Extract Constant aes_256_gcm_encrypt  => "Crane_crypto.aes_256_gcm_encrypt".
-Extract Constant aes_256_gcm_decrypt  => "Crane_crypto.aes_256_gcm_decrypt".
-Extract Constant sha256               => "Crane_crypto.sha256".
-Extract Constant custom_kdf_sha256     => "Crane_crypto.custom_kdf_sha256".
-Extract Constant base64_encode        => "Crane_crypto.base64_encode".
-Extract Constant base64_decode        => "Crane_crypto.base64_decode".
+(* From-less [PrimString.make] — std::string is in Crane's prelude; adding a
+   [From] header here would pull OpenSSL into the WASM build. *)
+Crane Extract Inlined Constant PrimString.make =>
+  "std::string((std::size_t)(%a0),(char)(%a1))".
+
+Crane Extract Inlined Constant ecdh_p256_generate =>
+  "ecdh_p256_generate()" From "crypto_helpers.h".
+Crane Extract Inlined Constant ecdh_p256_public_key =>
+  "ecdh_p256_public_key(%a0)" From "crypto_helpers.h".
+Crane Extract Inlined Constant ecdh_p256_agree =>
+  "ecdh_p256_agree(%a0, %a1)" From "crypto_helpers.h".
+Crane Extract Inlined Constant random_bytes =>
+  "random_bytes((int)(%a0))" From "crypto_helpers.h".
+Crane Extract Inlined Constant aes_256_gcm_encrypt =>
+  "aes_256_gcm_encrypt(%a0, %a1, %a2, %a3)" From "crypto_helpers.h".
+Crane Extract Inlined Constant aes_256_gcm_decrypt =>
+  "aes_256_gcm_decrypt(%a0, %a1, %a2, %a3, %a4)" From "crypto_helpers.h".
+Crane Extract Inlined Constant sha256 =>
+  "sha256(%a0)" From "crypto_helpers.h".
+Crane Extract Inlined Constant base64_encode =>
+  "base64_encode(%a0)" From "crypto_helpers.h".
+Crane Extract Inlined Constant base64_decode =>
+  "base64_decode(%a0)" From "crypto_helpers.h".

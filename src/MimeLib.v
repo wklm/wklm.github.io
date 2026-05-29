@@ -21,7 +21,7 @@ Open Scope pstring_scope.
 (* ---- Header lookup (C1 fixed) ------------------------------------ *)
 
 Definition header_lookup (key : string) (hdrs : list (string * string)) : string :=
-  let rec go (h : list (string * string)) (fuel' : nat) : string :=
+  let fix go (h : list (string * string)) (fuel' : nat) : string :=
     match fuel' with
     | O => ""
     | S f' =>
@@ -36,7 +36,7 @@ Definition header_lookup (key : string) (hdrs : list (string * string)) : string
 
 (* ---- Header parsing with RFC 5322 line folding -------------------- *)
 
-Fixpoint parse_header_line (line : string) : option (string * string) :=
+Definition parse_header_line (line : string) : option (string * string) :=
   match find_char line ch_colon 0%int63 mime_fuel with
   | pos =>
       let len := PrimString.length line in
@@ -89,7 +89,7 @@ Definition parse_headers (block : string) : list (string * string) :=
 
 Definition split_headers_body (raw : string) : string * string :=
   let n := PrimString.length raw in
-  let rec find_blank (i : int) (fuel' : nat) : int * int :=
+  let fix find_blank (i : int) (fuel' : nat) : int * int :=
     match fuel' with
     | O => (n, n)
     | S f' =>
@@ -123,7 +123,7 @@ Definition extract_boundary (ct : string) : string :=
   let marker := "boundary=" in
   let mlen := PrimString.length marker in
   let ctlen := PrimString.length ct in
-  let rec find (i : int) (fuel' : nat) : int :=
+  let fix find (i : int) (fuel' : nat) : int :=
     match fuel' with
     | O => ctlen
     | S f' =>
@@ -141,7 +141,7 @@ Definition extract_boundary (ct : string) : string :=
       if leb ctlen end_q then ""
       else PrimString.sub ct (add bpos 1%int63) (sub end_q (add bpos 1%int63))
     else
-      let rec take (p : int) (fuel' : nat) : int :=
+      let fix take (p : int) (fuel' : nat) : int :=
         match fuel' with
         | O => p
         | S f' =>
@@ -179,7 +179,7 @@ Fixpoint split_multipart_body
 
 Definition split_multipart (body : string) (opening closing : string) : list string :=
   let n := PrimString.length body in
-  let rec find_first (pos : int) (fuel' : nat) : int :=
+  let fix find_first (pos : int) (fuel' : nat) : int :=
     match fuel' with
     | O => n
     | S f' =>
