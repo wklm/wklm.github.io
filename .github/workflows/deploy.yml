@@ -88,6 +88,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Source integrity tripwire (R1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Refuse to build/deploy the empty git tree -- the signature of the
+          # 2026-05 source-loss incident (commit 0a64043, tree 4b825dc...4904).
+          if [[ "$(git rev-parse 'HEAD^{tree}')" == "4b825dc642cb6eb9a060e54bf8d69288fbee4904" ]]; then
+            echo 'Refusing to build the EMPTY git tree (source-loss signature).' >&2
+            exit 1
+          fi
+          # The ROCQ source-of-truth must be present; a wiped src/ is never deployable.
+          if ! git ls-files 'src/*.v' | grep -q .; then
+            echo 'No tracked src/*.v -- source tree looks wiped; refusing to build.' >&2
+            exit 1
+          fi
+
+      - name: Archive source snapshot (R5 recovery net)
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot-${{ github.sha }}
+          path: |
+            src/
+            tools/
+            static/*.ml
+            smtp/
+            dune-project
+            Dockerfile
+          retention-days: 90
+          if-no-files-found: warn
+
       - name: Check public ciphertext policy
         shell: bash
         run: |

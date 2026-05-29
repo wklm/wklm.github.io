@@ -11,6 +11,47 @@ set -euo pipefail
 repo="$(git rev-parse --show-toplevel)"
 cd "$repo"
 
+# --- Source-loss & secret safeguards (plan R2/R7; post-mortem rocq-wasm-migration-status) ---
+# R2: block destructive recursive-delete primitives from entering scripts/config that execute.
+# Markdown/docs are intentionally NOT scanned (they may describe these patterns in prose).
+guarded=()
+while IFS= read -r f; do
+    [[ -n "$f" ]] && guarded+=("$f")
+done < <(
+    git diff --cached --name-only --diff-filter=AM \
+        -- '*.sh' '*.bash' '*.yml' '*.yaml' 'Dockerfile*' '.githooks/*' 'scripts/*' 'smtp/*' \
+        2>/dev/null || true
+)
+if [[ ${#guarded[@]} -gt 0 ]]; then
+    for f in "${guarded[@]}"; do
+        add="$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -Ev '^\+\+\+|^\+[[:space:]]*#' || true)"
+        if grep -Eq 'git[[:space:]]+rm[[:space:]]+[^|&;#]*-[a-zA-Z]*r' <<<"$add" \
+           || grep -Eq '(^|[[:space:]])rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+("?\$|\.|/)' <<<"$add"; then
+            echo "pre-commit: refusing $f -- it introduces a destructive recursive working-tree delete." >&2
+            echo "  (The source-loss incident wiped the tree from the wrong directory; such primitives" >&2
+            echo "   are banned in scripts. Use a guarded, asserted deploy worktree instead -- plan R3/R4.)" >&2
+            exit 1
+        fi
+        if grep -Eq 'git[[:space:]]+reset[[:space:]]+--hard' <<<"$add"; then
+            echo "pre-commit: WARNING -- $f adds a hard reset; it MUST be preceded by a CWD/.git guard (plan R4)." >&2
+        fi
+    done
+fi
+
+# R7: never commit private key material (the loose key incident).
+keyscan=()
+while IFS= read -r f; do
+    [[ -n "$f" ]] && keyscan+=("$f")
+done < <(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)
+if [[ ${#keyscan[@]} -gt 0 ]]; then
+    for f in "${keyscan[@]}"; do
+        if git show ":$f" 2>/dev/null | grep -Eq '^-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----'; then
+            echo "pre-commit: refusing $f -- it contains a PRIVATE KEY block; keys never belong in the repo." >&2
+            exit 1
+        fi
+    done
+fi
+
 # Safety net: refuse to commit anything under posts-encrypted/ that is
 # not an .eml ciphertext (or the .gitkeep). Catches the case where a
 # plaintext file is misplaced directly into posts-encrypted/ and would
