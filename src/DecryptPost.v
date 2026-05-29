@@ -96,7 +96,7 @@ Fixpoint find_wraps (parts : list string) : string :=
   match parts with
   | nil => ""
   | part :: rest =>
-      let '(ph, _pb) := split_headers_body (trim_part_terminator part) in
+      let '(ph, _pb) := split_headers_body2 (trim_part_terminator part) in
       let phdrs := parse_headers ph in
       let pct := header_lookup "Content-Type" phdrs in
       if starts_with pct "application/wrapped-keys"
@@ -108,7 +108,7 @@ Fixpoint find_ct_b64 (parts : list string) : string :=
   match parts with
   | nil => ""
   | part :: rest =>
-      let '(ph, pb) := split_headers_body (trim_part_terminator part) in
+      let '(ph, pb) := split_headers_body2 (trim_part_terminator part) in
       let phdrs := parse_headers ph in
       let pct := header_lookup "Content-Type" phdrs in
       if starts_with pct "application/aes-gcm"
@@ -153,7 +153,7 @@ Fixpoint write_attachments (atts : list (string * string)) : IO unit :=
 
 Definition decrypt_one (eml_path sk : string) : IO unit :=
   eml <- read eml_path ;;
-  let '(hdrs_block, body) := split_headers_body eml in
+  let '(hdrs_block, body) := split_headers_body2 eml in
   let hdrs := parse_headers hdrs_block in
   let ct_hdr := header_lookup "Content-Type" hdrs in
   let boundary := extract_boundary ct_hdr in
@@ -174,7 +174,12 @@ Definition decrypt_one (eml_path sk : string) : IO unit :=
       exit_with 1%int63
     else
       let inner_parts := split_parts inner_mime inner_boundary in
-      let md := inner_md inner_parts in
+      let md_part := inner_md inner_parts in
+      (* If the body is an inner multipart/mixed, use its text/markdown part;
+         otherwise the body IS the raw markdown (e.g. the AAD-fallback fixture,
+         whose ciphertext is plain text, not a MIME envelope) — write it
+         directly with one trailing newline. *)
+      let md := if is_empty md_part then normalize_md inner_mime else md_part in
       let atts := inner_attachments inner_parts in
       _ <- create_directory "posts" ;;
       _ <- write_file (cat "posts/" (cat slug ".md")) md ;;

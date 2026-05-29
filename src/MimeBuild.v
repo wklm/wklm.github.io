@@ -325,6 +325,38 @@ Definition build_outer_envelope
     ct_package_b64_wrapped ::
     cat "--" (cat outer_boundary (cat "--" crlf)) :: nil).
 
+(* ---- Correct header/body split ------------------------------------- *)
+(* MimeLib.split_headers_body only detects an LF-LF blank line near EOF (its
+   loop checks CRLF-CRLF at every position but LF-LF only when fewer than 4
+   bytes remain), so an LF-only .eml (e.g. the AAD-fallback fixture) is parsed
+   as all-headers/empty-body.  This faithful port of io_helpers.ml checks both
+   CRLF-CRLF and LF-LF at every position.  Returns (headers, body). *)
+Fixpoint find_blank2 (raw : string) (i : int) (fuel : nat) : int * int :=
+  let n := PrimString.length raw in
+  match fuel with
+  | O => (n, n)
+  | S f' =>
+      if leb n (add i 1%int63) then (n, n)
+      else
+        let c0 := PrimString.get raw i in
+        let c1 := PrimString.get raw (add i 1%int63) in
+        if andb (leb (add i 4%int63) n)
+                (andb (int_eqb c0 ch_cr)
+                      (andb (int_eqb c1 ch_newline)
+                            (andb (int_eqb (PrimString.get raw (add i 2%int63)) ch_cr)
+                                  (int_eqb (PrimString.get raw (add i 3%int63)) ch_newline))))
+        then (i, add i 4%int63)
+        else if andb (int_eqb c0 ch_newline) (int_eqb c1 ch_newline)
+        then (i, add i 2%int63)
+        else find_blank2 raw (add i 1%int63) f'
+  end.
+
+Definition split_headers_body2 (raw : string) : string * string :=
+  let n := PrimString.length raw in
+  let '(hi, bi) := find_blank2 raw 0%int63 mime_fuel in
+  if leb n hi then (raw, "")
+  else (PrimString.sub raw 0%int63 hi, PrimString.sub raw bi (sub n bi)).
+
 (* ---- Correct multipart splitter ------------------------------------ *)
 (* MimeLib.split_multipart emits one line per part (it never groups the lines
    between two boundary markers).  This faithful port of io_helpers.ml's
@@ -424,7 +456,7 @@ Fixpoint inner_md (parts : list string) : string :=
   | [] => ""
   | part :: rest =>
       let part' := trim_part_terminator part in
-      let '(ph, pb) := split_headers_body part' in
+      let '(ph, pb) := split_headers_body2 part' in
       let phdrs := parse_headers ph in
       let pct := header_lookup "Content-Type" phdrs in
       if starts_with pct "text/markdown" then normalize_md pb
@@ -439,7 +471,7 @@ Fixpoint inner_attachments (parts : list string) : list (string * string) :=
   | [] => []
   | part :: rest =>
       let part' := trim_part_terminator part in
-      let '(ph, pb) := split_headers_body part' in
+      let '(ph, pb) := split_headers_body2 part' in
       let phdrs := parse_headers ph in
       let pct := header_lookup "Content-Type" phdrs in
       if starts_with pct "application/octet-stream" then
