@@ -325,6 +325,42 @@ Definition build_outer_envelope
     ct_package_b64_wrapped ::
     cat "--" (cat outer_boundary (cat "--" crlf)) :: nil).
 
+(* ---- Correct multipart splitter ------------------------------------ *)
+(* MimeLib.split_multipart emits one line per part (it never groups the lines
+   between two boundary markers).  This faithful port of io_helpers.ml's
+   split_multipart returns the content BETWEEN consecutive "--boundary" lines,
+   excluding the closing "--boundary--".  [have]=true means we are inside a
+   part whose content started at [seg_start].  Top-level Fixpoint (params, not
+   a returned tuple) to avoid std::any. *)
+Fixpoint split_parts_aux (body opening closing : string)
+  (pos seg_start : int) (have : bool) (fuel : nat) : list string :=
+  match fuel with
+  | O => nil
+  | S f' =>
+      let n := PrimString.length body in
+      if leb n pos then
+        (if have then PrimString.sub body seg_start (sub pos seg_start) :: nil else nil)
+      else
+        let line_end := find_char body ch_newline pos mime_fuel in
+        let raw_line := PrimString.sub body pos (sub line_end pos) in
+        let line := trim_trailing_cr raw_line in
+        let next := if ltb line_end n then add line_end 1%int63 else n in
+        if string_eqb line closing then
+          (if have then PrimString.sub body seg_start (sub pos seg_start) :: nil else nil)
+        else if string_eqb line opening then
+          if have then
+            PrimString.sub body seg_start (sub pos seg_start)
+              :: split_parts_aux body opening closing next next true f'
+          else
+            split_parts_aux body opening closing next next true f'
+        else
+          split_parts_aux body opening closing next seg_start have f'
+  end.
+
+Definition split_parts (body boundary : string) : list string :=
+  split_parts_aux body (cat "--" boundary) (cat "--" (cat boundary "--"))
+                  0%int63 0%int63 false mime_fuel.
+
 (* ---- Inner-MIME extraction (decrypt side) -------------------------- *)
 (* Given the decrypted inner multipart/mixed body, recover the markdown body
    and the list of (filename, raw-bytes) attachments.  We split on the inner
