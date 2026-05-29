@@ -41,40 +41,6 @@ USER root
 CMD ["sh", "-c", "mkdir -p /out && cp /home/opam/crane-blog/static/decrypt.js /home/opam/crane-blog/static/enroll.js /home/opam/crane-blog/static/crane_bridge.js /out/"]
 
 # ──────────────────────────────────────────────────────────────────────
-# OCaml tools stage — builds encrypt_post (HPKE-based encryption tool)
-FROM ocaml/opam:debian-13-ocaml-5.4 AS tools
-
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libgmp-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-USER opam
-RUN opam update && opam install -y dune cstruct mirage-crypto mirage-crypto-ec \
-    mirage-crypto-rng digestif base64
-
-USER root
-WORKDIR /home/opam/crane-blog
-RUN chown opam:opam /home/opam/crane-blog
-USER opam
-
-COPY --chown=opam:opam dune-project ./
-COPY --chown=opam:opam src/crane_crypto.ml src/
-COPY --chown=opam:opam tools/encrypt_post.ml tools/
-COPY --chown=opam:opam tools/decrypt_post.ml tools/
-COPY --chown=opam:opam tools/io_helpers.ml tools/
-
-RUN eval $(opam env) && \
-    cp src/crane_crypto.ml tools/ && \
-    echo '(lang dune 3.21)' > tools/dune-project && \
-    echo '(name crane_tools)' >> tools/dune-project && \
-    echo '(executables (names encrypt_post decrypt_post) (libraries unix cstruct mirage-crypto mirage-crypto-ec mirage-crypto-rng mirage-crypto-rng.unix digestif base64))' > tools/dune && \
-    dune build tools/encrypt_post.exe tools/decrypt_post.exe
-
-USER root
-CMD ["sh", "-c", "mkdir -p /out && cp _build/default/tools/encrypt_post.exe _build/default/tools/decrypt_post.exe /out/"]
-
-# ──────────────────────────────────────────────────────────────────────
 # Build the Rocq/Crane generator once in a toolchain image.
 FROM ocaml/opam:debian-13-ocaml-5.4 AS builder
 
@@ -110,9 +76,17 @@ RUN opam install -y dune
 RUN opam install -y coq=9.0.0 coq-itree coq-paco coq-ext-lib
 
 # Clone, remove tests, and install rocq-crane.
-ARG CRANE_REF=main
-RUN git clone --depth 1 --branch "$CRANE_REF" https://github.com/bloomberg/crane.git rocq-crane-src \
+# Pinned to the exact upstream commit (bloomberg/crane main HEAD as of the
+# Crane upgrade) for reproducibility; `main` is a moving target. Verified:
+#   git ls-remote https://github.com/bloomberg/crane.git refs/heads/main
+#   -> 39720e232aa1fb1444426ce7a046262aa0a0b80c  (matches crane-blog:builder)
+# A pinned SHA can't be used with `clone --branch`, so init+fetch the commit.
+ARG CRANE_REF=39720e232aa1fb1444426ce7a046262aa0a0b80c
+RUN git init rocq-crane-src \
     && cd rocq-crane-src \
+    && git remote add origin https://github.com/bloomberg/crane.git \
+    && git fetch --depth 1 origin "$CRANE_REF" \
+    && git checkout FETCH_HEAD \
     && rm -rf .git tests \
     && opam pin add -y .
 
@@ -126,9 +100,11 @@ USER opam
 # invalidate the Rocq/Crane compile layer.
 COPY --chown=opam:opam dune-project ./
 COPY --chown=opam:opam src/ ./src/
+COPY --chown=opam:opam tools/ ./tools/
 
-# Build: compile Rocq -> extract C++ -> compile binary.
-RUN eval $(opam env) && dune build src/blog_generator.exe
+# Build: compile Rocq -> extract C++ -> compile binaries (generator + CLI tools).
+RUN eval $(opam env) && \
+    dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe
 
 # ──────────────────────────────────────────────────────────────────────
 # Runtime image: blog_generator + encrypt_post + static JS, no Rocq.
@@ -142,8 +118,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /site
 COPY --from=builder /home/opam/crane-blog/_build/default/src/blog_generator.exe /usr/local/bin/blog_generator
-COPY --from=tools /home/opam/crane-blog/_build/default/tools/encrypt_post.exe /usr/local/bin/encrypt_post
-COPY --from=tools /home/opam/crane-blog/_build/default/tools/decrypt_post.exe /usr/local/bin/decrypt_post
+COPY --from=builder /home/opam/crane-blog/_build/default/tools/encrypt_post.exe /usr/local/bin/encrypt_post
+COPY --from=builder /home/opam/crane-blog/_build/default/tools/decrypt_post.exe /usr/local/bin/decrypt_post
 
 # posts-encrypted/ and _site/ are mounted at runtime.  Clean only the
 # contents of _site so the mount point itself survives.
