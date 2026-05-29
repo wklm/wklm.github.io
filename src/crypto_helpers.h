@@ -27,6 +27,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <variant>
 
 #include <openssl/evp.h>
 #include <openssl/ec.h>
@@ -104,10 +105,11 @@ inline EC_POINT* ec_point_from_uncompressed(const EC_GROUP* group,
 }  // namespace crane_crypto_detail
 
 // ---- 1. ECDH P-256 keypair generation -------------------------------------
-// () -> (uncompressed_pubkey 65B, scalar 32B).  The ROCQ side passes [tt] as a
-// freshness token; the extraction directive drops it and calls this nullary
-// form, so the FFI does not depend on how Crane represents [unit].
-inline std::pair<std::string, std::string> ecdh_p256_generate() {
+// (unit) -> (uncompressed_pubkey 65B, scalar 32B).  The ROCQ side passes [tt]
+// as a freshness token; Crane extracts [unit] as std::monostate and always
+// applies it, so the helper accepts and ignores a std::monostate argument.
+inline std::pair<std::string, std::string>
+ecdh_p256_generate(std::monostate) {
     using namespace crane_crypto_detail;
     EC_KEY* key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (!key) return {std::string(), std::string()};

@@ -1,3 +1,63 @@
-(executables
- (names encrypt_post decrypt_post)
- (libraries unix crane_crypto))
+; Crane-extracted C++ CLI tools.  EncryptPost.v / DecryptPost.v are extracted
+; by the FormalBlog coq.theory (src/dune) to ../FormalBlog/{encrypt,decrypt}_post.{h,cpp};
+; here we compile them natively with clang++ (mirroring src/dune's
+; blog_generator.exe rule), linking OpenSSL for crypto_helpers.h.
+;
+; The dune-generated main.cpp captures argc/argv into the IoEffects toolE
+; globals via tool_set_args, then calls run().
+;
+; Target paths tools/encrypt_post.exe and tools/decrypt_post.exe are what
+; scripts/test-roundtrip.sh builds and runs — keep them exact.
+
+(rule
+ (with-stdout-to encrypt_main.cpp
+   (echo "\
+#include <encrypt_post.h>
+
+int main(int argc, char** argv) {
+    tool_set_args(argc, argv);
+    run();
+    return 0;
+}
+")))
+
+(rule
+ (with-stdout-to decrypt_main.cpp
+   (echo "\
+#include <decrypt_post.h>
+
+int main(int argc, char** argv) {
+    tool_set_args(argc, argv);
+    run();
+    return 0;
+}
+")))
+
+; The extracted .cpp/.h are NOT listed as deps (dune does not model them as
+; rule targets); depending on the .vo triggers Crane extraction as a build
+; side-effect, and the action reads ../FormalBlog/*.cpp from the sandbox —
+; exactly how src/dune's blog_generator.exe rule consumes ../FormalBlog/blog.cpp.
+
+(rule
+ (targets encrypt_post.exe)
+ (deps
+  (file ../src/EncryptPost.vo)
+  (file ../src/crypto_helpers.h)
+  encrypt_main.cpp)
+ (action (bash "\
+clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+  -I ../src -I ../FormalBlog ../FormalBlog/encrypt_post.cpp encrypt_main.cpp \
+  -lssl -lcrypto \
+  -o encrypt_post.exe")))
+
+(rule
+ (targets decrypt_post.exe)
+ (deps
+  (file ../src/DecryptPost.vo)
+  (file ../src/crypto_helpers.h)
+  decrypt_main.cpp)
+ (action (bash "\
+clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+  -I ../src -I ../FormalBlog ../FormalBlog/decrypt_post.cpp decrypt_main.cpp \
+  -lssl -lcrypto \
+  -o decrypt_post.exe")))

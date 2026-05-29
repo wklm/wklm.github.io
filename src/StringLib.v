@@ -188,7 +188,12 @@ Definition trim_trailing_cr (s : string) : string :=
 
 Definition hex_chars : string := "0123456789abcdef".
 
-Definition byte_to_hex (b : int) : string :=
+(* Mask the input to a byte first: Crane realizes PrimString.get as signed
+   char, so bytes >= 128 arrive negative; an unmasked [lsr b 4] then produces
+   a negative/huge index into the 16-byte [hex_chars], crashing substr.
+   (crane-extraction-gotchas: "Signed PrimString.get -> mask land 255".) *)
+Definition byte_to_hex (b0 : int) : string :=
+  let b := land b0 255%int63 in
   let hi := lsr b 4%int63 in
   let lo := land b 15%int63 in
   cat (PrimString.sub hex_chars hi 1%int63)

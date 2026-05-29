@@ -262,8 +262,10 @@ Axiom base64_roundtrip : forall (s : string),
 Crane Extract Inlined Constant PrimString.make =>
   "std::string((std::size_t)(%a0),(char)(%a1))".
 
+(* Crane applies the [tt] argument (extracted as std::monostate{}) regardless
+   of whether the directive mentions %a0, so the helper takes (and ignores) it. *)
 Crane Extract Inlined Constant ecdh_p256_generate =>
-  "ecdh_p256_generate()" From "crypto_helpers.h".
+  "ecdh_p256_generate(%a0)" From "crypto_helpers.h".
 Crane Extract Inlined Constant ecdh_p256_public_key =>
   "ecdh_p256_public_key(%a0)" From "crypto_helpers.h".
 Crane Extract Inlined Constant ecdh_p256_agree =>
