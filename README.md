@@ -5,7 +5,7 @@ A static site generator whose core is written in
 [Bloomberg's Crane](https://github.com/bloomberg/crane). Posts are
 encrypted with HPKE (ECDH P-256 + AES-256-GCM) before commit and
 rendered as encrypted MIME envelopes. Deployed at
-<https://wklm.github.io>.
+<https://wklm.online>.
 
 ## What the site is
 

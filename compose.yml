@@ -18,8 +18,8 @@ services:
     environment:
       SMTP_HOST: "100.99.77.105"
       SMTP_PORT: "2525"
-      SMTP_BANNER: "wklm.github.io"
-      BLOG_REPO_URL: "git@github.com:wklm/wklm.github.io.git"
+      SMTP_BANNER: "wklm.online"
+      BLOG_REPO_URL: "ssh://git@localhost:2222/wklm/wklm.github.io.git"
       BLOG_REPO_PATH: "/repo"
       BLOG_BRANCH: "main"
       CRANE_BLOG_AUTHOR_KEY_ID: ""

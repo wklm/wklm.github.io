@@ -22,17 +22,17 @@ fi
 if [ ! -d "${REPO_DIR}/.git" ]; then
     echo "==> cloning fresh checkout into ${REPO_DIR}"
     rm -rf "${REPO_DIR}"
-    git clone git@github.com:wklm/wklm.github.io.git "${REPO_DIR}"
+    git clone ssh://git@localhost:2222/wklm/wklm.github.io.git "${REPO_DIR}"
 else
     echo "==> updating ${REPO_DIR}"
     git -C "${REPO_DIR}" fetch origin main
     git -C "${REPO_DIR}" reset --hard origin/main
 fi
 
-# 3. Pin github.com host key so the container can push without prompting.
-if ! grep -q '^github.com ' "${KNOWN_HOSTS}" 2>/dev/null; then
-    echo "==> recording github.com host key in ${KNOWN_HOSTS}"
-    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "${KNOWN_HOSTS}"
+# 3. Pin the Forgejo SSH host key so the container can push without prompting.
+if ! grep -q '^\[localhost\]:2222 ' "${KNOWN_HOSTS}" 2>/dev/null; then
+    echo "==> recording Forgejo (localhost:2222) host key in ${KNOWN_HOSTS}"
+    ssh-keyscan -p 2222 -t rsa,ecdsa,ed25519 localhost >> "${KNOWN_HOSTS}"
     chmod 600 "${KNOWN_HOSTS}"
 fi
 

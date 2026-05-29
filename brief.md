@@ -1,12 +1,12 @@
-# wklm.github.io — Editorial & Design Brief
+# wklm.online — Editorial & Design Brief
 
-This document describes the *intent* of the site at `wklm.github.io`. The
+This document describes the *intent* of the site at `wklm.online`. The
 companion `README.md` covers the build. Here I am concerned with what
 the site is trying to be, how it should read, and how it should look.
 
 ## Premise
 
-`wklm.github.io` is a personal publication of technical essays
+`wklm.online` is a personal publication of technical essays
 distributed as PGP-encrypted email. The public site is a classic,
 restrained blog shell, but every post is still only a PGP/MIME
 ciphertext: a list of `Subject: ...` entries on the homepage and, on

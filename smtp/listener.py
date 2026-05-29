@@ -22,7 +22,7 @@ from pathlib import Path
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import Envelope, Session, SMTP
 
-BANNER = os.environ.get("SMTP_BANNER", "wklm.github.io")
+BANNER = os.environ.get("SMTP_BANNER", "wklm.online")
 
 REPO = Path(os.environ.get("BLOG_REPO_PATH", "/repo"))
 BRANCH = os.environ.get("BLOG_BRANCH", "main")
