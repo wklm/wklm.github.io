@@ -61,7 +61,7 @@ jobs:
           if grep -R '<dt>Subject</dt>' _site; then echo 'Subject header row rendered'; exit 1; fi
           grep -R 'Subject: \.\.\.' _site >/dev/null || { echo 'Placeholder subject missing'; exit 1; }
 
-      - name: Deploy to git-pages (Host: wklm.online)
+      - name: Publish to git-pages for wklm.online
         run: |
           set -eu
           cd _site && tar cf ../site.tar . && cd ..
