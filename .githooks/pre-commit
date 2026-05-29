@@ -26,7 +26,7 @@ if [[ ${#guarded[@]} -gt 0 ]]; then
     for f in "${guarded[@]}"; do
         add="$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -Ev '^\+\+\+|^\+[[:space:]]*#' || true)"
         if grep -Eq 'git[[:space:]]+rm[[:space:]]+[^|&;#]*-[a-zA-Z]*r' <<<"$add" \
-           || grep -Eq '(^|[[:space:]])rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+("?\$|\.|/)' <<<"$add"; then
+           || grep -Eq '(^|[[:space:]])rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+(\.|\.\.|/|~|\./|/\*|\.\*)([[:space:]]|$)' <<<"$add"; then
             echo "pre-commit: refusing $f -- it introduces a destructive recursive working-tree delete." >&2
             echo "  (The source-loss incident wiped the tree from the wrong directory; such primitives" >&2
             echo "   are banned in scripts. Use a guarded, asserted deploy worktree instead -- plan R3/R4.)" >&2
