@@ -1,46 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
 # ──────────────────────────────────────────────────────────────────────
-# JS compilation stage — builds decrypt.js and enroll.js from OCaml via
-# js_of_ocaml.  Placed first so that [--target js] builds only this
-# stage without touching the heavy Rocq/Crane toolchain.
-FROM ocaml/opam:debian-13-ocaml-5.4 AS js
-
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libgmp-dev curl \
-    && rm -rf /var/lib/apt/lists/*
-
-USER opam
-RUN opam update && opam install -y ocamlfind js_of_ocaml js_of_ocaml-ppx
-
-USER root
-WORKDIR /home/opam/crane-blog
-RUN chown opam:opam /home/opam/crane-blog
-USER opam
-
-COPY --chown=opam:opam static/ ./static/
-COPY --chown=opam:opam dune-project ./
-COPY --chown=opam:opam static/crane_bridge.js static/
-
-RUN eval $(opam env) && \
-    cd /tmp && mkdir -p build && cd build && \
-    echo '(lang dune 3.21)' > dune-project && \
-    echo '(name crane_js)' >> dune-project && \
-    echo '(executables (names decrypt enroll) (modes js) (libraries js_of_ocaml) (preprocess (pps js_of_ocaml-ppx)))' > dune && \
-    cp /home/opam/crane-blog/static/decrypt.ml . && \
-    cp /home/opam/crane-blog/static/enroll.ml . && \
-    JSOO_TARGET_ENV=browser dune build decrypt.bc.js && \
-    JSOO_TARGET_ENV=browser dune build enroll.bc.js && \
-    chmod u+w /home/opam/crane-blog/static/decrypt.js 2>/dev/null || true && \
-    chmod u+w /home/opam/crane-blog/static/enroll.js 2>/dev/null || true && \
-    cp _build/default/decrypt.bc.js /home/opam/crane-blog/static/decrypt.js && \
-    cp _build/default/enroll.bc.js /home/opam/crane-blog/static/enroll.js
-
-USER root
-CMD ["sh", "-c", "mkdir -p /out && cp /home/opam/crane-blog/static/decrypt.js /home/opam/crane-blog/static/enroll.js /home/opam/crane-blog/static/crane_bridge.js /out/"]
-
-# ──────────────────────────────────────────────────────────────────────
 # Build the Rocq/Crane generator once in a toolchain image.
 FROM ocaml/opam:debian-13-ocaml-5.4 AS builder
 

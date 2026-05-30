@@ -1,8 +1,15 @@
 # crane_blog
 
-A static site generator whose core is written in
-[Rocq](https://rocq-prover.org) and extracted to C++ by
-[Bloomberg's Crane](https://github.com/bloomberg/crane). Posts are
+A static site generator whose every behavioral component is authored
+in [Rocq](https://rocq-prover.org) (`.v`) and extracted to C++23 by
+[Bloomberg's Crane](https://github.com/bloomberg/crane), then compiled
+two ways: native with `clang++` (the generator, the CLI tools, and the
+SMTP listener) and to WebAssembly with `em++`/Emscripten (the in-browser
+decrypt and enrollment apps). Rocq is the single source of truth: the
+exact bytes produced, all control flow, and every accept/reject decision
+live in a `.v` file. The only non-`.v` artifacts are thin FFI shim
+C headers, build configuration, and an end-to-end test harness — every
+trusted boundary is catalogued in [`TRUSTED.md`](TRUSTED.md). Posts are
 encrypted with HPKE (ECDH P-256 + AES-256-GCM) before commit and
 rendered as encrypted MIME envelopes. Deployed at
 <https://wklm.online>.
@@ -75,15 +82,13 @@ memory with the checked-in public key, wraps it in an HPKE envelope with
 only `Subject: ...` visible, writes only `posts-encrypted/*.eml`, and pushes
 the commit.
 
-For a smoke test of that SMTP path:
-
-```bash
-python3 scripts/send_test.py
-```
-
-The script accepts `--host`, `--port`, `--from`, `--to`, and `--subject`; the
-same values can be supplied via `BLOG_SMTP_HOST`, `BLOG_SMTP_PORT`,
-`BLOG_SMTP_FROM`, `BLOG_SMTP_TO`, and `BLOG_SMTP_SUBJECT`.
+To smoke-test that SMTP path, send a normal plaintext email to the
+listener from any SMTP client (Mail.app, or a one-shot tool such as
+`swaks --server 100.99.77.105:2525 --from you@example.com --to
+you@example.com --header 'Subject: hello'`). The listener's accept
+policy, host, and port are configured by the `BLOG_ALLOW_FROM`,
+`SMTP_HOST`, and `SMTP_PORT` environment variables (see `compose.yml`
+and `smtp/entrypoint.sh`).
 
 ### Local Git Hook
 
@@ -109,33 +114,51 @@ git commit -m "new: my slug"
 
 ## Pipeline
 
-1. `smtp/listener.py` (Docker on fuji). Receives normal SMTP from
-   Mail.app over Tailscale, encrypts the message body using HPKE
-   with the checked-in P-256 public keys, wraps it as a
-   `multipart/hpke+wrapped` MIME envelope, writes
-   `posts-encrypted/*.eml`, commits, and pushes. No private key lives
-   on fuji.
-2. `tools/encrypt_post.ml` (OCaml). Parses the frontmatter, resolves
-   recipients, builds a `multipart/mixed` inner MIME tree, generates a
-   random 32-byte CEK, encrypts the body with AES-256-GCM, wraps the
-   CEK for each recipient via HPKE base-mode (ECDH P-256 + custom
-   SHA-256 KDF), and writes the `multipart/hpke+wrapped` envelope to
-   `posts-encrypted/<slug>.eml`. All crypto is delegated to
-   Crane_crypto (mirage-crypto + digestif).
-3. `.githooks/pre-commit` calls that tool with `--stage` for every
-   staged `posts/*.md`.
-4. `src/Logic.v` (Rocq, extracted to C++) reads
+1. `src/SmtpServer.v` (Rocq → C++23 → native `smtp_server.exe`, Docker
+   on fuji). `run : IO unit` over `dirE +' ioE +' toolE +' netE +' procE`.
+   Receives normal SMTP from Mail.app over Tailscale, runs the pure SMTP
+   state machine (`src/Smtp.v`), ingests the inbound MIME (`src/MimeIngest.v`)
+   and assembles the markdown + frontmatter (`src/PostBuild.v`), encrypts the
+   body **in process** (HPKE, via `CryptoSpec.v` + `MimeBuild.v` — no
+   subprocess), writes `posts-encrypted/*.eml`, then commits and pushes. The
+   socket layer is realized by `src/net_helpers.h` (boundary C5) and git/
+   subprocess calls by `src/proc_helpers.h` (C6). No private key lives on
+   fuji. Built native to `smtp_server.exe` by `smtp/Dockerfile`
+   (`FROM crane-blog:builder`).
+2. `src/EncryptPost.v` (Rocq → C++23 → native `tools/encrypt_post.exe`).
+   Parses the frontmatter, resolves recipients, builds a `multipart/mixed`
+   inner MIME tree, generates a random 32-byte CEK, encrypts the body with
+   AES-256-GCM, wraps the CEK for each recipient via HPKE base mode (ECDH
+   P-256 + `custom_kdf_sha256`), and writes the `multipart/hpke+wrapped`
+   envelope to `posts-encrypted/<slug>.eml`. The HPKE protocol layer
+   (`src/CryptoSpec.v`) and MIME construction (`src/MimeBuild.v`) are pure
+   Rocq; only the nine cryptographic primitives cross the FFI, realized
+   natively by OpenSSL EVP in `src/crypto_helpers.h` (boundary C1).
+3. `.githooks/pre-commit` calls `_build/default/tools/encrypt_post.exe
+   --stage` for every staged `posts/*.md`.
+4. `src/Logic.v` (Rocq → C++23 → native `blog_generator.exe`) reads
    `./posts-encrypted/*.eml`, splits headers from body at the first
    blank line, and renders each file as a page whose `<pre>` holds
    the body verbatim. The generator is pure, total, and never
    touches cryptographic bytes — it only concatenates already-ciphertext
-   strings into HTML.
-5. `tools/decrypt_post.ml` (OCaml) is the local inverse: parses the HPKE
-   envelope, unwraps the CEK using the local private key, decrypts the
-   body with AES-256-GCM, and writes the inner MIME parts back to `posts/`.
-6. `static/decrypt.ml` and `static/enroll.ml` (OCaml, compiled to
-   JavaScript by js_of_ocaml) provide browser-side decryption and reader
-   enrollment via Web Crypto API and WebAuthn passkeys.
+   strings into HTML, and emits the `<script type="module">` bootstrap that
+   loads the WASM decrypt/enroll modules.
+5. `src/DecryptPost.v` (Rocq → C++23 → native `tools/decrypt_post.exe`) is
+   the local inverse: parses the HPKE envelope, unwraps the CEK using the
+   local private key, decrypts the body with AES-256-GCM, and writes the
+   inner MIME parts back to `posts/`. It reuses the same pure-Rocq
+   `CryptoSpec.v` + `MimeBuild.v`.
+6. `src/DecryptApp.v` and `src/EnrollApp.v` (Rocq → C++23 → WASM)
+   provide browser-side post decryption and reader enrollment.
+   Each is `run : BIO unit` over the `brE` browser effect algebra in
+   `src/BrowserEffect.v` (DOM, sessionStorage, IndexedDB, WebAuthn, CSPRNG),
+   reusing the **same** pure-Rocq `CryptoSpec.v` HPKE protocol plus
+   `src/InnerMime.v` for rendering. In the browser the nine crypto
+   primitives are re-pointed (`src/BrowserCrypto.v`) to `crypto.subtle` /
+   `getRandomValues`, realized by `EM_ASM` glue in `src/browser_helpers.h`
+   (boundaries C2/C3). The Dockerfile `wasm` stage Crane-extracts these and
+   links them with `em++` (emsdk 3.1.61, `-O2 -sASYNCIFY`) into
+   `static/crane_decrypt.{mjs,wasm}` and `static/crane_enroll.{mjs,wasm}`.
 
 ## Verification claims
 
@@ -150,15 +173,23 @@ git commit -m "new: my slug"
   byte-for-byte round-trip, builds the Rocq/Crane generator in Docker,
   and confirms the rendered HTML contains no leaks.
 - **The encryption itself is not formally verified.** The HPKE protocol
-  is specified in CryptoSpec.v with cryptographic axioms, but the OCaml
-  FFI (mirage-crypto), JavaScript bridge (Web Crypto API), and
-  openssl-backed C++ (sha256_trunc) are trust boundaries. No verified
-  ECDH/AES-GCM implementation exists in Rocq/Coq today.
+  composition (wrap/unwrap CEK, body encrypt/decrypt, `custom_kdf_sha256`,
+  P-256 point compression) is pure Rocq in `CryptoSpec.v`, but the nine
+  underlying primitives (ECDH P-256, AES-256-GCM, SHA-256, base64, CSPRNG)
+  are stated as axioms and cross an FFI boundary: natively to OpenSSL EVP
+  (`crypto_helpers.h`, C1) and in the browser to `crypto.subtle` /
+  `getRandomValues` (`browser_helpers.h`, C2). The round-trip/AEAD
+  properties are *stated as axioms* in `CryptoSpec.v`. No verified
+  ECDH/AES-GCM implementation exists in Rocq/Coq today. Every trusted
+  boundary (C1–C13) is enumerated in [`TRUSTED.md`](TRUSTED.md).
 
 ## Build
 
-The Rocq/Crane generator is built and run exclusively inside Docker. Host-side
-opam/dune is only for the small OCaml authoring tools.
+The Rocq/Crane toolchain is pinned and built inside Docker. The same builder
+image compiles every native binary — the generator, the `encrypt_post` /
+`decrypt_post` CLI tools, and the `smtp_server` listener — all from
+Crane-extracted C++23; the `wasm` stage links the browser apps with `em++`.
+`dune` drives the whole build.
 
 ```bash
 docker build -t crane-blog .
@@ -174,8 +205,11 @@ published runtime generator image and mounts the new `posts-encrypted/` tree.
 The slow image rebuild runs only when `Dockerfile`, `dune-project`, `src/`, or
 `.dockerignore` changes.
 
-Pinned: opam 2.5, OCaml 5.4, Rocq 9.0.0, `coq-itree`, `coq-paco`,
-`coq-ext-lib`, `rocq-crane` (from upstream), mirage-crypto, digestif.
+Pinned: opam 2.5, Coq/Rocq 9.0.0, `coq-itree`, `coq-paco`, `coq-ext-lib`,
+`rocq-crane` (from a pinned upstream commit), `clang++` for native builds,
+and Emscripten `emsdk` 3.1.61 for the WASM build. Native crypto links
+OpenSSL (`-lssl -lcrypto`); there is no mirage-crypto, digestif,
+js_of_ocaml, or base64 OCaml dependency.
 
 Iterative work:
 
@@ -198,7 +232,9 @@ never holds private keys.
 ## Credits
 
 [Crane](https://github.com/bloomberg/crane) is developed by
-Bloomberg; this repository uses it as an opam dependency. HPKE
-cryptography is delegated to
-[mirage-crypto](https://github.com/mirage/mirage-crypto) and
-[digestif](https://github.com/mirage/digestif).
+Bloomberg; this repository uses it as an opam dependency to extract
+Rocq to C++23. The HPKE protocol is pure Rocq; its underlying
+cryptographic primitives are delegated across an FFI boundary to
+[OpenSSL](https://www.openssl.org/) (native) and the
+[Web Crypto API](https://www.w3.org/TR/WebCryptoAPI/) (browser) — see
+[`TRUSTED.md`](TRUSTED.md).

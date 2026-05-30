@@ -13,5 +13,4 @@
  (depends
    (dune (>= 3.21))
    (coq (>= 9.0))
-   (js_of_ocaml (>= 5.0))
    (rocq-crane (>= 0.1))))

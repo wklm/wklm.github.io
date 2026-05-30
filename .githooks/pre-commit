@@ -3,9 +3,8 @@
 # posts-encrypted/<slug>.eml, stage the ciphertext, and unstage the
 # plaintext. The plaintext never enters a commit.
 #
-# Crypto is done via crane_crypto (mirage_crypto). MIME framing and
-# the glue around it are built by the OCaml executable
-# tools/encrypt_post, which is part of this repo's dune build tree.
+# Crypto + MIME framing are pure ROCQ (CryptoSpec.v / MimeBuild.v), Crane-
+# extracted to the tools/encrypt_post.exe binary in this repo's dune build tree.
 set -euo pipefail
 
 repo="$(git rev-parse --show-toplevel)"
@@ -51,6 +50,11 @@ if [[ ${#keyscan[@]} -gt 0 ]]; then
         fi
     done
 fi
+
+# R8: single-source contract guard (plan R8) -- fail the commit if a tracked
+# non-.v file falls outside the FFI-shim/build-config/docs/test/data allowlist
+# (a .js/.ml/.py creeping back would mean behavioral logic left ROCQ).
+bash "$repo/scripts/check-single-source.sh" >/dev/null
 
 # Safety net: refuse to commit anything under posts-encrypted/ that is
 # not an .eml ciphertext (or the .gitkeep). Catches the case where a

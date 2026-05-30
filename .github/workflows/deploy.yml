@@ -104,6 +104,10 @@ jobs:
             exit 1
           fi
 
+      - name: Single-source contract (R8 — only .v + allowlisted non-.v artifacts)
+        shell: bash
+        run: bash scripts/check-single-source.sh
+
       - name: Archive source snapshot (R5 recovery net)
         uses: actions/upload-artifact@v4
         with:
@@ -177,7 +181,7 @@ jobs:
             echo 'Generated site contains <img> tags' >&2
             exit 1
           fi
-          unapproved=$(grep -R '<script' _site | grep -v 'static/crane_bridge.js\|static/decrypt.js\|static/enroll.js' || true)
+          unapproved=$(grep -R '<script' _site | grep -v 'crane_decrypt.mjs\|crane_enroll.mjs' || true)
           if [[ -n "$unapproved" ]]; then
             echo 'Generated site contains unapproved <script> tags:' >&2
             echo "$unapproved" >&2
