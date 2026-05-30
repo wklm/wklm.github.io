@@ -456,16 +456,26 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       concat_all (render_inbox_rows eps) ::
       "</ul>" :: "</main>" ::
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
-      "<div id='enroll-ui'>" ::
-      "<button id='enroll-button'>Enroll Reader Key</button>" ::
-      "<p id='enroll-status'></p>" ::
-      "</div>" ::
+      (* Enrollment affordance: a plain LINK to the dedicated /enroll/ page, NOT
+         an in-page button driven by crane_enroll.  Rationale: EnrollApp.on_load
+         (and do_enroll success) HIDE #enroll-ui and reveal #enroll-existing /
+         #enroll-result + their child fields — markup that exists only on the
+         /enroll/ page.  Running crane_enroll here (where only #enroll-ui exists)
+         therefore hid the button with no replacement once a reader key was
+         present (or after enrolling): the control vanished with no feedback.
+         The full enroll UX lives on /enroll/, which has the complete DOM and
+         works; centralizing it there and linking keeps every inbox state
+         coherent.  A static <a> never hides itself, so the affordance is present
+         and usable in BOTH the no-key and has-key states.
+         crane_decrypt is still loaded: its inbox branch (DecryptApp.init_inbox_page)
+         only ever touches #inbox-status-msg (present) and reads #ciphertext
+         (absent here -> empty -> the inbox path), so it is coherent standalone. *)
+      "<p class='enroll-cta'><a class='enroll-link' href='enroll/'>Enroll a reader key to decrypt posts</a></p>" ::
       (* ES module specifiers MUST start with ./ ../ or / — a bare 'static/...'
          is treated as a bare package name and fails: "Failed to resolve module
          specifier". The inbox is served at the site root, so ./static/ resolves
          to /static/. (Regressed once via prefix=""; the e2e now loads the inbox.) *)
-      "<script type='module'>import D from './static/crane_decrypt.mjs';D().then(function(m){m.callMain([]);});</script>" ::
-      "<script type='module'>import E from './static/crane_enroll.mjs';E().then(function(m){m.callMain([]);});</script>" :: nil) in
+      "<script type='module'>import D from './static/crane_decrypt.mjs';D().then(function(m){m.callMain([]);});</script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
 
 (* ---- Enrollment page ----------------------------------------------- *)
@@ -553,7 +563,14 @@ Definition stylesheet_decrypt : string :=
     "#decrypt-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}" ::
     "#decrypt-status{margin-top:.4rem;color:var(--muted)}" ::
     "#clear-key-button{display:none;margin-top:.5rem;margin-left:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--rule);background:var(--paper);color:var(--muted);cursor:pointer}" ::
-    ".decrypt-error{margin-top:.5rem;color:#c0392b;display:none}" ::
+    (* :empty so the error auto-shows the moment ROCQ sets its textContent and
+       stays hidden while empty (the success path leaves it empty).  The decrypt
+       app only ever sets #decrypt-error's TEXT (dom_set_text), never its
+       display — so visibility MUST be driven by content here, not by a
+       dom_show.  Was `.decrypt-error{display:none}`, which hid it
+       unconditionally => every decrypt failure was silent. *)
+    ".decrypt-error{margin-top:.5rem;color:#c0392b}" ::
+    ".decrypt-error:empty{display:none}" ::
     ".decrypt-fallback{color:var(--muted);font-size:.82rem}" ::
     "#decrypted-content{display:none;margin-top:2rem;animation:reader-fade .5s ease-out both}" ::
     "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
@@ -586,6 +603,11 @@ Definition stylesheet_decrypt : string :=
 
 Definition stylesheet_enroll : string :=
   concat_all (
+    (* Inbox enrollment call-to-action: a quiet link to /enroll/ (the inbox no
+       longer runs crane_enroll; see render_inbox_page). *)
+    ".enroll-cta{margin:2rem 0;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.82rem}" ::
+    ".enroll-link{color:var(--muted)}" ::
+    ".enroll-link:hover{color:var(--ink)}" ::
     "#enroll-ui{margin:2rem 0}" ::
     "#enroll-button{padding:.5rem 1.25rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.88rem;border:1px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;border-radius:4px}" ::
     "#enroll-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}" ::

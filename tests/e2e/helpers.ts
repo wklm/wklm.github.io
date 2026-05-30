@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BrowserContext, CDPSession, Page } from '@playwright/test';
@@ -136,6 +137,37 @@ export function uncompressedPubHexFromJwk(jwk: { x: string; y: string }): string
     throw new Error(`bad JWK coords: x=${xHex.length} y=${yHex.length} hex chars`);
   }
   return '04' + xHex + yHex;
+}
+
+/**
+ * Generate a P-256 recipient UNRELATED to anything enrolled in the browser, for
+ * the "not a recipient" decrypt-failure test.  Returns the 65-byte uncompressed
+ * pubkey hex plus the key id derived EXACTLY as the app does
+ * (BrowserCrypto.browser_key_id = first 12 hex chars of SHA-256(compressed
+ * pubkey)), so encrypt_post produces a well-formed envelope addressed to a kid
+ * the enrolled reader does not hold — DecryptApp.try_keys_aux then finds no
+ * matching wrap and surfaces the "not a recipient" error.
+ */
+export async function generateForeignRecipient(): Promise<{
+  kid: string;
+  uncompressedPubHex: string;
+}> {
+  const kp = await webcrypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits'],
+  );
+  const raw = new Uint8Array(await webcrypto.subtle.exportKey('raw', kp.publicKey)); // 0x04||x||y
+  // Compress (0x02/0x03 || x) to match browser_key_id's input.
+  const x = raw.slice(1, 33);
+  const y = raw.slice(33, 65);
+  const compressed = new Uint8Array(33);
+  compressed[0] = (y[31] & 1) === 1 ? 0x03 : 0x02;
+  compressed.set(x, 1);
+  const digest = new Uint8Array(await webcrypto.subtle.digest('SHA-256', compressed));
+  const kid = Buffer.from(digest).toString('hex').slice(0, 12);
+  const uncompressedPubHex = '04' + Buffer.from(raw.slice(1)).toString('hex');
+  return { kid, uncompressedPubHex };
 }
 
 /**

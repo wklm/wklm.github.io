@@ -8,6 +8,7 @@ import {
   parseJwk,
   uncompressedPubHexFromJwk,
   encryptFixturePost,
+  generateForeignRecipient,
   reRenderSite,
   repoRoot,
   type AuthenticatorProfile,
@@ -344,4 +345,176 @@ test('Facet A WASM enroll — no usable authenticator: enroll fails VISIBLY', as
   // console error / pageerror / unhandled rejection is still a gate failure.
   const unexpected = sink.fatal.filter((m) => !ALLOW_WEBAUTHN_FAIL.test(m));
   expect(unexpected, `unexpected errors (beyond the surfaced WebAuthn failure):\n${unexpected.join('\n')}`).toEqual([]);
+});
+
+// ===========================================================================
+// INBOX coherence (/).  The inbox was only ever exercised happy-path on other
+// pages; its enroll affordance vanished in the has-key state because it ran
+// crane_enroll against a DOM missing #enroll-existing/#enroll-result.  The fix
+// makes the inbox enroll affordance a LINK to /enroll/ and drops crane_enroll
+// from the inbox (crane_decrypt still loads for the per-post status).  These two
+// rows assert the inbox loads with NO console error AND the enroll affordance is
+// present + usable in BOTH the no-key and has-key states — no vanished control.
+// ===========================================================================
+
+/**
+ * The inbox must load cleanly and present a usable enroll affordance, in BOTH
+ * the no-key and has-key states.  The affordance is a static link to /enroll/
+ * (the inbox no longer runs crane_enroll, so nothing can hide it).  "Usable"
+ * means: the link is present + visible, targets /enroll/, and following it lands
+ * on a COHERENT enroll page — which, depending on enrollment state, is EITHER
+ * the armed #enroll-ui (no key on the device) OR the "Already Enrolled"
+ * #enroll-existing panel (a key is present).  EnrollApp.on_load only arms
+ * #enroll-button in the no-key branch, so we must accept either coherent end
+ * state, not unconditionally wait for the button to arm.
+ */
+async function assertInboxEnrollAffordance(page: Page) {
+  // No in-page enroll button on the inbox anymore (it would vanish on has-key).
+  expect(await page.locator('#enroll-button').count(), 'inbox must not host an in-page enroll button').toBe(0);
+  // A static link to /enroll/ is present and points at the dedicated page.
+  const link = page.locator('a.enroll-link');
+  await expect(link, 'inbox must show an enroll link').toBeVisible();
+  const href = await link.getAttribute('href');
+  expect(href, 'enroll link must target the /enroll/ page').toMatch(/enroll\/?$/);
+  // It is usable: following it lands on the working, coherent enroll page.
+  await link.click();
+  await page.waitForURL(/\/enroll\/?$/, { timeout: 30_000 });
+  // Coherent in EITHER state: armed enroll UI (no key) OR the already-enrolled
+  // panel (has key).  Poll until exactly one of the two coherent panels shows.
+  await expect
+    .poll(
+      async () => {
+        const armed = await page.evaluate(() => {
+          const b = document.getElementById('enroll-button') as
+            | (HTMLElement & { __craneBound?: boolean })
+            | null;
+          const ui = document.getElementById('enroll-ui');
+          return !!(b && b.__craneBound === true && ui && getComputedStyle(ui).display !== 'none');
+        });
+        const existing = await page.locator('#enroll-existing').isVisible().catch(() => false);
+        if (armed) return 'armed';
+        if (existing) return 'existing';
+        return 'pending';
+      },
+      { timeout: 60_000, message: 'enroll page never reached a coherent state (armed UI or already-enrolled panel)' },
+    )
+    .not.toBe('pending');
+}
+
+test('Facet A inbox — NO-KEY state: loads clean, enroll affordance present + usable', async ({ page }) => {
+  const sink = attachErrorCapture(page);
+  // Fresh origin: no reader key enrolled.
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  // crane_decrypt runs on the inbox (per-post status); its inbox branch only
+  // touches #inbox-status-msg and reads the absent #ciphertext — it must not
+  // error.  Give the module a moment to run on-load before asserting clean.
+  await page.locator('#main').waitFor({ state: 'attached' });
+  await assertInboxEnrollAffordance(page);
+  expect(sink.fatal, `unexpected console/page errors on the inbox (no-key):\n${sink.fatal.join('\n')}`).toEqual([]);
+});
+
+test('Facet A inbox — HAS-KEY state: after enrolling, the inbox stays coherent (button NOT vanished)', async ({ context, page }) => {
+  const sink = attachErrorCapture(page);
+  let cdp: CDPSession | undefined;
+  ({ cdp } = await addVirtualAuthenticator(context, page, {
+    hasResidentKey: true,
+    hasUserVerification: true,
+    isUserVerified: true,
+  }));
+  try {
+    // Enroll a reader key first (so the inbox is now in the has-key state).
+    await page.goto('/enroll/', { waitUntil: 'domcontentloaded' });
+    await waitForArmed(page, 'enroll-button');
+    await page.locator('#enroll-button').click();
+    await expect(page.locator('#enroll-result')).toBeVisible({ timeout: 60_000 });
+    const kid = (await page.locator('#reader-key-id').textContent())?.trim() || '';
+    expect(kid).toMatch(/^[0-9a-f]{12}$/);
+    createdKids.add(kid);
+    const readerKeys = await readIdbStore(page, 'reader-keys');
+    expect(readerKeys.length, 'a reader key is enrolled for the has-key inbox state').toBe(1);
+
+    // Now the inbox: with a key present, the OLD code hid #enroll-ui and showed
+    // nothing (the absent #enroll-existing) — the button vanished with no
+    // replacement.  The link affordance must instead be present + usable, and
+    // crane_decrypt's "readable with your key" status may appear.
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.locator('#main').waitFor({ state: 'attached' });
+    // crane_decrypt's inbox branch sets #inbox-status-msg when a key is saved in
+    // sessionStorage; with a key only in IndexedDB the message may be empty —
+    // either way the element must exist and the affordance must be coherent.
+    await expect(page.locator('#inbox-status-msg')).toBeAttached();
+    await assertInboxEnrollAffordance(page);
+    expect(sink.fatal, `unexpected console/page errors on the inbox (has-key):\n${sink.fatal.join('\n')}`).toEqual([]);
+  } finally {
+    if (cdp) await cdp.detach().catch(() => {});
+  }
+});
+
+// ===========================================================================
+// DECRYPT FAILURE (not a recipient).  Enroll key A, then decrypt a post that is
+// encrypted to a DIFFERENT key B (a foreign recipient).  DecryptApp.try_keys_aux
+// finds no wrap for A, so do_decrypt must surface a VISIBLE #decrypt-error
+// ("not a recipient") AND clear #decrypt-status (no lingering "Decrypting...").
+// This is the silent-decrypt bug class: the error text was set but the element
+// was display:none, and the status never cleared, so a failed decrypt looked
+// like a hang/no-op.
+// ===========================================================================
+test('Facet A decrypt FAILURE — not a recipient: #decrypt-error VISIBLE + #decrypt-status cleared', async ({ context, page }) => {
+  const sink = attachErrorCapture(page);
+  let cdp: CDPSession | undefined;
+  ({ cdp } = await addVirtualAuthenticator(context, page, {
+    hasResidentKey: true,
+    hasUserVerification: true,
+    isUserVerified: true,
+  }));
+  try {
+    // ---- Enroll key A in the browser. ----
+    await page.goto('/enroll/', { waitUntil: 'domcontentloaded' });
+    await waitForArmed(page, 'enroll-button');
+    await page.locator('#enroll-button').click();
+    await expect(page.locator('#enroll-result')).toBeVisible({ timeout: 60_000 });
+    const kidA = (await page.locator('#reader-key-id').textContent())?.trim() || '';
+    expect(kidA).toMatch(/^[0-9a-f]{12}$/);
+    createdKids.add(kidA);
+
+    // ---- Encrypt the fixture to a FOREIGN key B (not A), re-render. ----
+    const foreign = await generateForeignRecipient();
+    expect(foreign.kid).not.toBe(kidA); // genuinely a different recipient
+    createdKids.add(foreign.kid); // cleanup keys/<foreignKid>.pub in afterEach
+    encryptFixturePost({
+      kid: foreign.kid,
+      uncompressedPubHex: foreign.uncompressedPubHex,
+      slug: SLUG,
+      markdown: FIXTURE_MD,
+    });
+    reRenderSite();
+
+    // ---- Attempt decrypt with key A -> must FAIL visibly. ----
+    await page.goto(`/${SLUG}/`, { waitUntil: 'domcontentloaded' });
+    await waitForArmed(page, 'decrypt-button');
+    // Pre-click: error empty (hidden via :empty), content hidden.
+    await expect(page.locator('#decrypt-error')).toHaveText('');
+    await expect(page.locator('#decrypted-content')).toBeHidden();
+
+    await page.locator('#decrypt-button').click();
+
+    // The error becomes VISIBLE with a "not a recipient" message (the :empty CSS
+    // rule reveals it the moment ROCQ sets its textContent), and #decrypt-status
+    // is cleared — no lingering "Decrypting...".  A hung/silent failure would
+    // leave the error hidden/empty and the status stuck, timing out here.
+    const err = page.locator('#decrypt-error');
+    await expect(err).toBeVisible({ timeout: 60_000 });
+    await expect(err).toContainText(/not a recipient/i);
+    await expect(page.locator('#decrypt-status')).toHaveText('', { timeout: 30_000 });
+    // The decrypted content never reveals, and no plaintext leaks anywhere.
+    await expect(page.locator('#decrypted-content')).toBeHidden();
+    const bodyText = (await page.locator('#real-body').textContent()) || '';
+    expect(bodyText).not.toContain(PLAINTEXT_MARKER);
+
+    // No uncaught WASM aborts / console errors / unhandled rejections: a VISIBLE,
+    // surfaced "not a recipient" is the app working as designed, not an error.
+    expect(sink.fatal, `unexpected console/page errors on decrypt failure:\n${sink.fatal.join('\n')}`).toEqual([]);
+  } finally {
+    if (cdp) await cdp.detach().catch(() => {});
+  }
 });

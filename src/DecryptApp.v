@@ -325,6 +325,25 @@ Definition render_decrypted (plaintext : string) : BIO unit :=
     (* ... then the primary VISUAL surface: typeset the body onto the canvas. *)
     render_canvas (inner_body ic).
 
+(* ================= Failure surface ================================ *)
+(* Surface a decrypt failure VISIBLY.  Two coupled DOM updates that EVERY
+   failure path must do together, so they live in one named Definition (issue:
+   the error was set but never shown, and "Decrypting..." lingered):
+     1. clear #decrypt-status — the "Decrypting..." set at do_decrypt's start is
+        never otherwise cleared on failure, so the page looks like a hang/no-op;
+     2. set #decrypt-error's text — the stylesheet hides it ONLY while EMPTY
+        (.decrypt-error:empty{display:none} in Logic.v's stylesheet_decrypt), so
+        a non-empty text auto-reveals it.  dom_set_text touches textContent only
+        (browser_helpers.h: it does NOT set style.display), which is exactly why
+        the CSS, not a dom_show, governs visibility here — the success path
+        leaves #decrypt-error empty, hence hidden.
+   A named BIO-unit Definition (not an inline [match]/let) keeps Crane from
+   realizing this as a void-block-returning-a-value IIFE — same rationale as
+   render_images above. *)
+Definition show_decrypt_error (msg : string) : BIO unit :=
+  _ <- dom_set_text "decrypt-status" "" ;;
+  dom_set_text "decrypt-error" msg.
+
 (* ================= Reader-key matching loop ======================= *)
 (* Walk the enrolled reader keys; for the first that is a recipient (has a Wraps
    entry), run the passkey gate, unwrap, decrypt and render.  Returns true once
@@ -345,19 +364,19 @@ Fixpoint try_keys_aux
             let priv_jwk := json_array_field keys_json i "privkeyJwk" in
             gated <- passkey_gate kid ;;
             if negb gated then
-              _ <- dom_set_text "decrypt-error"
+              _ <- show_decrypt_error
                      "WebAuthn authentication failed. Please authenticate to decrypt this post." ;;
               Ret true
             else
               let cek := unwrap_fallback priv_jwk ek wrapped kid in
               if is_empty cek then
-                _ <- dom_set_text "decrypt-error"
+                _ <- show_decrypt_error
                        "Failed to unwrap the content encryption key." ;;
                 Ret true
               else
                 let inner := decrypt_body_fallback cek (env_ct_package env) slug in
                 if is_empty inner then
-                  _ <- dom_set_text "decrypt-error"
+                  _ <- show_decrypt_error
                          "Failed to decrypt the post body." ;;
                   Ret true
                 else
@@ -368,16 +387,20 @@ Fixpoint try_keys_aux
 
 (* ================= Decrypt action ================================= *)
 Definition do_decrypt : BIO unit :=
+  (* Clear any stale error from a previous attempt FIRST (re-decrypt must not
+     leave a prior failure visible behind the new "Decrypting..."); the empty
+     text re-hides #decrypt-error via the :empty CSS rule. *)
+  _ <- dom_set_text "decrypt-error" "" ;;
   _ <- dom_set_text "decrypt-status" "Decrypting..." ;;
   eml <- dom_get_text "ciphertext" ;;
   let env := parse_envelope eml in
   if is_empty (env_ct_package env) then
-    dom_set_text "decrypt-error" "No ciphertext found in envelope."
+    show_decrypt_error "No ciphertext found in envelope."
   else
     keys_json <- idb_get_all "reader-keys" ;;
     let kn := json_array_len keys_json in
     if leb kn 0%int63 then
-      dom_set_text "decrypt-error"
+      show_decrypt_error
         "No reader key found on this device. Visit the enrollment page to create one."
     else
       slug <- dom_path_slug ;;
@@ -385,7 +408,7 @@ Definition do_decrypt : BIO unit :=
       if matched then Ret tt
       else
         _ <- ss_remove "crane_key" ;;
-        dom_set_text "decrypt-error"
+        show_decrypt_error
           "Your enrolled key is not a recipient for this post, or no key is enrolled.".
 
 (* ================= On-load (post page vs inbox) =================== *)
