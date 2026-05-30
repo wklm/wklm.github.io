@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BrowserContext, CDPSession, Page } from '@playwright/test';
@@ -166,53 +166,13 @@ export function encryptFixturePost(args: {
   if (!existsSync(eml)) {
     throw new Error(`encrypt_post did not produce ${eml}`);
   }
-  selfDescribeEnvelope(eml);
   return eml;
 }
 
-/**
- * Make the .eml body self-describing so the page's #ciphertext element carries
- * the outer MIME Content-Type + boundary.
- *
- * WHY: src/Logic.v render_eml_page renders only `ep_body` (the bytes AFTER the
- * first blank line) into <pre id="ciphertext">, so the outer
- *   Content-Type: multipart/hpke+wrapped; boundary="..."
- * header — which encrypt_post emits in the header block — is stripped out.  But
- * src/DecryptApp.v parse_envelope recovers the multipart boundary ONLY from that
- * Content-Type header (extract_boundary over the Content-Type value); it has no
- * boundary-scan fallback (the pre-WASM static/crane_bridge.js had `_scanBoundary`
- * for exactly this case — the WASM port dropped it).  With the header absent, the
- * boundary is "" and parse_envelope reports "No ciphertext found in envelope".
- *
- * This is a genuine src/ defect (Logic.render_eml_page vs DecryptApp.parse_envelope
- * disagree on the #ciphertext framing); src/ is out of scope to change here.  As a
- * harness-side workaround we copy the outer Content-Type header to the top of the
- * body so the served #ciphertext is a self-contained MIME entity.  This changes
- * only the MIME *framing* the page exposes — the wrapped CEK, the ciphertext bytes
- * and the AAD binding are untouched, so the in-browser decryption is fully genuine.
- *
- * AIDEV-NOTE: remove this once DecryptApp.parse_envelope regains a boundary scan
- * (or render_eml_page emits the outer Content-Type into #ciphertext).
- */
-export function selfDescribeEnvelope(emlPath: string): void {
-  const raw = readFileSync(emlPath, 'utf8');
-  const sepMatch = raw.match(/\r?\n\r?\n/);
-  if (!sepMatch || sepMatch.index === undefined) return; // no header/body split
-  const headerBlock = raw.slice(0, sepMatch.index);
-  const body = raw.slice(sepMatch.index + sepMatch[0].length);
-
-  const ctLine = headerBlock
-    .split(/\r?\n/)
-    .find((l) => /^content-type:\s*multipart\/hpke\+wrapped/i.test(l.trim()));
-  if (!ctLine) return; // nothing to copy
-  if (/^content-type:\s*multipart\/hpke\+wrapped/i.test(body.trimStart().split(/\r?\n/)[0] || '')) {
-    return; // body already self-describing
-  }
-
-  const nl = sepMatch[0]; // preserve the file's newline convention (CRLF here)
-  const newBody = ctLine.trim() + nl + nl + body;
-  writeFileSync(emlPath, headerBlock + nl + nl + newBody);
-}
+// NOTE: render_eml_page emits only the multipart body into #ciphertext (no outer
+// Content-Type/boundary header).  src/DecryptApp.v parse_envelope now recovers the
+// boundary from the first "--" delimiter line (scan_boundary), so the e2e serves the
+// real render_eml_page output unmodified — no harness-side envelope rewriting.
 
 /**
  * Re-render _site from the current posts-encrypted/ + static/ using the

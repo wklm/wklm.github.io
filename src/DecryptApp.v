@@ -97,12 +97,43 @@ Record parsed_envelope := mkEnv {
   env_ct_package : string
 }.
 
+(* Boundary scan fallback.  render_eml_page (Logic.v) writes only the multipart
+   BODY into #ciphertext, dropping the outer
+   "Content-Type: multipart/hpke+wrapped; boundary=..." header.  So when no
+   header boundary is present, recover it from the first "--<boundary>"
+   delimiter line (as the old crane_bridge.js _scanBoundary did).  Returns the
+   bare boundary token (without the leading "--"); "" if no delimiter found. *)
+Definition scan_boundary (body : string) : string :=
+  let n := PrimString.length body in
+  let fix scan (pos : int) (fuel' : nat) : string :=
+    match fuel' with
+    | O => ""
+    | S f' =>
+        if leb n pos then ""
+        else
+          let line_end := find_char body ch_newline pos mime_fuel in
+          let line := trim_trailing_cr (PrimString.sub body pos (sub line_end pos)) in
+          let llen := PrimString.length line in
+          if andb (leb 3%int63 llen)
+                  (string_eqb (PrimString.sub line 0%int63 2%int63) "--")
+          then PrimString.sub line 2%int63 (sub llen 2%int63)
+          else
+            let next := if ltb line_end n then add line_end 1%int63 else n in
+            scan next f'
+    end in
+  scan 0%int63 mime_fuel.
+
 Definition parse_envelope (eml_body : string) : parsed_envelope :=
   let '(hdrs_block, body) := split_headers_body2 eml_body in
   let hdrs := parse_headers hdrs_block in
-  let ct_hdr := header_lookup "Content-Type" hdrs in
-  let boundary := extract_boundary ct_hdr in
-  let parts := split_parts body boundary in
+  let hdr_boundary := extract_boundary (header_lookup "Content-Type" hdrs) in
+  (* Full .eml (outer header present, e.g. the native decrypt_post path) -> split
+     the body on the header boundary.  Bare multipart body (#ciphertext, no outer
+     header — what render_eml_page emits) -> scan eml_body itself. *)
+  let use_scan := string_eqb hdr_boundary "" in
+  let boundary := if use_scan then scan_boundary eml_body else hdr_boundary in
+  let src := if use_scan then eml_body else body in
+  let parts := split_parts src boundary in
   let triples := parse_wraps (find_wraps parts) in
   let ct_b64 := find_ct_b64 parts in
   mkEnv triples (base64_decode (strip_ws ct_b64)).
