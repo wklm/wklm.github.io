@@ -413,10 +413,16 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "</div>" ::
       "<article id='decrypted-content'>" ::
       "<header><h1 id='real-title'></h1><p id='real-meta'></p></header>" ::
+      (* a11y: a pure-CSS checkbox toggle (no JS) swaps the bitmap canvas for the
+         accessible #real-body HTML text with increased letter/word spacing (Zorzi
+         et al.).  The checkbox is a SIBLING of #reader-canvas / #real-body so the
+         stylesheet's [#reader-a11y:checked ~ ...] rules can switch them. *)
+      "<input type='checkbox' id='reader-a11y' class='reader-a11y-toggle'>" ::
+      "<label for='reader-a11y' class='reader-a11y-label'>Comfortable spacing</label>" ::
       (* Verified-Reader: the ROCQ Typeset engine paints the decrypted body here
          (the primary visual reading surface).  #real-body below stays in the DOM
-         carrying the same text as an accessible (screen-reader) alternative, but
-         is visually hidden (.sr-only). *)
+         carrying the same text as an accessible (screen-reader) alternative,
+         visually hidden (.sr-only) until the toggle above reveals it. *)
       "<canvas id='reader-canvas' role='img' aria-label='Decrypted post body (rendered)'></canvas>" ::
       "<div id='real-body' class='sr-only'></div>" ::
       "<div id='real-images'></div>" ::
@@ -545,16 +551,30 @@ Definition stylesheet_decrypt : string :=
     "#clear-key-button{display:none;margin-top:.5rem;margin-left:.5rem;padding:.35rem 1rem;font-family:inherit;font-size:.82rem;border:1px solid var(--rule);background:var(--paper);color:var(--muted);cursor:pointer}" ::
     ".decrypt-error{margin-top:.5rem;color:#c0392b;display:none}" ::
     ".decrypt-fallback{color:var(--muted);font-size:.82rem}" ::
-    "#decrypted-content{display:none;margin-top:2rem}" ::
+    "#decrypted-content{display:none;margin-top:2rem;animation:reader-fade .5s ease-out both}" ::
     "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
     "#real-body img{max-width:100%;height:auto}" ::
     (* Verified-Reader canvas is the visible reading surface; sized to its CSS
        box (reader_begin reads clientWidth/Height * devicePixelRatio). *)
-    "#reader-canvas{display:block;width:100%;max-width:42rem;height:32rem;margin:0 0 1rem}" ::
+    "#reader-canvas{display:block;width:100%;max-width:38rem;height:32rem;margin:0 0 1rem;animation:reader-resolve .7s ease-out both}" ::
     (* #real-body kept in the DOM for accessibility but visually hidden (the
        canvas is the visual surface).  Standard clip-rect sr-only — textContent
        stays readable to assistive tech AND to the e2e text assertion. *)
     ".sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}" ::
+    (* decrypt-resolve: the content + canvas fade/blur in when revealed (the
+       ciphertext->set-prose moment).  Pure presentation; the canvas backing
+       store is painted synchronously, so getImageData (e2e) is unaffected. *)
+    "@keyframes reader-fade{from{opacity:0}to{opacity:1}}" ::
+    "@keyframes reader-resolve{from{opacity:0;filter:blur(6px)}to{opacity:1;filter:blur(0)}}" ::
+    (* a11y comfortable-spacing toggle (pure CSS).  Hide the raw checkbox; style
+       the label as a button; when checked, hide the canvas and reveal #real-body
+       as full-flow text with Zorzi-style increased letter/word spacing. *)
+    ".reader-a11y-toggle{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}" ::
+    ".reader-a11y-label{display:inline-block;margin:0 0 1rem;padding:.3rem .8rem;font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:.8rem;color:var(--muted);border:1px solid var(--rule);border-radius:2px;cursor:pointer}" ::
+    ".reader-a11y-toggle:focus-visible ~ .reader-a11y-label{outline:2px solid var(--accent);outline-offset:2px}" ::
+    "#reader-a11y:checked ~ .reader-a11y-label{background:var(--ink);color:var(--paper)}" ::
+    "#reader-a11y:checked ~ #reader-canvas{display:none}" ::
+    "#reader-a11y:checked ~ #real-body{position:static;width:auto;height:auto;margin:0 0 1rem;clip:auto;overflow:visible;white-space:normal;letter-spacing:.12em;word-spacing:.18em;line-height:1.8}" ::
     ".post-colophon{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--rule);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.65rem;color:var(--muted);white-space:pre-wrap}" ::
     ".inbox-status::after{content:' ✉';color:var(--muted)}" ::
     ".inbox-status.unlocked::after{content:' 📜';color:var(--muted)}" ::

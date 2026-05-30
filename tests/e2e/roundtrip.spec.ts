@@ -187,6 +187,20 @@ test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, p
   });
   expect(canvasPainted.ok, `reader-canvas not painted: ${canvasPainted.reason}`).toBe(true);
 
+  // Wave 3 a11y: the pure-CSS "Comfortable spacing" toggle hides the bitmap
+  // canvas and reveals #real-body as full-flow text with Zorzi letter/word
+  // spacing (better accessibility than spacing a canvas would be).
+  await page.locator('.reader-a11y-label').click();
+  await expect(page.locator('#reader-canvas')).toBeHidden();
+  const spaced = await page.locator('#real-body').evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { ls: s.letterSpacing, pos: s.position };
+  });
+  expect(spaced.ls, 'a11y mode should apply letter-spacing').not.toBe('normal');
+  expect(spaced.pos, 'a11y mode should un-clip #real-body').toBe('static');
+  await page.locator('.reader-a11y-label').click(); // restore the canvas view
+  await expect(page.locator('#reader-canvas')).toBeVisible();
+
   // The encrypted shell + decrypt UI are hidden post-decrypt; no <img> rendered
   // (the fixture has no images, and the public shell must never embed one).
   await expect(page.locator('#encrypted-shell')).toBeHidden();
