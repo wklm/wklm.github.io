@@ -175,10 +175,17 @@ Definition env_branch (b : string) : string :=
    the pre-commit hook encrypt it) — we encrypt in-process and commit only the
    ciphertext, so the publish only needs to add posts-encrypted/. *)
 Definition publish_git (branch slug eml_rel : string) : IO string :=
+  (* The expected work-tree basename is the basename of BLOG_REPO_PATH (default
+     "/repo" -> "repo"), so the R4 guard tracks the actual deploy config rather
+     than a hard-coded literal. *)
+  repo_path0 <- getenv "BLOG_REPO_PATH" ;;
+  let repo_base :=
+    let rp := trim repo_path0 in
+    if is_empty rp then "repo" else basename_of rp in
   cwd <- current_path ;;
   gitdir <- git ("rev-parse" :: "--git-dir" :: nil) ;;
   (* R4 guard: only reset --hard inside the real repo work-tree. *)
-  if negb (repo_guard_ok cwd "repo" gitdir) then
+  if negb (repo_guard_ok cwd repo_base gitdir) then
     _ <- eprint (concat_all
       ("smtp: refusing git reset --hard outside repo work-tree (cwd=" ::
        trim cwd :: ")" :: lf :: nil)) ;;
