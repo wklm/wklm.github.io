@@ -1,0 +1,15 @@
+; Verified Reader typesetter theory.
+;
+; Self-contained: depends only on Stdlib + Crane (for the final extraction
+; directives in GlyphLayout.v) + ITree/ExtLib/Paco (pulled in transitively by
+; the Crane plugin prelude).  It does NOT depend on the crypto FFI files
+; (CryptoSpec.v etc.) and pulls in no OpenSSL, so it typechecks in the bare
+; crane-blog:builder image with `dune build`.
+;
+; Theory name [Typeset] so modules are addressed as [Typeset.Boxes] etc.,
+; disjoint from the [FormalBlog] theory in ../dune.
+(coq.theory
+ (name Typeset)
+ (package crane_blog)
+ (theories Stdlib Crane ITree ExtLib Paco)
+ (plugins rocq-crane.plugin))
