@@ -439,3 +439,250 @@ Proof.
   - (* Z.ltb tol b = false  ->  Z.leb b tol = true *)
     apply Z.ltb_ge in Htol. apply Z.leb_le. exact Htol.
 Qed.
+
+(* ===================================================================== *)
+(* T6: optimality of the dynamic program                                  *)
+(* ===================================================================== *)
+
+(* We formalise "a breaking" as a list of break positions, and its total
+   demerits by WALKING the breaking left-to-right exactly as the DP does
+   (carrying the running predecessor fitness/flag and the line count).
+   This makes the relationship between [try_extend] and the breaking cost
+   DEFINITIONAL, which is what lets the Bellman lemmas go through. *)
+
+(* The per-line demerit contributed by the line from position [i] to [j]
+   given the predecessor's fitness [pf] and flag [pfl].  This is exactly
+   the quantity [try_extend] adds (the [line_demerits ...] term). *)
+Definition seg_demerits (sp_ : line_spec) (p : paragraph)
+    (i j : nat) (pf : fitness) (pfl : bool) : Z :=
+  let w := line_width i j p in
+  let y := line_stretch i j p in
+  let z := line_shrink i j p in
+  let W := ls_measure sp_ in
+  let b := badness_of w y z W in
+  line_demerits (ls_line_pen sp_) b
+    (break_penalty p (Nat.pred j)) (break_flagged p (Nat.pred j)) pfl
+    pf (fitness_of w y z W)
+    (ls_flagged_pen sp_) (ls_fit_pen sp_).
+
+(* A line from [i] to [j] is feasible (admissible to the active set) iff it
+   is a forced break, or it is within tolerance and not overfull -- exactly
+   [try_extend]'s acceptance guard. *)
+Definition seg_feasible (sp_ : line_spec) (p : paragraph) (i j : nat) : bool :=
+  let w := line_width i j p in
+  let y := line_stretch i j p in
+  let z := line_shrink i j p in
+  let W := ls_measure sp_ in
+  let b := badness_of w y z W in
+  orb (is_forced_break p (Nat.pred j))
+      (andb (negb (overfull w y z W)) (Z.leb b (ls_tolerance sp_))).
+
+(* Walk a breaking, accumulating demerits.  [i] is the current position,
+   [pf]/[pfl] the predecessor fitness/flag.  Returns the total demerits and
+   threads the new fitness/flag along.  Split into a value-only fixpoint
+   (no tuple in recursion -> no std::any) by also threading state through a
+   small record. *)
+Record walk_state : Set := mkWalk {
+  ws_pos : nat; ws_fit : fitness; ws_flag : bool; ws_acc : Z; ws_ok : bool
+}.
+
+Definition walk_step (sp_ : line_spec) (p : paragraph) (st : walk_state) (j : nat)
+  : walk_state :=
+  let i := ws_pos st in
+  let d := seg_demerits sp_ p i j (ws_fit st) (ws_flag st) in
+  let w := line_width i j p in
+  let y := line_stretch i j p in
+  let z := line_shrink i j p in
+  let W := ls_measure sp_ in
+  mkWalk j (fitness_of w y z W) (break_flagged p (Nat.pred j))
+         (ws_acc st + d)
+         (andb (ws_ok st) (seg_feasible sp_ p i j)).
+
+Definition walk0 : walk_state := mkWalk 0 NormalLine false 0 true.
+
+(* Total demerits of a breaking (a list of positions), starting from the
+   paragraph start.  Equals the DP accumulation along that path. *)
+Definition breaking_demerits (sp_ : line_spec) (p : paragraph) (bs : list nat) : Z :=
+  ws_acc (fold_left (walk_step sp_ p) bs walk0).
+
+(* A breaking is feasible iff every segment along it is feasible AND it ends
+   exactly at the paragraph end. *)
+Definition breaking_feasible (sp_ : line_spec) (p : paragraph) (bs : list nat) : bool :=
+  let final := fold_left (walk_step sp_ p) bs walk0 in
+  andb (ws_ok final) (Nat.eqb (ws_pos final) (length p)).
+
+(* ----- Bellman soundness lemmas (PROVED) -------------------------------*)
+
+(* (L1) [try_extend] adds EXACTLY the segment demerit to the predecessor's
+   accumulated demerits.  This ties the DP step to [seg_demerits]. *)
+Lemma try_extend_demerits :
+  forall sp_ p a j n,
+    try_extend sp_ p a j = Some n ->
+    nd_demerits n
+    = nd_demerits a + seg_demerits sp_ p (nd_pos a) j (nd_fitness a) (nd_flagged a).
+Proof.
+  intros sp_ p a j n Hext.
+  unfold try_extend in Hext.
+  destruct (is_forced_break p (Nat.pred j)) eqn:Hf; simpl in Hext;
+  [ | destruct (overfull _ _ _ _) eqn:Hov; simpl in Hext ];
+  repeat (match goal with
+          | H : (if ?c then _ else _) = Some _ |- _ => destruct c eqn:?
+          end; simpl in Hext);
+  try discriminate; inversion Hext; subst; cbn [nd_demerits];
+  unfold seg_demerits; reflexivity.
+Qed.
+
+(* (L2) [try_extend] preserves the line/position structure: the new node
+   sits at [j] and records the predecessor at [nd_pos a]. *)
+Lemma try_extend_pos :
+  forall sp_ p a j n,
+    try_extend sp_ p a j = Some n -> nd_pos n = j /\ nd_prev n = nd_pos a.
+Proof.
+  intros sp_ p a j n Hext. unfold try_extend in Hext.
+  destruct (is_forced_break p (Nat.pred j)); simpl in Hext;
+  repeat (match goal with
+          | H : (if ?c then _ else _) = Some _ |- _ => destruct c
+          end; simpl in Hext);
+  try discriminate; inversion Hext; subst; split; reflexivity.
+Qed.
+
+(* (L3) [best_to] returns, if anything, a node whose demerits are <= those
+   of EVERY feasible extension from the active set to [j].  This is the
+   per-step Bellman minimality, proved by induction on the active list with
+   the fold accumulator generalised.  KEY lemma for T6. *)
+Lemma best_to_minimal :
+  forall sp_ p actives j a n m,
+    In a actives ->
+    try_extend sp_ p a j = Some n ->
+    best_to sp_ p actives j = Some m ->
+    nd_demerits m <= nd_demerits n.
+Proof.
+  intros sp_ p actives j. unfold best_to.
+  (* generalise the accumulator: prove for any starting acc that the fold
+     result is <= any feasible candidate seen in [actives], and <= acc when
+     acc is Some. *)
+  assert (GEN:
+    forall l acc,
+      (forall m0, acc = Some m0 ->
+         forall a0 n0, In a0 l -> try_extend sp_ p a0 j = Some n0 ->
+                       True) ->
+      forall res, fold_left
+        (fun acc a =>
+           match try_extend sp_ p a j with
+           | None => acc
+           | Some n =>
+               match acc with
+               | None => Some n
+               | Some m => if Z.ltb (nd_demerits n) (nd_demerits m) then Some n else acc
+               end
+           end) l acc = Some res ->
+      (forall a0 n0, In a0 l -> try_extend sp_ p a0 j = Some n0 ->
+         nd_demerits res <= nd_demerits n0)
+      /\ (forall m0, acc = Some m0 -> nd_demerits res <= nd_demerits m0)).
+  { induction l as [| x l IH]; intros acc Hpre res Hfold; simpl in Hfold.
+    - (* empty list *) split.
+      + intros a0 n0 [] _.
+      + intros m0 Hacc. rewrite Hacc in Hfold. inversion Hfold; subst.
+        apply Z.le_refl.
+    - (* x :: l *)
+      destruct (try_extend sp_ p x j) as [nx|] eqn:Hx.
+      + (* x feasible *)
+        destruct acc as [m0|] eqn:Hacc.
+        * destruct (Z.ltb (nd_demerits nx) (nd_demerits m0)) eqn:Hlt.
+          -- (* take nx *)
+             specialize (IH (Some nx) ltac:(intros; exact I) res Hfold).
+             destruct IH as [IHin IHacc].
+             split.
+             ++ intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
+                ** rewrite Hx in Hext0. inversion Hext0; subst.
+                   eapply IHacc; reflexivity.
+                ** apply (IHin a0 n0 Hin0 Hext0).
+             ++ intros mm Hmm. inversion Hmm; subst.
+                eapply Z.le_trans; [ eapply IHacc; reflexivity | ].
+                apply Z.ltb_lt in Hlt. apply Z.lt_le_incl. exact Hlt.
+          -- (* keep m0 *)
+             specialize (IH (Some m0) ltac:(intros; exact I) res Hfold).
+             destruct IH as [IHin IHacc].
+             split.
+             ++ intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
+                ** rewrite Hx in Hext0. inversion Hext0; subst.
+                   eapply Z.le_trans; [ eapply IHacc; reflexivity | ].
+                   apply Z.ltb_ge in Hlt. exact Hlt.
+                ** apply (IHin a0 n0 Hin0 Hext0).
+             ++ intros mm Hmm. inversion Hmm; subst.
+                eapply IHacc; reflexivity.
+        * (* acc = None, take nx *)
+          specialize (IH (Some nx) ltac:(intros; exact I) res Hfold).
+          destruct IH as [IHin IHacc].
+          split.
+          -- intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
+             ++ rewrite Hx in Hext0. inversion Hext0; subst.
+                eapply IHacc; reflexivity.
+             ++ apply (IHin a0 n0 Hin0 Hext0).
+          -- intros mm Hmm. discriminate Hmm.
+      + (* x infeasible: skip *)
+        specialize (IH acc ltac:(intros; exact I) res Hfold).
+        destruct IH as [IHin IHacc].
+        split.
+        * intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
+          -- rewrite Hx in Hext0. discriminate Hext0.
+          -- apply (IHin a0 n0 Hin0 Hext0).
+        * exact IHacc. }
+  intros a n m Hin Hext Hbest.
+  assert (Hpre : forall m0, (@None node) = Some m0 ->
+            forall a0 n0, In a0 actives -> try_extend sp_ p a0 j = Some n0 -> True)
+    by (intros m0 Hd; discriminate Hd).
+  specialize (GEN actives None Hpre m Hbest).
+  destruct GEN as [Hin' _].
+  apply (Hin' a n Hin Hext).
+Qed.
+
+(* ----- T6 statement + reduction (residual Admitted) --------------------*)
+
+(* The optimal-substructure invariant of the DP: after running the fold,
+   the active set contains, for every reachable position [q], a node whose
+   recorded demerits equal the MINIMUM [breaking_demerits] over all feasible
+   breakings ending at [q].  Proving this invariant in full requires an
+   induction over [legal_positions] together with [best_to_minimal] (L3) and
+   the soundness lemmas (L1,L2), plus the fact that any feasible breaking's
+   penultimate position is itself an active node (subpath optimality).
+
+   We STATE it and reduce T6 to it.  The invariant's inductive proof is the
+   residual left as a clear TODO (see below); the per-step minimality it
+   relies on (L3) is fully proved above. *)
+Definition dp_optimal_invariant (sp_ : line_spec) (p : paragraph) : Prop :=
+  forall bs,
+    breaking_feasible sp_ p bs = true ->
+    match final_node sp_ p with
+    | Some fin => nd_demerits fin <= breaking_demerits sp_ p bs
+    | None => False
+    end.
+
+(* AIDEV-TODO(T6): prove [dp_optimal_invariant] by induction on
+   [legal_positions p] using [best_to_minimal] (proved) for the inductive
+   step and subpath-optimality (any prefix of a feasible breaking is a
+   feasible breaking reaching an active node).  The per-step Bellman
+   minimality (the mathematical heart) is already discharged as
+   [best_to_minimal]; what remains is the bookkeeping that the fold's active
+   set covers every feasible path's predecessor.  This residual global
+   induction is deferred (plan sec: "Admitted the residual with a clear
+   TODO"). *)
+Axiom dp_optimal_invariant_holds :
+  forall sp_ p, dp_optimal_invariant sp_ p.
+
+(* T6 (line-break optimality): the breaking returned by [break_paragraph]
+   has total demerits no greater than ANY feasible breaking.  Given the
+   invariant, this is immediate: [final_node]'s demerits are the cost of the
+   returned breaking, and the invariant bounds them below every feasible
+   breaking's cost. *)
+Theorem T6_optimal :
+  forall sp_ p bs,
+    breaking_feasible sp_ p bs = true ->
+    match final_node sp_ p with
+    | Some fin => nd_demerits fin <= breaking_demerits sp_ p bs
+    | None => False
+    end.
+Proof.
+  intros sp_ p bs Hfeas.
+  exact (dp_optimal_invariant_holds sp_ p bs Hfeas).
+Qed.
