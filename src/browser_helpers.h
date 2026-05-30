@@ -427,17 +427,20 @@ inline std::monostate dom_hide(const std::string& id) {
 //   glyphs.  Both blocks are regex-free (acorn-safe at -O2) and OpenSSL-free.
 // ---------------------------------------------------------------------------
 
-inline std::monostate reader_begin(const std::string& id) {
+inline std::monostate reader_begin(const std::string& id, double height_sp) {
     EM_ASM({
         var c = document.getElementById(UTF8ToString($0));
         if (!c) return;
         var cx = c.getContext('2d');
         if (!cx) return;
         var dpr = window.devicePixelRatio || 1;
-        // CSS box -> backing store px (HiDPI crispness).  Fall back to the
-        // element's attribute/intrinsic size if it is not yet laid out.
+        var PXPT = 96 / 72;          // CSS px per typographic point
         var cssW = c.clientWidth || c.width || 600;
-        var cssH = c.clientHeight || c.height || 400;
+        // Height comes from the total typeset content height (sp -> px), passed
+        // in by ROCQ so multi-paragraph bodies grow the canvas instead of
+        // clipping at the stylesheet's fixed height.
+        var cssH = Math.max(1, Math.round(($1 / 65536) * PXPT));
+        c.style.height = cssH + 'px';
         c.width = Math.max(1, Math.round(cssW * dpr));
         c.height = Math.max(1, Math.round(cssH * dpr));
         cx.setTransform(1, 0, 0, 1, 0, 0);
@@ -450,7 +453,7 @@ inline std::monostate reader_begin(const std::string& id) {
         // 10pt design size * 96/72 px-per-pt ~= 13.33px Georgia/Times serif.
         cx.font = (10 * 96 / 72) + 'px Georgia, "Times New Roman", serif';
         Module.__rdr = { cx: cx };
-    }, id.data());
+    }, id.data(), height_sp);
     return std::monostate{};
 }
 

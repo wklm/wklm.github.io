@@ -217,25 +217,76 @@ Definition passkey_gate (kid : string) : BIO bool :=
    table's average advance. *)
 Definition MEASURE : Z := 29491200%Z.   (* Boxes.pt 450 *)
 
-(* Sequence one [reader_glyph] brE effect per quad.  Structural recursion on the
-   quad list (the buffer is finite — one quad per laid-out glyph).  q_x/q_y are
-   [sp] (Z, -> int64 via ZInt); q_uv is the codepoint (int).  Mirrors the
-   monadic folds elsewhere (e.g. SmtpServer's serve loops): each effect's unit
-   result is bound and discarded, so none is dead-code-eliminated. *)
-Fixpoint draw_quads (qs : list quad) : BIO unit :=
+(* Paragraph chunking (Wave 2).  Split the body on blank lines and typeset each
+   paragraph independently, stacking them down the canvas.  This preserves
+   paragraph STRUCTURE (Knuth–Plass justifies within a paragraph, never across
+   one giant block) AND bounds each DP call.  Every helper returns a single type
+   (the accumulator is a parameter, never part of the return) so none becomes a
+   recursive tuple → no std::any (see crane-extraction-gotchas). *)
+
+(* Group lines into paragraphs: a blank line flushes the current paragraph; lines
+   within a paragraph are flowed (joined by a space).  [cur] is an accumulator
+   parameter, so the result is a plain [list string]. *)
+Fixpoint group_lines (lines : list string) (cur : string) : list string :=
+  match lines with
+  | nil => if string_eqb cur "" then nil else cur :: nil
+  | l :: rest =>
+      if string_eqb (trim l) ""
+      then (if string_eqb cur "" then group_lines rest "" else cur :: group_lines rest "")
+      else group_lines rest
+             (if string_eqb cur "" then l else PrimString.cat cur (PrimString.cat " " l))
+  end.
+
+Definition split_paragraphs (body : string) : list string :=
+  group_lines (split_on_char_fuel body ch_newline 0%int63 mime_fuel) "".
+
+(* The last baseline (max q_y) in a laid-out paragraph — its visual height. *)
+Fixpoint max_qy (qs : list quad) (acc : Z) : Z :=
+  match qs with
+  | nil => acc
+  | q :: rest => max_qy rest (if Z.ltb acc (q_y q) then q_y q else acc)
+  end.
+
+(* Inter-paragraph gap (sp): 12pt = 12 * 65536. *)
+Definition para_gap : Z := 786432%Z.
+
+(* Total stacked height (sp) of all paragraphs + gaps, used to size the canvas
+   before drawing.  Lays each paragraph out (the DP is O(n^2) after the Wave-2
+   KnuthPlass perf fix, so this pre-pass is cheap). *)
+Fixpoint total_height (ps : list string) (acc : Z) : Z :=
+  match ps with
+  | nil => acc
+  | body :: rest =>
+      let qs := layout_paragraph advance_of MEASURE (shape_paragraph body) in
+      total_height rest (Z.add (Z.add acc (max_qy qs 0%Z)) para_gap)
+  end.
+
+(* Sequence one [reader_glyph] per quad, offsetting every baseline by [dy] (sp).
+   Each effect's unit result is bound + discarded, so none is dead-code-eliminated. *)
+Fixpoint draw_quads_at (qs : list quad) (dy : Z) : BIO unit :=
   match qs with
   | nil => Ret tt
   | q :: rest =>
-      _ <- reader_glyph (q_x q) (q_y q) (q_uv q) ;;
-      draw_quads rest
+      _ <- reader_glyph (q_x q) (Z.add (q_y q) dy) (q_uv q) ;;
+      draw_quads_at rest dy
   end.
 
-(* Shape + lay out [body] and paint it onto #reader-canvas. *)
+(* Lay out + paint each paragraph at an accumulating vertical offset [dy]. *)
+Fixpoint render_paras (ps : list string) (dy : Z) : BIO unit :=
+  match ps with
+  | nil => Ret tt
+  | body :: rest =>
+      let qs := layout_paragraph advance_of MEASURE (shape_paragraph body) in
+      _ <- draw_quads_at qs dy ;;
+      render_paras rest (Z.add (Z.add dy (max_qy qs 0%Z)) para_gap)
+  end.
+
+(* Shape + lay out [body] paragraph-by-paragraph and paint onto #reader-canvas,
+   sizing the canvas to the total stacked height first. *)
 Definition render_canvas (body : string) : BIO unit :=
-  let p := shape_paragraph body in
-  let qs := layout_paragraph advance_of MEASURE p in
-  _ <- reader_begin "reader-canvas" ;;
-  draw_quads qs.
+  let ps := split_paragraphs body in
+  _ <- reader_begin "reader-canvas" (Z.add (total_height ps 0%Z) para_gap) ;;
+  render_paras ps 0%Z.
 
 (* Set the #real-images label when there are attachments.  Lifted to its own
    Definition (returning BIO unit) so Crane emits it as a real function: when a
@@ -248,11 +299,9 @@ Definition render_images (ic : inner_content) : BIO unit :=
   | names => dom_set_text "real-images" (images_label names)
   end.
 
-(* AIDEV-TODO(verified-reader Wave 2): GlyphLayout/KnuthPlass run an O(n^3) DP
-   (break_at), practical only to ~40 words.  The e2e fixture body is short so
-   this is fine, but long post bodies will be slow / blow fuel — Wave 2 needs the
-   DP perf fix (or paragraph chunking) before rendering arbitrary posts.  Do NOT
-   "fix" the DP here. *)
+(* Wave 2: paragraph chunking (render_paras above) bounds each Knuth–Plass DP
+   call to a single paragraph; combined with the KnuthPlass prefix-sum perf fix
+   it renders arbitrary-length post bodies without hanging. *)
 
 (* ================= Render ========================================== *)
 Definition render_decrypted (plaintext : string) : BIO unit :=

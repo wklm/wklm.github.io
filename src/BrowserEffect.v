@@ -69,7 +69,7 @@ Inductive brE : Type -> Type :=
    the canvas with the given id (font/colour/clear + stashes ctx+scale); each
    ReaderGlyph paints one glyph (codepoint [cp]) at pen (x,y) in sp.  The args
    are [Z] (= Typeset [sp]) for the coordinates, realized as int64 via ZInt. *)
-| ReaderBegin   : string -> brE unit              (* canvas id -> init 2D ctx *)
+| ReaderBegin   : string -> Z -> brE unit         (* canvas id, total height (sp) -> init+size 2D ctx *)
 | ReaderGlyph   : Z -> Z -> int -> brE unit.       (* x_sp, y_sp, codepoint -> fillText *)
 
 (* ---- Smart constructors (mirror IODefs.v's [print]/[read] style) ---- *)
@@ -112,8 +112,8 @@ Definition bind_invoke {E} `{brE -< E} (id : string) : itree E unit :=
 Definition action_flag {E} `{brE -< E} : itree E string :=
   embed ActionFlag.
 
-Definition reader_begin {E} `{brE -< E} (id : string) : itree E unit :=
-  embed (ReaderBegin id).
+Definition reader_begin {E} `{brE -< E} (id : string) (h : Z) : itree E unit :=
+  embed (ReaderBegin id h).
 Definition reader_glyph {E} `{brE -< E} (x y : Z) (cp : int) : itree E unit :=
   embed (ReaderGlyph x y cp).
 
@@ -146,7 +146,7 @@ Crane Extract Inductive brE => ""
     "random_bytes((int)(%a0))"
     "bind_invoke(%a0)"
     "crane_action_flag(std::monostate{})"
-    "reader_begin(%a0)"
+    "reader_begin(%a0, (double)%a1)"
     "reader_glyph((double)%a0, (double)%a1, (int)%a2)" ]
   From "browser_helpers.h".
 
@@ -183,6 +183,6 @@ Crane Extract Inlined Constant bind_invoke =>
 Crane Extract Inlined Constant action_flag =>
   "crane_action_flag(std::monostate{})" From "browser_helpers.h".
 Crane Extract Inlined Constant reader_begin =>
-  "reader_begin(%a0)" From "browser_helpers.h".
+  "reader_begin(%a0, (double)%a1)" From "browser_helpers.h".
 Crane Extract Inlined Constant reader_glyph =>
   "reader_glyph((double)%a0, (double)%a1, (int)%a2)" From "browser_helpers.h".

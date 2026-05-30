@@ -49,7 +49,7 @@ inline std::monostate dom_hide(const std::string&) { return {}; }
 inline std::string   dom_path_slug(std::monostate) { return std::string(); }
 
 // ---- Verified-Reader canvas (Wave 1) ----
-inline std::monostate reader_begin(const std::string&) { return {}; }
+inline std::monostate reader_begin(const std::string&, double) { return {}; }
 inline std::monostate reader_glyph(double, double, int) { return {}; }
 
 // ---- sessionStorage ----
