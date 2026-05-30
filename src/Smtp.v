@@ -57,15 +57,28 @@ Definition reply (code rest : string) : string := cat code (cat rest smtp_crlf).
 (* ---- Command parsing ----------------------------------------------- *)
 (* [upcase]/[downcase] (ASCII case folding) live in StringLib.v. *)
 
+(* Strip a trailing line ending: a final LF (delivered by RecvLine), then a
+   final CR.  RecvLine yields lines terminated by "\r\n" (CRLF) or bare "\n";
+   [trim_trailing_cr] alone only removes a final CR, so a no-argument command
+   line like "DATA\r\n" would keep its CRLF and never match a verb.  [chomp]
+   removes the LF first, then the CR. *)
+Definition chomp (line : string) : string :=
+  let n := PrimString.length line in
+  let no_lf :=
+    if andb (leb 1%int63 n) (int_eqb (PrimString.get line (sub n 1%int63)) ch_newline)
+    then PrimString.sub line 0%int63 (sub n 1%int63)
+    else line in
+  trim_trailing_cr no_lf.
+
 (* The verb = the uppercased text up to the first space (or whole line). *)
 Definition command_verb (line : string) : string :=
-  let stripped := trim_trailing_cr line in
+  let stripped := chomp line in
   let sp := find_char stripped ch_space 0%int63 mime_fuel in
   upcase (PrimString.sub stripped 0%int63 sp).
 
 (* The argument = everything after the first space, trimmed. *)
 Definition command_arg (line : string) : string :=
-  let stripped := trim_trailing_cr line in
+  let stripped := chomp line in
   let n := PrimString.length stripped in
   let sp := find_char stripped ch_space 0%int63 mime_fuel in
   if leb n sp then ""
@@ -86,9 +99,10 @@ Definition extract_addr (arg : string) : string :=
     if leb n cl then downcase (trim arg)
     else downcase (trim (PrimString.sub arg (add cl 1%int63) (sub n (add cl 1%int63)))).
 
-(* A line consisting solely of "." (after CR trim) terminates DATA. *)
+(* A line consisting solely of "." (after stripping the line ending)
+   terminates DATA. *)
 Definition is_data_terminator (line : string) : bool :=
-  string_eqb (trim_trailing_cr line) ".".
+  string_eqb (chomp line) ".".
 
 (* ---- The step relation --------------------------------------------- *)
 (* [step st line] returns (st', reply, data_complete?).  When the third
