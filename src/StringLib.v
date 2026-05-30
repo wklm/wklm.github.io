@@ -210,3 +210,33 @@ Fixpoint hex_encode_aux (s : string) (pos : int) (fuel : nat) : string :=
 
 Definition hex_encode (s : string) : string :=
   hex_encode_aux s 0%int63 mime_fuel.
+
+(* ---- ASCII case folding -------------------------------------------- *)
+(* Used by the SMTP state machine (verb upcasing, address/header lowercasing).
+   ASCII-only; non-letters pass through unchanged. *)
+
+Definition up_byte (c : int) : int :=
+  if andb (leb 97%int63 c) (leb c 122%int63) then sub c 32%int63 else c.
+
+Definition down_byte (c : int) : int :=
+  if andb (leb 65%int63 c) (leb c 90%int63) then add c 32%int63 else c.
+
+Fixpoint upcase_aux (s : string) (pos : int) (fuel : nat) : string :=
+  match fuel with
+  | O => ""
+  | S f' =>
+      if leb (PrimString.length s) pos then ""
+      else cat (PrimString.make 1%int63 (up_byte (PrimString.get s pos)))
+               (upcase_aux s (add pos 1%int63) f')
+  end.
+Definition upcase (s : string) : string := upcase_aux s 0%int63 mime_fuel.
+
+Fixpoint downcase_aux (s : string) (pos : int) (fuel : nat) : string :=
+  match fuel with
+  | O => ""
+  | S f' =>
+      if leb (PrimString.length s) pos then ""
+      else cat (PrimString.make 1%int63 (down_byte (PrimString.get s pos)))
+               (downcase_aux s (add pos 1%int63) f')
+  end.
+Definition downcase (s : string) : string := downcase_aux s 0%int63 mime_fuel.

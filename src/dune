@@ -23,3 +23,36 @@ clang++ -std=c++2b -O2 -fbracket-depth=1024 \
   -I . -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
   -lssl -lcrypto \
   -o blog_generator.exe")))
+
+; ──────────────────────────────────────────────────────────────────────
+; SMTP listener (Facet C).  SmtpServer.v is extracted by the FormalBlog
+; coq.theory above to ../FormalBlog/smtp_listener.{h,cpp}; here we compile it
+; natively with clang++ (mirroring blog_generator.exe), linking OpenSSL for
+; crypto_helpers.h and pthread for completeness.  net_helpers.h / proc_helpers.h
+; are header-only POSIX shims (no extra link flags).  The smtp_listener entry
+; takes no argv (config is read from the environment), so the generated
+; main.cpp simply calls run().
+(rule
+ (with-stdout-to smtp_main.cpp
+   (echo "\
+#include <smtp_listener.h>
+
+int main() {
+    run();
+    return 0;
+}
+")))
+
+(rule
+ (targets smtp_server.exe)
+ (deps
+  (file SmtpServer.vo)
+  (file crypto_helpers.h)
+  (file net_helpers.h)
+  (file proc_helpers.h)
+  smtp_main.cpp)
+ (action (bash "\
+clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+  -I . -I ../FormalBlog ../FormalBlog/smtp_listener.cpp smtp_main.cpp \
+  -lssl -lcrypto -lpthread \
+  -o smtp_server.exe")))

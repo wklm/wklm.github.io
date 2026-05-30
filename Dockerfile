@@ -102,9 +102,12 @@ COPY --chown=opam:opam dune-project ./
 COPY --chown=opam:opam src/ ./src/
 COPY --chown=opam:opam tools/ ./tools/
 
-# Build: compile Rocq -> extract C++ -> compile binaries (generator + CLI tools).
+# Build: compile Rocq -> extract C++ -> compile binaries (generator + CLI tools
+# + the Facet-C SMTP listener; the smtp/ image consumes smtp_server.exe from
+# this builder stage).
 RUN eval $(opam env) && \
-    dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe
+    dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe \
+               src/smtp_server.exe
 
 # ──────────────────────────────────────────────────────────────────────
 # Runtime image: blog_generator + encrypt_post + static JS, no Rocq.
