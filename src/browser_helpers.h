@@ -409,6 +409,63 @@ inline std::monostate dom_hide(const std::string& id) {
     return std::monostate{};
 }
 
+// ---------------------------------------------------------------------------
+// Verified-Reader canvas (Wave 1).  The ROCQ Typeset engine lays the decrypted
+// body into integer glyph quads (x,y in scaled points, 65536 sp = 1 pt); these
+// two effects paint that buffer onto a <canvas> with the Canvas-2D API.
+//
+//   reader_begin(id): grab the canvas + its 2D context, size its backing store
+//   to the CSS box * devicePixelRatio (crisp on HiDPI), scale the context by
+//   dpr so all later drawing is in CSS px, clear it, set the fill colour (the
+//   element's computed `color`) and an alphabetic baseline, and select a serif
+//   font.  The context is stashed on Module.__rdr for reader_glyph to reuse.
+//
+//   reader_glyph(x_sp,y_sp,cp): fillText one codepoint at the sp->px-converted
+//   pen.  sp/65536 = pt; px = pt * 96/72 (the CSS px-per-pt).  PXPT is the
+//   sp->px scale; the font size below uses the SAME factor on the 10pt design
+//   size so glyph advances (computed in ROCQ at 10pt) line up with the painted
+//   glyphs.  Both blocks are regex-free (acorn-safe at -O2) and OpenSSL-free.
+// ---------------------------------------------------------------------------
+
+inline std::monostate reader_begin(const std::string& id) {
+    EM_ASM({
+        var c = document.getElementById(UTF8ToString($0));
+        if (!c) return;
+        var cx = c.getContext('2d');
+        if (!cx) return;
+        var dpr = window.devicePixelRatio || 1;
+        // CSS box -> backing store px (HiDPI crispness).  Fall back to the
+        // element's attribute/intrinsic size if it is not yet laid out.
+        var cssW = c.clientWidth || c.width || 600;
+        var cssH = c.clientHeight || c.height || 400;
+        c.width = Math.max(1, Math.round(cssW * dpr));
+        c.height = Math.max(1, Math.round(cssH * dpr));
+        cx.setTransform(1, 0, 0, 1, 0, 0);
+        cx.scale(dpr, dpr);
+        cx.clearRect(0, 0, cssW, cssH);
+        var col = '';
+        try { col = getComputedStyle(c).color; } catch (e) {}
+        cx.fillStyle = col || '#111';
+        cx.textBaseline = 'alphabetic';
+        // 10pt design size * 96/72 px-per-pt ~= 13.33px Georgia/Times serif.
+        cx.font = (10 * 96 / 72) + 'px Georgia, "Times New Roman", serif';
+        Module.__rdr = { cx: cx };
+    }, id.data());
+    return std::monostate{};
+}
+
+inline std::monostate reader_glyph(double x_sp, double y_sp, int cp) {
+    EM_ASM({
+        var r = Module.__rdr;
+        if (!r || !r.cx) return;
+        var PXPT = 96 / 72;          // CSS px per typographic point
+        var x = ($0 / 65536) * PXPT; // sp -> pt -> px
+        var y = ($1 / 65536) * PXPT;
+        r.cx.fillText(String.fromCharCode($2), x, y);
+    }, x_sp, y_sp, cp);
+    return std::monostate{};
+}
+
 // location.pathname's last non-empty path segment (the post slug).
 inline std::string dom_path_slug(std::monostate) {
     char* p = reinterpret_cast<char*>(EM_ASM_PTR({

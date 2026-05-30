@@ -1,7 +1,13 @@
 (coq.theory
  (name FormalBlog)
  (package crane_blog)
- (theories Stdlib Crane ITree ExtLib Paco)
+ ; Typeset (top-level ../Typeset/dune, a SIBLING theory — must NOT live under
+ ; src/ or dune double-binds it as FormalBlog.Typeset) is added so DecryptApp.v
+ ; can [Require Import Typeset.Metrics / Typeset.GlyphLayout] for the
+ ; Verified-Reader canvas render; dune sequences Typeset before FormalBlog from
+ ; this dependency.  Typeset pulls in no OpenSSL and is std::any-free, so
+ ; crane_decrypt.check still passes.
+ (theories Stdlib Crane ITree ExtLib Paco Typeset)
  (plugins rocq-crane.plugin))
 
 (rule

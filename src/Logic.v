@@ -413,7 +413,12 @@ Definition render_eml_page (ep : EncryptedPost) : string :=
       "</div>" ::
       "<article id='decrypted-content'>" ::
       "<header><h1 id='real-title'></h1><p id='real-meta'></p></header>" ::
-      "<div id='real-body'></div>" ::
+      (* Verified-Reader: the ROCQ Typeset engine paints the decrypted body here
+         (the primary visual reading surface).  #real-body below stays in the DOM
+         carrying the same text as an accessible (screen-reader) alternative, but
+         is visually hidden (.sr-only). *)
+      "<canvas id='reader-canvas' role='img' aria-label='Decrypted post body (rendered)'></canvas>" ::
+      "<div id='real-body' class='sr-only'></div>" ::
       "<div id='real-images'></div>" ::
       "<footer class='post-colophon'></footer>" ::
       "</article>" ::
@@ -543,6 +548,13 @@ Definition stylesheet_decrypt : string :=
     "#decrypted-content{display:none;margin-top:2rem}" ::
     "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
     "#real-body img{max-width:100%;height:auto}" ::
+    (* Verified-Reader canvas is the visible reading surface; sized to its CSS
+       box (reader_begin reads clientWidth/Height * devicePixelRatio). *)
+    "#reader-canvas{display:block;width:100%;max-width:42rem;height:32rem;margin:0 0 1rem}" ::
+    (* #real-body kept in the DOM for accessibility but visually hidden (the
+       canvas is the visual surface).  Standard clip-rect sr-only — textContent
+       stays readable to assistive tech AND to the e2e text assertion. *)
+    ".sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}" ::
     ".post-colophon{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--rule);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.65rem;color:var(--muted);white-space:pre-wrap}" ::
     ".inbox-status::after{content:' ✉';color:var(--muted)}" ::
     ".inbox-status.unlocked::after{content:' 📜';color:var(--muted)}" ::

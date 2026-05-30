@@ -25,6 +25,16 @@
 From Corelib Require Import PrimString PrimInt63.
 Require Crane.Extraction.
 From Crane Require Import Mapping.Std Mapping.NatIntStd Monads.ITree.
+(* ZInt realizes Typeset's [sp] (= Z) as int64 for the glyph-quad coordinates we
+   feed to [reader_glyph]; same import as BrowserEffect.v.  Safe: no ROCQ-side
+   N/Z arithmetic exists in this decrypt graph (crypto is string-typed FFI).
+   We import [BinInt] (the [Z] type + Z_scope only) for MEASURE / the quad
+   coords; we deliberately do NOT [Require Import ZArith] — its [Nat]/[BinNat]
+   re-exports shadow the unqualified [PrimInt63.leb]/[ltb] used throughout
+   StringLib/DecryptApp with nat versions, breaking the existing [leb n pos]
+   (n:int) call in scan_boundary (BinInt keeps comparisons qualified [Z.leb]). *)
+From Stdlib Require Import BinInt.
+From Crane Require Import Mapping.ZInt.
 From ExtLib Require Import Structures.Monad.
 Import MonadNotation.
 From Stdlib Require Import Lists.List.
@@ -37,7 +47,9 @@ Require Import InnerMime.        (* extract_inner_text / body_to_html / images_l
 Require Import CryptoSpec.       (* unwrap_cek / decrypt_body (pure ROCQ, unchanged) *)
 Require Import BrowserCrypto.    (* re-points the 9 axioms to browser_helpers.h *)
 Require Import BridgeFFI.        (* json_array_len / json_array_field *)
-Require Import BrowserEffect.    (* brE effects *)
+Require Import BrowserEffect.    (* brE effects (incl. reader_begin / reader_glyph) *)
+Require Import Typeset.Metrics.      (* shape_paragraph / advance_of *)
+Require Import Typeset.GlyphLayout.  (* layout_paragraph / quad (q_x/q_y/q_uv) *)
 
 Open Scope pstring_scope.
 
@@ -187,6 +199,61 @@ Definition passkey_gate (kid : string) : BIO bool :=
     ok <- wa_get cred "crane-decrypt-challenge" ;;
     Ret (string_eqb ok "1").
 
+(* ================= Verified-Reader canvas render =================== *)
+(* Wave 1: render the decrypted body onto a <canvas> via the ROCQ Typeset
+   engine, alongside (not instead of) the accessible #real-body text.
+
+   Pipeline (the WASM spike's proven shape):
+     shape_paragraph : string -> paragraph         (Metrics)
+     layout_paragraph advance_of MEASURE p : quad_buffer = list quad  (GlyphLayout)
+   then one [reader_glyph] brE effect per quad, sequenced after [reader_begin].
+   The draw MUST be an itree brE effect (not the dead-code-eliminated
+   GlyphLayout.draw_glyph_quads [_ -> unit] axiom) so its result is sequenced
+   into the run — see crane-extraction-gotchas. *)
+
+(* Line measure (sp).  450pt = 450 * 65536 sp; at 96/72 px-per-pt that is ~600px,
+   inside the canvas's CSS box (#reader-canvas is width:100%, max-width:42rem in
+   Logic.v's stylesheet_decrypt).  ~33-50 readable chars/line for the metric
+   table's average advance. *)
+Definition MEASURE : Z := 29491200%Z.   (* Boxes.pt 450 *)
+
+(* Sequence one [reader_glyph] brE effect per quad.  Structural recursion on the
+   quad list (the buffer is finite — one quad per laid-out glyph).  q_x/q_y are
+   [sp] (Z, -> int64 via ZInt); q_uv is the codepoint (int).  Mirrors the
+   monadic folds elsewhere (e.g. SmtpServer's serve loops): each effect's unit
+   result is bound and discarded, so none is dead-code-eliminated. *)
+Fixpoint draw_quads (qs : list quad) : BIO unit :=
+  match qs with
+  | nil => Ret tt
+  | q :: rest =>
+      _ <- reader_glyph (q_x q) (q_y q) (q_uv q) ;;
+      draw_quads rest
+  end.
+
+(* Shape + lay out [body] and paint it onto #reader-canvas. *)
+Definition render_canvas (body : string) : BIO unit :=
+  let p := shape_paragraph body in
+  let qs := layout_paragraph advance_of MEASURE p in
+  _ <- reader_begin "reader-canvas" ;;
+  draw_quads qs.
+
+(* Set the #real-images label when there are attachments.  Lifted to its own
+   Definition (returning BIO unit) so Crane emits it as a real function: when a
+   unit-returning [match] is sequenced with [_ <- ... ;;] inline it is realized
+   as a `[&]() -> void { ... return std::monostate{}; }` IIFE — a void block
+   returning a value (C++ error).  A named Definition sidesteps that. *)
+Definition render_images (ic : inner_content) : BIO unit :=
+  match inner_images ic with
+  | nil => Ret tt
+  | names => dom_set_text "real-images" (images_label names)
+  end.
+
+(* AIDEV-TODO(verified-reader Wave 2): GlyphLayout/KnuthPlass run an O(n^3) DP
+   (break_at), practical only to ~40 words.  The e2e fixture body is short so
+   this is fine, but long post bodies will be slow / blow fuel — Wave 2 needs the
+   DP perf fix (or paragraph chunking) before rendering arbitrary posts.  Do NOT
+   "fix" the DP here. *)
+
 (* ================= Render ========================================== *)
 Definition render_decrypted (plaintext : string) : BIO unit :=
   let ic := extract_inner_text plaintext in
@@ -200,11 +267,12 @@ Definition render_decrypted (plaintext : string) : BIO unit :=
     dom_set_text "real-body"
       "(The decrypted message contained no readable text.)"
   else
+    (* Accessible text alternative (unchanged — the e2e #real-body assertion and
+       screen-reader access depend on it) ... *)
     _ <- dom_set_html "real-body" (body_to_html (inner_body ic)) ;;
-    match inner_images ic with
-    | nil => Ret tt
-    | names => dom_set_text "real-images" (images_label names)
-    end.
+    _ <- render_images ic ;;
+    (* ... then the primary VISUAL surface: typeset the body onto the canvas. *)
+    render_canvas (inner_body ic).
 
 (* ================= Reader-key matching loop ======================= *)
 (* Walk the enrolled reader keys; for the first that is a recipient (has a Wraps

@@ -20,6 +20,21 @@
 From Corelib Require Import PrimString PrimInt63.
 Require Crane.Extraction.
 From Crane Require Import Mapping.Std Mapping.NatIntStd Monads.ITree.
+(* Mapping.ZInt realizes [Z] (= Typeset's [sp]) as [int64_t] with native C++
+   arithmetic; without it Crane emits [Z] as an unreadable positive/N bit-tree.
+   The Verified-Reader glyph effects (ReaderGlyph) carry [Z] pen coordinates, so
+   this module must import ZInt for them to extract as plain int64.  SAFE here:
+   the crane_decrypt dependency graph (CryptoSpec / MimeBuild / BrowserCrypto /
+   ...) does NO ROCQ-side N/Z/positive arithmetic — P-256 lives entirely behind
+   the string-typed crypto FFI — so ZInt (which also maps N/positive ->
+   unsigned int) cannot truncate any existing big-int math.  See
+   crane-extraction-gotchas: verified zero BinNat/BinPos/ZArith use in the
+   decrypt graph.  We import [BinInt] (just the [Z] type + Z_scope) for the
+   ReaderGlyph coordinate args; we deliberately do NOT [Require Import ZArith]
+   — its nat [leb]/[ltb] re-exports shadow the unqualified PrimInt63 ones the
+   decrypt modules rely on (BinInt's are all qualified [Z.leb], so safe). *)
+From Stdlib Require Import BinInt.
+From Crane Require Import Mapping.ZInt.
 From ExtLib Require Import Structures.Monad.
 Import MonadNotation.
 
@@ -49,7 +64,13 @@ Inductive brE : Type -> Type :=
 | RandomBytes   : int -> brE string
 (* keepalive click re-entry (binding only) *)
 | BindInvoke    : string -> brE unit              (* arm a button to re-run main *)
-| ActionFlag    : brE string.                      (* read-and-clear the click flag *)
+| ActionFlag    : brE string                       (* read-and-clear the click flag *)
+(* Verified-Reader canvas (Wave 1).  ReaderBegin initialises the 2D context of
+   the canvas with the given id (font/colour/clear + stashes ctx+scale); each
+   ReaderGlyph paints one glyph (codepoint [cp]) at pen (x,y) in sp.  The args
+   are [Z] (= Typeset [sp]) for the coordinates, realized as int64 via ZInt. *)
+| ReaderBegin   : string -> brE unit              (* canvas id -> init 2D ctx *)
+| ReaderGlyph   : Z -> Z -> int -> brE unit.       (* x_sp, y_sp, codepoint -> fillText *)
 
 (* ---- Smart constructors (mirror IODefs.v's [print]/[read] style) ---- *)
 
@@ -91,6 +112,11 @@ Definition bind_invoke {E} `{brE -< E} (id : string) : itree E unit :=
 Definition action_flag {E} `{brE -< E} : itree E string :=
   embed ActionFlag.
 
+Definition reader_begin {E} `{brE -< E} (id : string) : itree E unit :=
+  embed (ReaderBegin id).
+Definition reader_glyph {E} `{brE -< E} (x y : Z) (cp : int) : itree E unit :=
+  embed (ReaderGlyph x y cp).
+
 (* ---- The browser IO monad ------------------------------------------- *)
 
 (* As in Logic.v / IoEffects.v, [BIO] is a [Notation] (not a [Definition]) so it
@@ -119,7 +145,9 @@ Crane Extract Inductive brE => ""
     "webauthn_get(%a0, %a1)"
     "random_bytes((int)(%a0))"
     "bind_invoke(%a0)"
-    "crane_action_flag(std::monostate{})" ]
+    "crane_action_flag(std::monostate{})"
+    "reader_begin(%a0)"
+    "reader_glyph((double)%a0, (double)%a1, (int)%a2)" ]
   From "browser_helpers.h".
 
 Crane Extract Inlined Constant dom_get_text =>
@@ -154,3 +182,7 @@ Crane Extract Inlined Constant bind_invoke =>
   "bind_invoke(%a0)" From "browser_helpers.h".
 Crane Extract Inlined Constant action_flag =>
   "crane_action_flag(std::monostate{})" From "browser_helpers.h".
+Crane Extract Inlined Constant reader_begin =>
+  "reader_begin(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant reader_glyph =>
+  "reader_glyph((double)%a0, (double)%a1, (int)%a2)" From "browser_helpers.h".

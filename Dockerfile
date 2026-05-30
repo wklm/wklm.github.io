@@ -60,6 +60,10 @@ USER opam
 # invalidate the Rocq/Crane compile layer.
 COPY --chown=opam:opam dune-project ./
 COPY --chown=opam:opam src/ ./src/
+# Typeset is a sibling coq.theory (top-level, NOT under src/) — nesting it under
+# src/ would double-bind it as FormalBlog.Typeset and collide.  FormalBlog
+# (src/dune) depends on it via (theories ... Typeset) for the Verified-Reader.
+COPY --chown=opam:opam Typeset/ ./Typeset/
 COPY --chown=opam:opam tools/ ./tools/
 
 # Build: compile Rocq -> extract C++ -> compile binaries: generator + CLI tools

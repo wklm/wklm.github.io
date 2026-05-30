@@ -148,8 +148,32 @@ test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, p
   await expect(page.locator('#decrypted-content')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('#decrypt-error')).toHaveText('');
   await expect(page.locator('#real-title')).toHaveText(FIXTURE_TITLE);
+  // #real-body is the accessible text alternative: kept in the DOM (so this
+  // assertion + screen readers see the plaintext) but visually subordinate
+  // (.sr-only) to the Verified-Reader canvas.  textContent works on sr-only.
   await expect(page.locator('#real-body')).toContainText(PLAINTEXT_MARKER);
   await expect(page.locator('#real-body')).toContainText('second paragraph');
+
+  // ---- Verified-Reader canvas: the ROCQ Typeset engine painted the body. ----
+  // The decrypted body is rendered onto #reader-canvas via reader_begin/
+  // reader_glyph (BrowserEffect.v).  Assert the canvas exists, is the visible
+  // surface, and that its 2D context actually has painted (non-blank) pixels —
+  // i.e. some pixel has a non-zero alpha.  A blank canvas (reader_begin/_glyph
+  // silently no-op'd, or DCE'd) would have all-zero alpha and fail here.
+  await expect(page.locator('#reader-canvas')).toBeVisible();
+  const canvasPainted = await page.evaluate(() => {
+    const c = document.getElementById('reader-canvas') as HTMLCanvasElement | null;
+    if (!c) return { ok: false, reason: 'no #reader-canvas element' };
+    if (c.width === 0 || c.height === 0)
+      return { ok: false, reason: `canvas backing store is ${c.width}x${c.height}` };
+    const cx = c.getContext('2d');
+    if (!cx) return { ok: false, reason: 'no 2d context' };
+    const { data } = cx.getImageData(0, 0, c.width, c.height);
+    let nonZeroAlpha = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) nonZeroAlpha++;
+    return { ok: nonZeroAlpha > 0, reason: `painted alpha px: ${nonZeroAlpha}`, nonZeroAlpha };
+  });
+  expect(canvasPainted.ok, `reader-canvas not painted: ${canvasPainted.reason}`).toBe(true);
 
   // The encrypted shell + decrypt UI are hidden post-decrypt; no <img> rendered
   // (the fixture has no images, and the public shell must never embed one).
