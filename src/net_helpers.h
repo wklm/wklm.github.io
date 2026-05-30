@@ -90,12 +90,20 @@ inline std::string net_recv_bytes(int64_t cfd, int64_t n) {
 }
 
 // ---- net_send(conn_fd, data) -> 0 on success, -1 on error ------------------
+// AUDIT #10: on Linux MSG_NOSIGNAL suppresses SIGPIPE when the peer has closed
+// its end of the socket; without it a client that disconnects mid-response
+// would deliver SIGPIPE and kill the whole listener.  send() then returns
+// -1/EPIPE, which the loop already surfaces as a -1 error to the caller.
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0  // fallback for platforms lacking the flag
+#endif
 inline int64_t net_send(int64_t cfd, std::string data) {
     std::size_t sent = 0;
     const char* p = data.data();
     std::size_t total = data.size();
     while (sent < total) {
-        ssize_t w = ::send(static_cast<int>(cfd), p + sent, total - sent, 0);
+        ssize_t w = ::send(static_cast<int>(cfd), p + sent, total - sent,
+                           MSG_NOSIGNAL);
         if (w <= 0) return -1;
         sent += static_cast<std::size_t>(w);
     }

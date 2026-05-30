@@ -18,6 +18,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <csignal>
+#include <cerrno>
+#include <poll.h>
 
 namespace crane_proc_detail {
 
@@ -51,12 +53,59 @@ inline std::string drain_fd(int fd) {
     return out;
 }
 
+// AUDIT #9: drain two pipe fds (child stdout + stderr) CONCURRENTLY.  Reading
+// one fd fully before the other deadlocks if the child fills the second pipe's
+// kernel buffer (~64 KB) while blocked writing the first.  poll() lets us
+// service whichever fd is readable, so neither pipe can wedge the child.
+// Fills [out_a] / [out_b] from [fd_a] / [fd_b] respectively until both hit EOF.
+inline void drain_two_fds(int fd_a, std::string& out_a,
+                          int fd_b, std::string& out_b) {
+    char buf[4096];
+    struct pollfd pfds[2];
+    pfds[0].fd = fd_a;
+    pfds[1].fd = fd_b;
+    std::string* outs[2] = {&out_a, &out_b};
+    int open_count = 2;
+    while (open_count > 0) {
+        for (int i = 0; i < 2; ++i) {
+            pfds[i].events = (pfds[i].fd >= 0) ? POLLIN : 0;
+            pfds[i].revents = 0;
+        }
+        int pr = ::poll(pfds, 2, -1);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;  // unexpected poll error: stop draining
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (pfds[i].fd < 0) continue;
+            // POLLHUP/POLLERR also warrant a read to consume any final bytes.
+            if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
+                ssize_t r = ::read(pfds[i].fd, buf, sizeof(buf));
+                if (r > 0) {
+                    outs[i]->append(buf, static_cast<std::size_t>(r));
+                } else if (r == 0) {
+                    pfds[i].fd = -1;  // EOF on this fd
+                    --open_count;
+                } else if (errno != EINTR && errno != EAGAIN) {
+                    pfds[i].fd = -1;  // hard error: give up on this fd
+                    --open_count;
+                }
+            }
+        }
+    }
+}
+
 }  // namespace crane_proc_detail
 
 // run_proc(argv_nul_joined, stdin_data) -> "exit\nstdout\nstderr".
 // On spawn failure returns exit code 127 with the error on stderr.
 inline std::string run_proc(std::string argv_joined, std::string stdin_data) {
     using namespace crane_proc_detail;
+    // AUDIT #8: ignore SIGPIPE process-wide so that writing the child's stdin
+    // after the child (git) has exited returns -1/EPIPE instead of killing the
+    // listener.  The write loop below already breaks on w <= 0, so EPIPE is
+    // handled gracefully.  Idempotent; safe to call on every run_proc.
+    ::signal(SIGPIPE, SIG_IGN);
     std::vector<std::string> args = split_nul(argv_joined);
     if (args.empty() || args[0].empty()) {
         return std::string("127\n\nrun_proc: empty argv");
@@ -109,8 +158,10 @@ inline std::string run_proc(std::string argv_joined, std::string stdin_data) {
     }
     ::close(in_pipe[1]);  // signal EOF to child's stdin
 
-    std::string out = drain_fd(out_pipe[0]);
-    std::string err = drain_fd(err_pipe[0]);
+    // AUDIT #9: drain stdout AND stderr concurrently (see drain_two_fds) so a
+    // child that fills one pipe while we read the other cannot deadlock.
+    std::string out, err;
+    drain_two_fds(out_pipe[0], out, err_pipe[0], err);
     ::close(out_pipe[0]);
     ::close(err_pipe[0]);
 
