@@ -154,3 +154,46 @@ Proof. vm_compute. reflexivity. Qed.
 Example shape_collapse :
   List.length (shape "  ab   cd  ") = 3%nat.
 Proof. vm_compute. reflexivity. Qed.
+
+(* ===================================================================== *)
+(* (E) Break-position regression on a realistic ~28-word paragraph        *)
+(* ===================================================================== *)
+
+(* PURPOSE: pin [break_paragraph]'s exact output on a multi-line paragraph at
+   two measures, as a guard against ANY drift in the break positions.  This
+   complements the small (<=6-word) fixtures above with a paragraph long
+   enough that several DP relaxations and fitness transitions are exercised.
+
+   The two expected break lists below were computed on the ORIGINAL O(n^3)
+   breaker (pre prefix-sum/lookup-hoist optimisation) and are reproduced here
+   verbatim; the optimised breaker returns byte-identical lists, which is the
+   whole point of the refactor (pure performance, result-preserving).  If a
+   future change alters a single breakpoint, these [vm_compute] equalities
+   fail the build. *)
+Definition fixture_para : paragraph :=
+  shape_paragraph
+    "the quick brown fox jumps over the lazy dog and then the slow green turtle ambles past while seven tall birds watch from a old wooden fence nearby today".
+
+(* Pin the shaped item count so the fixture text itself cannot silently
+   change underneath the break-position assertions below. *)
+Example fixture_para_len : List.length fixture_para = 59%nat.
+Proof. vm_compute. reflexivity. Qed.
+
+(* At a ~200pt measure the optimum is a 4-line breaking. *)
+Example regress_break_wide :
+  break_at (pt 200) fixture_para = [16%nat; 32%nat; 50%nat; 59%nat].
+Proof. vm_compute. reflexivity. Qed.
+
+(* At a narrower ~120pt measure it is a 6-line breaking. *)
+Example regress_break_narrow :
+  break_at (pt 120) fixture_para
+  = [10%nat; 24%nat; 32%nat; 42%nat; 52%nat; 59%nat].
+Proof. vm_compute. reflexivity. Qed.
+
+(* Both returned breakings are feasible (no overfull / over-tolerance line). *)
+Example regress_break_feasible :
+  breaking_feasible (default_spec (pt 200)) fixture_para
+                    (break_at (pt 200) fixture_para) = true
+  /\ breaking_feasible (default_spec (pt 120)) fixture_para
+                       (break_at (pt 120) fixture_para) = true.
+Proof. vm_compute. split; reflexivity. Qed.

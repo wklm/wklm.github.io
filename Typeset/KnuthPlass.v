@@ -190,6 +190,128 @@ Definition line_width   (i j : nat) (p : paragraph) : sp := width_upto j p - wid
 Definition line_stretch (i j : nat) (p : paragraph) : sp := stretch_upto j p - stretch_upto i p.
 Definition line_shrink  (i j : nat) (p : paragraph) : sp := shrink_upto j p - shrink_upto i p.
 
+(* ----- Precomputed cumulative prefix-sum tables (the speed fix) --------- *)
+
+(* [width_upto k p] above re-folds [firstn k p] FROM SCRATCH; called O(n)
+   times per paragraph (once per legal position, inside [best_to]) that is an
+   O(n^2) tower of list allocations + bignum additions and was the dominant
+   cost.  We instead SCAN the paragraph ONCE into a cumulative table: entry
+   [k] of [prefix_w p] is exactly [width_upto k p].  The DP then reads the
+   table (no re-fold, no [firstn] allocation).
+
+   Three separate scans (not one returning a triple): a Fixpoint returning a
+   tuple extracts to [std::any] under Crane (recursive-tuple gotcha), whereas
+   three [list sp]-valued scans stay flat PODs.  Each scan emits the running
+   accumulator BEFORE consuming the next item, so the list has length
+   [length p + 1] and position [k] holds the sum of the first [k] items. *)
+Fixpoint scan_width (acc : sp) (p : paragraph) : list sp :=
+  acc :: match p with
+         | [] => []
+         | it :: rest =>
+             scan_width (acc + match it with
+                               | IBox b => bx_width b | IGlue g => gl_width g
+                               | IPenalty _ => 0 end) rest
+         end.
+Fixpoint scan_stretch (acc : sp) (p : paragraph) : list sp :=
+  acc :: match p with
+         | [] => []
+         | it :: rest =>
+             scan_stretch (acc + match it with IGlue g => gl_stretch g | _ => 0 end) rest
+         end.
+Fixpoint scan_shrink (acc : sp) (p : paragraph) : list sp :=
+  acc :: match p with
+         | [] => []
+         | it :: rest =>
+             scan_shrink (acc + match it with IGlue g => gl_shrink g | _ => 0 end) rest
+         end.
+
+(* The three tables for a paragraph, bundled (built once in [run_dp]). *)
+Record psums : Set := mkPsums { ps_w : list sp; ps_y : list sp; ps_z : list sp }.
+
+Definition build_psums (p : paragraph) : psums :=
+  mkPsums (scan_width 0 p) (scan_stretch 0 p) (scan_shrink 0 p).
+
+(* O(1)-amortised reads of the prefix sums at position [k]. *)
+Definition pw_at (ps : psums) (k : nat) : sp := nth k (ps_w ps) 0.
+Definition py_at (ps : psums) (k : nat) : sp := nth k (ps_y ps) 0.
+Definition pz_at (ps : psums) (k : nat) : sp := nth k (ps_z ps) 0.
+
+(* Cons laws for the totals (each total of [it :: rest] splits off the head
+   item's contribution).  Used to relate the scan's step to [total_*]. *)
+Lemma total_width_cons : forall it rest,
+  total_width (it :: rest)
+  = (match it with IBox b => bx_width b | IGlue g => gl_width g | IPenalty _ => 0 end)
+    + total_width rest.
+Proof.
+  intros it rest. change (it :: rest) with ([it] ++ rest).
+  rewrite total_width_app. destruct it; reflexivity.
+Qed.
+Lemma total_stretch_cons : forall it rest,
+  total_stretch (it :: rest)
+  = (match it with IGlue g => gl_stretch g | _ => 0 end) + total_stretch rest.
+Proof.
+  intros it rest. change (it :: rest) with ([it] ++ rest).
+  rewrite total_stretch_app. destruct it; reflexivity.
+Qed.
+Lemma total_shrink_cons : forall it rest,
+  total_shrink (it :: rest)
+  = (match it with IGlue g => gl_shrink g | _ => 0 end) + total_shrink rest.
+Proof.
+  intros it rest. change (it :: rest) with ([it] ++ rest).
+  rewrite total_shrink_app. destruct it; reflexivity.
+Qed.
+
+(* KEY EQUALITY LEMMAS: the precomputed table value at any in-range position
+   [k <= length p] EQUALS the original [total_*(firstn k p)] expression.
+   These are what make the speed refactor RESULT-IDENTICAL: the DP reads the
+   table only at legal positions (all <= length p), and every such read is
+   provably the very integer [width_upto]/[stretch_upto]/[shrink_upto] would
+   have recomputed -- so the DP, [seg_demerits], [breaking_demerits], T6 and
+   T7 all see precisely the same numbers as before the optimisation. *)
+Lemma scan_width_nth :
+  forall p k acc, (k <= length p)%nat ->
+    nth k (scan_width acc p) 0 = acc + total_width (firstn k p).
+Proof.
+  induction p as [| it p IH]; intros [|k] acc Hk; cbn [scan_width firstn nth length] in *.
+  - now rewrite total_width_nil, Z.add_0_r.
+  - exfalso; inversion Hk.
+  - now rewrite total_width_nil, Z.add_0_r.
+  - rewrite IH by (apply le_S_n; exact Hk).
+    rewrite total_width_cons. lia.
+Qed.
+Lemma scan_stretch_nth :
+  forall p k acc, (k <= length p)%nat ->
+    nth k (scan_stretch acc p) 0 = acc + total_stretch (firstn k p).
+Proof.
+  induction p as [| it p IH]; intros [|k] acc Hk; cbn [scan_stretch firstn nth length] in *.
+  - now rewrite Z.add_0_r.
+  - exfalso; inversion Hk.
+  - now rewrite Z.add_0_r.
+  - rewrite IH by (apply le_S_n; exact Hk).
+    rewrite total_stretch_cons. lia.
+Qed.
+Lemma scan_shrink_nth :
+  forall p k acc, (k <= length p)%nat ->
+    nth k (scan_shrink acc p) 0 = acc + total_shrink (firstn k p).
+Proof.
+  induction p as [| it p IH]; intros [|k] acc Hk; cbn [scan_shrink firstn nth length] in *.
+  - now rewrite Z.add_0_r.
+  - exfalso; inversion Hk.
+  - now rewrite Z.add_0_r.
+  - rewrite IH by (apply le_S_n; exact Hk).
+    rewrite total_shrink_cons. lia.
+Qed.
+
+Lemma pw_at_correct : forall p k, (k <= length p)%nat -> pw_at (build_psums p) k = width_upto k p.
+Proof. intros p k Hk. unfold pw_at, build_psums, width_upto, take_prefix; cbn [ps_w].
+  rewrite scan_width_nth by exact Hk; apply Z.add_0_l. Qed.
+Lemma py_at_correct : forall p k, (k <= length p)%nat -> py_at (build_psums p) k = stretch_upto k p.
+Proof. intros p k Hk. unfold py_at, build_psums, stretch_upto, take_prefix; cbn [ps_y].
+  rewrite scan_stretch_nth by exact Hk; apply Z.add_0_l. Qed.
+Lemma pz_at_correct : forall p k, (k <= length p)%nat -> pz_at (build_psums p) k = shrink_upto k p.
+Proof. intros p k Hk. unfold pz_at, build_psums, shrink_upto, take_prefix; cbn [ps_z].
+  rewrite scan_shrink_nth by exact Hk; apply Z.add_0_l. Qed.
+
 (* ===================================================================== *)
 (* Legal breakpoints                                                      *)
 (* ===================================================================== *)
@@ -272,47 +394,78 @@ Record node : Set := mkNode {
   nd_fitness  : fitness;
   nd_flagged  : bool;  (* was the break that created this node flagged? *)
   nd_demerits : Z;     (* minimal total demerits to reach this node *)
-  nd_prev     : nat    (* position of the predecessor node (for traceback) *)
+  nd_prev     : nat;   (* position of the predecessor node (for traceback) *)
+  (* PREFIX-SUM CACHE (performance only).  These hold the cumulative
+     width/stretch/shrink of the paragraph prefix [0 .. nd_pos), i.e.
+     [width_upto nd_pos p] / [stretch_upto ..] / [shrink_upto ..].  They let
+     [try_extend] size a candidate line [i..j) in O(1) as a difference of
+     prefix sums (the running-sums trick of Knuth-Plass), instead of
+     recomputing [total_*(firstn _ p)] from scratch each call (which made the
+     DP O(n^3)).  Their correctness is the invariant [node_cache_ok] below;
+     every node the DP creates satisfies it, and the optimality/feasibility
+     proofs rewrite these caches back to [line_width]/etc. so the recorded
+     demerits are provably identical to the cache-free formulation. *)
+  nd_w        : sp;
+  nd_y        : sp;
+  nd_z        : sp
 }.
 
-(* The start node: position 0, line 0, demerits 0. *)
+(* The start node: position 0, line 0, demerits 0.  Its prefix-sum cache is
+   the empty-prefix total, namely 0 in each component (= width_upto 0 p). *)
 Definition start_node : node :=
-  mkNode 0 0 NormalLine false 0 0.
+  mkNode 0 0 NormalLine false 0 0 0 0 0.
 
 (* Try to extend active node [a] to a candidate break at position [j].
    Returns [Some new_node] if the line [a.pos .. j) is feasible (badness
    within tolerance, or the break is forced), else [None].  This is the
    Bellman relaxation step. *)
+(* PER-POSITION ARGUMENTS (passed in, computed ONCE per [j] by the caller):
+   - [wj]/[yj]/[zj]  : the prefix sums AT [j] (= [width_upto j p] etc.), so the
+     line [i..j) is sized in O(1) as [wj - nd_w a] (the node carries
+     [nd_w a = width_upto i p]); this equals [line_width i j p], see
+     [line_width_cache].
+   - [forcedj]/[penj]/[flj] : the forced-flag / penalty / flagged of the break
+     taken just after item [Nat.pred j], i.e. [is_forced_break p (Nat.pred j)],
+     [break_penalty p (Nat.pred j)], [break_flagged p (Nat.pred j)].  These are
+     [nth (Nat.pred j) p ...] reads -- O(j) on the extracted linked list -- and
+     depend ONLY on [j], not on the active node [a].  Hoisting them out of the
+     per-active fold turns the DP from O(n^3) (an O(j) [nth] per relaxation)
+     into O(n^2) (one such read per position).  The guard, demerits and emitted
+     node are otherwise byte-identical to the cache-free version. *)
 Definition try_extend (sp_ : line_spec) (p : paragraph) (a : node) (j : nat)
+    (wj yj zj : sp) (forcedj : bool) (penj : Z) (flj : bool)
   : option node :=
   let i := nd_pos a in
-  let w := line_width i j p in
-  let y := line_stretch i j p in
-  let z := line_shrink i j p in
+  let w := wj - nd_w a in
+  let y := yj - nd_y a in
+  let z := zj - nd_z a in
   let W := ls_measure sp_ in
   let b := badness_of w y z W in
-  let forced := is_forced_break p (Nat.pred j) in
+  let forced := forcedj in
   (* feasible if forced, or badness within tolerance and not overfull *)
   if andb (negb forced)
           (orb (overfull w y z W) (Z.ltb (ls_tolerance sp_) b))
   then None
   else
     let this_fit := fitness_of w y z W in
-    let pen  := break_penalty p (Nat.pred j) in
-    let fl   := break_flagged p (Nat.pred j) in
+    let pen  := penj in
+    let fl   := flj in
     let d := nd_demerits a +
              line_demerits (ls_line_pen sp_) b pen fl (nd_flagged a)
                            (nd_fitness a) this_fit
                            (ls_flagged_pen sp_) (ls_fit_pen sp_) in
-    Some (mkNode j (S (nd_line a)) this_fit fl d i).
+    Some (mkNode j (S (nd_line a)) this_fit fl d i wj yj zj).
 
 (* From the active set, compute the best (min-demerit) node arriving at
-   position [j].  Fold over actives, keeping the minimum. *)
+   position [j].  Fold over actives, keeping the minimum.  The per-position
+   values [wj..flj] are supplied by the caller (computed once) and shared
+   across every active node, so no per-position work happens inside the fold. *)
 Definition best_to (sp_ : line_spec) (p : paragraph) (actives : list node) (j : nat)
+    (wj yj zj : sp) (forcedj : bool) (penj : Z) (flj : bool)
   : option node :=
   fold_left
     (fun acc a =>
-       match try_extend sp_ p a j with
+       match try_extend sp_ p a j wj yj zj forcedj penj flj with
        | None => acc
        | Some n =>
            match acc with
@@ -330,17 +483,48 @@ Definition best_to (sp_ : line_spec) (p : paragraph) (actives : list node) (j : 
    than pruning by fitness class -- correct (never loses the optimum), at
    the cost of a larger frontier.  For the bounded paragraphs of a reading
    view this is fine and keeps the code flat. *)
-Definition dp_step (sp_ : line_spec) (p : paragraph) (actives : list node) (j : nat)
+(* [ps] is the precomputed prefix-sum table; the sums at [j] are read from it
+   in O(1)-amortised time instead of being re-folded from [firstn j p]. *)
+Definition dp_step (sp_ : line_spec) (p : paragraph) (ps : psums)
+    (actives : list node) (j : nat)
   : list node :=
-  match best_to sp_ p actives j with
+  match best_to sp_ p actives j (pw_at ps j) (py_at ps j) (pz_at ps j)
+                (is_forced_break p (Nat.pred j)) (break_penalty p (Nat.pred j))
+                (break_flagged p (Nat.pred j)) with
   | None => actives
   | Some n => actives ++ [n]
   end.
 
 (* Run the DP over all legal break positions (ascending), starting from the
-   singleton active set [start_node].  Structural fold -> terminates. *)
+   singleton active set [start_node].  The prefix-sum table is built ONCE
+   here (a single O(n) scan) and threaded into every step.  Structural fold
+   -> terminates. *)
 Definition run_dp (sp_ : line_spec) (p : paragraph) : list node :=
-  fold_left (dp_step sp_ p) (legal_positions p) [start_node].
+  let ps := build_psums p in
+  fold_left (dp_step sp_ p ps) (legal_positions p) [start_node].
+
+(* RESULT-IDENTITY BRIDGE.  For any in-range position [j <= length p] the
+   table-driven step reads EXACTLY the prefix sums the cache-free formulation
+   would have recomputed, so [dp_step] with the precomputed table coincides
+   with feeding [width_upto j p]/[stretch_upto j p]/[shrink_upto j p]
+   directly.  This is the lemma that machine-checks "the optimisation does not
+   change the result": every position the DP visits is legal, hence
+   <= length p (see [legal_positions]), so the precomputed sums it uses are
+   the same integers as before.  (Consumes [pw_at_correct] et al.) *)
+Lemma dp_step_table_eq :
+  forall sp_ p actives j, (j <= length p)%nat ->
+    dp_step sp_ p (build_psums p) actives j
+    = match best_to sp_ p actives j (width_upto j p) (stretch_upto j p) (shrink_upto j p)
+                    (is_forced_break p (Nat.pred j)) (break_penalty p (Nat.pred j))
+                    (break_flagged p (Nat.pred j)) with
+      | None => actives
+      | Some n => actives ++ [n]
+      end.
+Proof.
+  intros sp_ p actives j Hj. unfold dp_step.
+  rewrite (pw_at_correct p j Hj), (py_at_correct p j Hj), (pz_at_correct p j Hj).
+  reflexivity.
+Qed.
 
 (* The optimal final node is the min-demerit node at position (length p). *)
 Definition final_node (sp_ : line_spec) (p : paragraph) : option node :=
@@ -404,18 +588,64 @@ Theorem break_paragraph_total :
 Proof. intros; eexists; reflexivity. Qed.
 
 (* ===================================================================== *)
+(* Prefix-sum cache correctness (ties the fast DP to the cache-free spec)  *)
+(* ===================================================================== *)
+
+(* A node's prefix-sum cache is CORRECT for paragraph [p] when its three
+   cached fields equal the genuine prefix sums at its position.  Every node
+   the DP ever materialises (the start node and every [try_extend] output)
+   satisfies this -- so the fast, O(1)-per-line sizing in [try_extend] is
+   provably the same number as the cache-free [line_width]/[line_stretch]/
+   [line_shrink].  The proofs below need only the cache fact, never the
+   reachability bookkeeping, so they stay self-contained. *)
+Definition node_cache_ok (p : paragraph) (a : node) : Prop :=
+  nd_w a = width_upto   (nd_pos a) p /\
+  nd_y a = stretch_upto (nd_pos a) p /\
+  nd_z a = shrink_upto  (nd_pos a) p.
+
+(* The start node's (0,0,0) cache is correct: the empty-prefix totals. *)
+Lemma start_node_cache_ok : forall p, node_cache_ok p start_node.
+Proof.
+  intros p. unfold node_cache_ok, start_node; cbn [nd_w nd_y nd_z nd_pos].
+  unfold width_upto, stretch_upto, shrink_upto, take_prefix; cbn [firstn].
+  repeat split; reflexivity.
+Qed.
+
+(* KEY EQUALITY LEMMA.  Under a correct cache for [a] and the caller's
+   contract that [wj]/[yj]/[zj] are the prefix sums at [j], the fast line
+   sizes [wj - nd_w a] etc. coincide DEFINITIONALLY-AFTER-REWRITE with the
+   canonical [line_width]/[line_stretch]/[line_shrink].  This is the single
+   bridge every downstream proof uses: rewrite the fast form to the spec
+   form, then the original cache-free proof script applies verbatim. *)
+Lemma line_width_cache :
+  forall p a j,
+    node_cache_ok p a ->
+    width_upto j p - nd_w a = line_width (nd_pos a) j p /\
+    stretch_upto j p - nd_y a = line_stretch (nd_pos a) j p /\
+    shrink_upto j p - nd_z a = line_shrink (nd_pos a) j p.
+Proof.
+  intros p a j (Hw & Hy & Hz).
+  unfold line_width, line_stretch, line_shrink.
+  rewrite Hw, Hy, Hz. repeat split; reflexivity.
+Qed.
+
+(* ===================================================================== *)
 (* T7 (b): every reported line fits or is forced/overfull-reported        *)
 (* ===================================================================== *)
 
 (* The feasibility guard in [try_extend] guarantees that any node added to
    the active set (other than via a forced break) has badness within
    tolerance and is not overfull.  We expose the guard as a lemma: if
-   [try_extend] returns [Some n] for a non-forced break at j from a, then
-   the line [i,j) is within tolerance and not overfull. *)
+   [try_extend] returns [Some n] for a non-forced break at j from a (with the
+   j-prefix-sums supplied and a's cache correct), then the line [i,j) is
+   within tolerance and not overfull. *)
 Lemma try_extend_feasible :
   forall sp_ p a j n,
+    node_cache_ok p a ->
     is_forced_break p (Nat.pred j) = false ->
-    try_extend sp_ p a j = Some n ->
+    try_extend sp_ p a j (width_upto j p) (stretch_upto j p) (shrink_upto j p)
+               (is_forced_break p (Nat.pred j)) (break_penalty p (Nat.pred j))
+               (break_flagged p (Nat.pred j)) = Some n ->
     let i := nd_pos a in
     let w := line_width i j p in
     let y := line_stretch i j p in
@@ -423,8 +653,11 @@ Lemma try_extend_feasible :
     overfull w y z (ls_measure sp_) = false /\
     Z.leb (badness_of w y z (ls_measure sp_)) (ls_tolerance sp_) = true.
 Proof.
-  intros sp_ p a j n Hforced Hext.
+  intros sp_ p a j n Hcache Hforced Hext.
   unfold try_extend in Hext.
+  (* Rewrite the fast cached line sizes back to the canonical [line_*]. *)
+  destruct (line_width_cache p a j Hcache) as (Ew & Ey & Ez).
+  rewrite Ew, Ey, Ez in Hext.
   rewrite Hforced in Hext. simpl in Hext.
   (* the guard is: if (negb false && (overfull || tol<b)) then None else Some.
      negb false = true, so the disjunction must be false for Some. *)
@@ -517,12 +750,17 @@ Definition breaking_feasible (sp_ : line_spec) (p : paragraph) (bs : list nat) :
    accumulated demerits.  This ties the DP step to [seg_demerits]. *)
 Lemma try_extend_demerits :
   forall sp_ p a j n,
-    try_extend sp_ p a j = Some n ->
+    node_cache_ok p a ->
+    try_extend sp_ p a j (width_upto j p) (stretch_upto j p) (shrink_upto j p)
+               (is_forced_break p (Nat.pred j)) (break_penalty p (Nat.pred j))
+               (break_flagged p (Nat.pred j)) = Some n ->
     nd_demerits n
     = nd_demerits a + seg_demerits sp_ p (nd_pos a) j (nd_fitness a) (nd_flagged a).
 Proof.
-  intros sp_ p a j n Hext.
+  intros sp_ p a j n Hcache Hext.
   unfold try_extend in Hext.
+  destruct (line_width_cache p a j Hcache) as (Ew & Ey & Ez).
+  rewrite Ew, Ey, Ez in Hext.
   destruct (is_forced_break p (Nat.pred j)) eqn:Hf; simpl in Hext;
   [ | destruct (overfull _ _ _ _) eqn:Hov; simpl in Hext ];
   repeat (match goal with
@@ -535,11 +773,11 @@ Qed.
 (* (L2) [try_extend] preserves the line/position structure: the new node
    sits at [j] and records the predecessor at [nd_pos a]. *)
 Lemma try_extend_pos :
-  forall sp_ p a j n,
-    try_extend sp_ p a j = Some n -> nd_pos n = j /\ nd_prev n = nd_pos a.
+  forall sp_ p a j n wj yj zj forcedj penj flj,
+    try_extend sp_ p a j wj yj zj forcedj penj flj = Some n ->
+    nd_pos n = j /\ nd_prev n = nd_pos a.
 Proof.
-  intros sp_ p a j n Hext. unfold try_extend in Hext.
-  destruct (is_forced_break p (Nat.pred j)); simpl in Hext;
+  intros sp_ p a j n wj yj zj forcedj penj flj Hext. unfold try_extend in Hext.
   repeat (match goal with
           | H : (if ?c then _ else _) = Some _ |- _ => destruct c
           end; simpl in Hext);
@@ -551,24 +789,27 @@ Qed.
    per-step Bellman minimality, proved by induction on the active list with
    the fold accumulator generalised.  KEY lemma for T6. *)
 Lemma best_to_minimal :
-  forall sp_ p actives j a n m,
+  forall sp_ p actives j wj yj zj forcedj penj flj a n m,
     In a actives ->
-    try_extend sp_ p a j = Some n ->
-    best_to sp_ p actives j = Some m ->
+    try_extend sp_ p a j wj yj zj forcedj penj flj = Some n ->
+    best_to sp_ p actives j wj yj zj forcedj penj flj = Some m ->
     nd_demerits m <= nd_demerits n.
 Proof.
-  intros sp_ p actives j. unfold best_to.
+  intros sp_ p actives j wj yj zj forcedj penj flj. unfold best_to.
+  (* The minimality argument is entirely about the [nd_demerits] comparison
+     in the fold and is unaffected by HOW the line sizes [wj]/[yj]/[zj] were
+     obtained (here they are read once from the precomputed prefix table). *)
   (* generalise the accumulator: prove for any starting acc that the fold
      result is <= any feasible candidate seen in [actives], and <= acc when
      acc is Some. *)
   assert (GEN:
     forall l acc,
       (forall m0, acc = Some m0 ->
-         forall a0 n0, In a0 l -> try_extend sp_ p a0 j = Some n0 ->
+         forall a0 n0, In a0 l -> try_extend sp_ p a0 j wj yj zj forcedj penj flj = Some n0 ->
                        True) ->
       forall res, fold_left
         (fun acc a =>
-           match try_extend sp_ p a j with
+           match try_extend sp_ p a j wj yj zj forcedj penj flj with
            | None => acc
            | Some n =>
                match acc with
@@ -576,7 +817,7 @@ Proof.
                | Some m => if Z.ltb (nd_demerits n) (nd_demerits m) then Some n else acc
                end
            end) l acc = Some res ->
-      (forall a0 n0, In a0 l -> try_extend sp_ p a0 j = Some n0 ->
+      (forall a0 n0, In a0 l -> try_extend sp_ p a0 j wj yj zj forcedj penj flj = Some n0 ->
          nd_demerits res <= nd_demerits n0)
       /\ (forall m0, acc = Some m0 -> nd_demerits res <= nd_demerits m0)).
   { induction l as [| x l IH]; intros acc Hpre res Hfold; simpl in Hfold.
@@ -585,7 +826,7 @@ Proof.
       + intros m0 Hacc. rewrite Hacc in Hfold. inversion Hfold; subst.
         apply Z.le_refl.
     - (* x :: l *)
-      destruct (try_extend sp_ p x j) as [nx|] eqn:Hx.
+      destruct (try_extend sp_ p x j wj yj zj forcedj penj flj) as [nx|] eqn:Hx.
       + (* x feasible *)
         destruct acc as [m0|] eqn:Hacc.
         * destruct (Z.ltb (nd_demerits nx) (nd_demerits m0)) eqn:Hlt.
@@ -630,7 +871,7 @@ Proof.
         * exact IHacc. }
   intros a n m Hin Hext Hbest.
   assert (Hpre : forall m0, (@None node) = Some m0 ->
-            forall a0 n0, In a0 actives -> try_extend sp_ p a0 j = Some n0 -> True)
+            forall a0 n0, In a0 actives -> try_extend sp_ p a0 j wj yj zj forcedj penj flj = Some n0 -> True)
     by (intros m0 Hd; discriminate Hd).
   specialize (GEN actives None Hpre m Hbest).
   destruct GEN as [Hin' _].
