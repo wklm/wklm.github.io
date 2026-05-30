@@ -460,8 +460,12 @@ Definition render_inbox_page (eps : list EncryptedPost) : string :=
       "<button id='enroll-button'>Enroll Reader Key</button>" ::
       "<p id='enroll-status'></p>" ::
       "</div>" ::
-      "<script type='module'>import D from 'static/crane_decrypt.mjs';D().then(function(m){m.callMain([]);});</script>" ::
-      "<script type='module'>import E from 'static/crane_enroll.mjs';E().then(function(m){m.callMain([]);});</script>" :: nil) in
+      (* ES module specifiers MUST start with ./ ../ or / — a bare 'static/...'
+         is treated as a bare package name and fails: "Failed to resolve module
+         specifier". The inbox is served at the site root, so ./static/ resolves
+         to /static/. (Regressed once via prefix=""; the e2e now loads the inbox.) *)
+      "<script type='module'>import D from './static/crane_decrypt.mjs';D().then(function(m){m.callMain([]);});</script>" ::
+      "<script type='module'>import E from './static/crane_enroll.mjs';E().then(function(m){m.callMain([]);});</script>" :: nil) in
   page_shell "" "wklm.online" "home" "" "" body.
 
 (* ---- Enrollment page ----------------------------------------------- *)
