@@ -103,8 +103,76 @@ COPY --chown=opam:opam src/ ./src/
 COPY --chown=opam:opam tools/ ./tools/
 
 # Build: compile Rocq -> extract C++ -> compile binaries (generator + CLI tools).
+# Also build the Facet-A browser apps' Crane extraction + native stub
+# compile-check (crane_{decrypt,enroll}.check): this emits
+# _build/default/FormalBlog/crane_{decrypt,enroll}.{h,cpp} (consumed by the wasm
+# stage below) and proves the extracted C++ is std::any-free under plain clang++
+# before the heavier em++ link.
 RUN eval $(opam env) && \
-    dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe
+    dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe \
+               src/crane_decrypt.check src/crane_enroll.check
+
+# ──────────────────────────────────────────────────────────────────────
+# Facet A — WASM stage.  Consumes the Crane-extracted browser C++ from the
+# `builder` stage and links it to crane_decrypt.{mjs,wasm} / crane_enroll.{mjs,wasm}
+# with em++.  Pinned emsdk 3.1.61 (matches the lost/shipped gh-pages build).
+#
+# Flags rationale (crane-extraction-gotchas):
+#   -std=c++2b            Crane emits C++23
+#   -O0                   skip Emscripten's acorn JS minifier (a JS regex literal
+#                         in an EM_ASM throws "Unterminated regular expression"
+#                         at higher -O; we also keep all EM_ASM regex-free)
+#   -fbracket-depth=1024  deeply-nested extracted expressions
+#   -lembind              link Embind (harmless; emval_* symbols resolve even
+#                         though we use raw EM_ASM, not emscripten::val)
+#   -sASYNCIFY            suspend the WASM stack across crypto.subtle / IndexedDB
+#                         / WebAuthn promises (Asyncify.handleAsync in the shim)
+#   -sMODULARIZE=1 -sEXPORT_ES6=1   emit an ES6 default-export factory the page
+#                         imports as a module
+#   -sINVOKE_RUN=0 + callMain   the page calls m.callMain([]) after the factory
+#                         resolves (and again on each Decrypt/Enroll click via
+#                         the keepalive re-entry)
+#   -DCRANE_BROWSER_BUILD render crypto_helpers.h inert (browser_helpers.h owns
+#                         the nine primitives; avoids OpenSSL + double-definition)
+FROM emscripten/emsdk:3.1.61 AS wasm
+
+WORKDIR /wasm
+
+# The Crane-extracted browser sources + the Emscripten FFI shim headers.
+COPY --from=builder /home/opam/crane-blog/_build/default/FormalBlog/crane_decrypt.cpp ./
+COPY --from=builder /home/opam/crane-blog/_build/default/FormalBlog/crane_decrypt.h ./
+COPY --from=builder /home/opam/crane-blog/_build/default/FormalBlog/crane_enroll.cpp ./
+COPY --from=builder /home/opam/crane-blog/_build/default/FormalBlog/crane_enroll.h ./
+COPY src/browser_helpers.h ./
+COPY src/browser_helpers_stub.h ./
+COPY src/crypto_helpers.h ./
+
+# main shims: the extracted unit exposes run(); the page drives callMain().
+RUN printf '#include "crane_decrypt.h"\nint main(){ run(); return 0; }\n' > decrypt_main.cpp && \
+    printf '#include "crane_enroll.h"\nint main(){ run(); return 0; }\n' > enroll_main.cpp
+
+# Link both modules.  EXPORTED_FUNCTIONS keeps _malloc/_free (the EM_ASM bodies
+# allocate the length-prefixed return buffers); EXPORTED_RUNTIME_METHODS exposes
+# callMain + UTF8ToString/HEAPU8 used by the shim.
+RUN em++ -std=c++2b -O0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
+      crane_decrypt.cpp decrypt_main.cpp \
+      -lembind -sASYNCIFY -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
+      -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
+      -sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToUTF8,HEAPU8,lengthBytesUTF8 \
+      -o crane_decrypt.mjs && \
+    em++ -std=c++2b -O0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
+      crane_enroll.cpp enroll_main.cpp \
+      -lembind -sASYNCIFY -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
+      -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
+      -sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToUTF8,HEAPU8,lengthBytesUTF8 \
+      -o crane_enroll.mjs
+
+# Sanity: all four artifacts exist (the Facet-A gate).
+RUN test -s crane_decrypt.mjs && test -s crane_decrypt.wasm && \
+    test -s crane_enroll.mjs && test -s crane_enroll.wasm && \
+    ls -la crane_decrypt.mjs crane_decrypt.wasm crane_enroll.mjs crane_enroll.wasm
+
+CMD ["bash", "-c", "mkdir -p /out && cp /wasm/crane_decrypt.mjs /wasm/crane_decrypt.wasm /wasm/crane_enroll.mjs /wasm/crane_enroll.wasm /out/"]
 
 # ──────────────────────────────────────────────────────────────────────
 # Runtime image: blog_generator + encrypt_post + static JS, no Rocq.

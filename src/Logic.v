@@ -388,9 +388,10 @@ Definition page_shell (depth page_title body_class nav_label nav_href body_conte
 (* The public subject is not data.  Even if a bad [.eml] contains a real
    [Subject] header, public pages render only the fixed placeholder.
    
-   Browser-side decryption uses WebAuthn + Web Crypto API (via crane_bridge.js)
-   to authenticate the reader, retrieve their ECDH key from IndexedDB,
-   HPKE-unwrap the CEK, and AES-GCM decrypt the body. *)
+   Browser-side decryption runs in the crane_decrypt WASM module (ROCQ ->
+   Crane -> em++, from src/DecryptApp.v): WebAuthn + Web Crypto API authenticate
+   the reader, retrieve their ECDH key from IndexedDB, HPKE-unwrap the CEK, and
+   AES-GCM decrypt the body. *)
 Definition render_eml_page (ep : EncryptedPost) : string :=
   let title := public_subject in
   let prefix := "../" in
