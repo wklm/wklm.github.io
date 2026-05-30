@@ -201,8 +201,13 @@ Definition shape (s : string) : paragraph :=
 
 (* The Knuth-Plass paragraph terminator: a large-stretch glue then a forced
    break, so the final line is set ragged and the breaker always has a
-   feasible last line.  [big_stretch] dwarfs any reasonable measure. *)
-Definition big_stretch : sp := pt 100000.
+   feasible last line.  [big_stretch] dwarfs any reasonable measure.
+   Written as a direct Z literal (= 100000 pt in sp = 100000 * 65536) rather
+   than [Boxes.pt 100000]: a cross-module nullary call in a C++ static-const
+   initializer is emitted by Crane BEFORE the [Boxes] struct it references
+   (a module-ordering forward reference -> "use of undeclared identifier
+   Boxes"); a literal sidesteps it. *)
+Definition big_stretch : sp := 6553600000.
 
 Definition shape_paragraph (s : string) : paragraph :=
   shape s ++ [ par_finish_glue big_stretch ; forced_break ].

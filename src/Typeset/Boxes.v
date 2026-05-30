@@ -21,6 +21,7 @@
    trusted data from [Metrics.v]. *)
 
 From Stdlib Require Import ZArith List Bool.
+From Corelib Require Import PrimInt63.
 Import ListNotations.
 
 Open Scope Z_scope.
@@ -47,8 +48,11 @@ Definition pt (n : Z) : sp := n * pt_unit.
 
 (* A glyph is referenced by an index into the trusted MSDF atlas / metric
    table (see Metrics.v, GlyphLayout.v).  The width is carried separately
-   in the [box] so the line-breaker never needs the atlas. *)
-Definition glyph_id := nat.
+   in the [box] so the line-breaker never needs the atlas.  We use [int]
+   (machine int63 = Crane's native C++ integer) rather than [nat] so glyph
+   ids and downstream quad coordinates extract to plain ints, and so the
+   shaper can use it directly from a masked [PrimString.get]. *)
+Definition glyph_id := int.
 
 (* ===================================================================== *)
 (* The three node kinds                                                   *)
@@ -183,13 +187,29 @@ Definition item_shrink (it : item) : sp :=
 (* Fold a (sub)list of items into its total natural width, stretch and
    shrink.  These are the three quantities the line-breaker needs to size
    a candidate line; computing them as a left fold keeps Crane extraction
-   flat (no nested recursion). *)
+   flat (no nested recursion).
+
+   CRANE-EXTRACTION NOTE: we deliberately do NOT reuse [item_width] etc. as
+   the fold body here.  A standalone [item_width : item -> sp] gets attached
+   by Crane as a METHOD on the [item] inductive's C++ struct, and is then
+   re-emitted once per importing module (Boxes, Metrics, ...), producing a
+   "class member cannot be redeclared" error in the native compile.  By
+   inlining the match into each fold lambda, no method is attached and the
+   struct is emitted once.  [item_width]/[item_stretch]/[item_shrink] below
+   are kept ONLY for the proof layer (they are not referenced by any
+   extracted entry point, so Crane never emits them). *)
 Definition total_width   (p : paragraph) : sp :=
-  fold_left (fun acc it => acc + item_width   it) p 0.
+  fold_left (fun acc it =>
+    acc + match it with IBox b => bx_width b | IGlue g => gl_width g | IPenalty _ => 0 end)
+    p 0.
 Definition total_stretch (p : paragraph) : sp :=
-  fold_left (fun acc it => acc + item_stretch it) p 0.
+  fold_left (fun acc it =>
+    acc + match it with IGlue g => gl_stretch g | _ => 0 end)
+    p 0.
 Definition total_shrink  (p : paragraph) : sp :=
-  fold_left (fun acc it => acc + item_shrink  it) p 0.
+  fold_left (fun acc it =>
+    acc + match it with IGlue g => gl_shrink g | _ => 0 end)
+    p 0.
 
 (* ===================================================================== *)
 (* Basic algebraic facts (used by KnuthPlass.v T6/T7)                     *)
@@ -221,7 +241,9 @@ Lemma total_width_app :
 Proof.
   intros p q. unfold total_width.
   rewrite fold_left_app.
-  now rewrite (fold_left_add_start q item_width (fold_left _ p 0)).
+  now rewrite (fold_left_add_start q
+    (fun it => match it with IBox b => bx_width b | IGlue g => gl_width g | IPenalty _ => 0 end)
+    (fold_left _ p 0)).
 Qed.
 
 Lemma total_stretch_app :
@@ -229,7 +251,9 @@ Lemma total_stretch_app :
 Proof.
   intros p q. unfold total_stretch.
   rewrite fold_left_app.
-  now rewrite (fold_left_add_start q item_stretch (fold_left _ p 0)).
+  now rewrite (fold_left_add_start q
+    (fun it => match it with IGlue g => gl_stretch g | _ => 0 end)
+    (fold_left _ p 0)).
 Qed.
 
 Lemma total_shrink_app :
@@ -237,7 +261,9 @@ Lemma total_shrink_app :
 Proof.
   intros p q. unfold total_shrink.
   rewrite fold_left_app.
-  now rewrite (fold_left_add_start q item_shrink (fold_left _ p 0)).
+  now rewrite (fold_left_add_start q
+    (fun it => match it with IGlue g => gl_shrink g | _ => 0 end)
+    (fold_left _ p 0)).
 Qed.
 
 (* Stretch and shrink are non-negative whenever every glue's are.  We state
