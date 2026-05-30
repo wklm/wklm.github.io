@@ -117,14 +117,38 @@ RUN eval $(opam env) && \
 #
 # Flags rationale (crane-extraction-gotchas):
 #   -std=c++2b            Crane emits C++23
-#   -O0                   skip Emscripten's acorn JS minifier (a JS regex literal
-#                         in an EM_ASM throws "Unterminated regular expression"
-#                         at higher -O; we also keep all EM_ASM regex-free)
+#   -O2 --closure 0       optimize the wasm (LLVM tail-call elimination is the
+#                         point): the extracted MIME/string scanners recurse one
+#                         frame per input character up to mime_fuel (65536); at -O0
+#                         that deep non-tail recursion, run under Asyncify's
+#                         per-call JS instrumentation, overflows the *JS* engine
+#                         stack ("RangeError: Maximum call stack size exceeded")
+#                         the moment crane_decrypt parses the envelope.  -O2 turns
+#                         the scanners into loops so the depth collapses.  We keep
+#                         the JS minifier OFF (--closure 0): Emscripten's acorn pass
+#                         once choked on an EM_ASM ("Unterminated regular
+#                         expression"); the shim is regex-free and links fine at -O2
+#                         with closure disabled.  Verified in headless Chromium
+#                         (tests/e2e).
+#   -sSTACK_SIZE=33554432 generous 32 MB linear-memory stack — defensive headroom
+#                         for the (now loop-shaped but still allocation-heavy)
+#                         string builders; the default 64 KB is too small.
 #   -fbracket-depth=1024  deeply-nested extracted expressions
 #   -lembind              link Embind (harmless; emval_* symbols resolve even
 #                         though we use raw EM_ASM, not emscripten::val)
 #   -sASYNCIFY            suspend the WASM stack across crypto.subtle / IndexedDB
 #                         / WebAuthn promises (Asyncify.handleAsync in the shim)
+#   -sASYNCIFY_IMPORTS=[emscripten_asm_const_int,emscripten_asm_const_ptr]
+#                         the EM_ASM / EM_ASM_PTR bodies suspend via
+#                         Asyncify.handleAsync, but they reach the wasm import
+#                         boundary through the generic asm-const trampolines
+#                         (emscripten_asm_const_{int,ptr}).  Asyncify only allows
+#                         a state change across imports it was told about; without
+#                         this list it throws "import emscripten_asm_const_ptr was
+#                         not in ASYNCIFY_IMPORTS, but changed the state" and then
+#                         RuntimeError: unreachable on the first async EM_ASM
+#                         (idb_get_all at on-load).  Verified in headless Chromium
+#                         via tests/e2e (the Facet-A acceptance gate).
 #   -sMODULARIZE=1 -sEXPORT_ES6=1   emit an ES6 default-export factory the page
 #                         imports as a module
 #   -sINVOKE_RUN=0 + callMain   the page calls m.callMain([]) after the factory
@@ -152,16 +176,18 @@ RUN printf '#include "crane_decrypt.h"\nint main(){ run(); return 0; }\n' > decr
 # Link both modules.  EXPORTED_FUNCTIONS keeps _malloc/_free (the EM_ASM bodies
 # allocate the length-prefixed return buffers); EXPORTED_RUNTIME_METHODS exposes
 # callMain + UTF8ToString/HEAPU8 used by the shim.
-RUN em++ -std=c++2b -O0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
+RUN em++ -std=c++2b -O2 --closure 0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
       crane_decrypt.cpp decrypt_main.cpp \
-      -lembind -sASYNCIFY -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
-      -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
+      -lembind -sASYNCIFY "-sASYNCIFY_IMPORTS=[emscripten_asm_const_int,emscripten_asm_const_ptr]" \
+      -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
+      -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=33554432 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
       -sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToUTF8,HEAPU8,lengthBytesUTF8 \
       -o crane_decrypt.mjs && \
-    em++ -std=c++2b -O0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
+    em++ -std=c++2b -O2 --closure 0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
       crane_enroll.cpp enroll_main.cpp \
-      -lembind -sASYNCIFY -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
-      -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
+      -lembind -sASYNCIFY "-sASYNCIFY_IMPORTS=[emscripten_asm_const_int,emscripten_asm_const_ptr]" \
+      -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
+      -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=33554432 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
       -sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToUTF8,HEAPU8,lengthBytesUTF8 \
       -o crane_enroll.mjs
 
