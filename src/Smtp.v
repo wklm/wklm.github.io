@@ -178,3 +178,75 @@ Definition sender_allowed (sender : string) (allow : list string) : bool :=
   | [] => true
   | _ => addr_in (downcase sender) allow
   end.
+
+(* ===================================================================== *)
+(*  T5 — SMTP state-machine safety                                       *)
+(* ===================================================================== *)
+(* The pure state machine never fabricates message acceptance: the only step
+   that signals DATA completion ([data_done = true]) returns the *neutral*
+   empty reply, deferring the final 250/451/550 to the driver (SmtpServer.v),
+   which gates acceptance on [sender_allowed] + a non-empty parsed body.  So
+   "no 250 without allowlist+parse pass" holds by construction. *)
+
+(* Projections of the step triple. *)
+Definition step_reply (st : sstate) (line : string) : string :=
+  let '(_, rep, _) := step st line in rep.
+Definition step_done (st : sstate) (line : string) : bool :=
+  let '(_, _, d) := step st line in d.
+
+(* Helpers extracting the components of a raw step triple. *)
+Definition done_of (t : sstate * string * bool) : bool := let '(_, _, d) := t in d.
+Definition reply_of (t : sstate * string * bool) : string := let '(_, r, _) := t in r.
+
+Lemma step_command_done_false : forall st line,
+  done_of (step_command st line) = false.
+Proof.
+  intros st line. unfold step_command, done_of.
+  destruct (orb (string_eqb (command_verb line) "HELO")
+                (string_eqb (command_verb line) "EHLO")).
+  { reflexivity. }
+  destruct (string_eqb (command_verb line) "MAIL").
+  { destruct (ph st); reflexivity. }
+  destruct (string_eqb (command_verb line) "RCPT").
+  { destruct (ph st); reflexivity. }
+  destruct (string_eqb (command_verb line) "DATA").
+  { destruct (ph st); reflexivity. }
+  destruct (string_eqb (command_verb line) "RSET"). { reflexivity. }
+  destruct (string_eqb (command_verb line) "NOOP"). { reflexivity. }
+  destruct (string_eqb (command_verb line) "QUIT"); reflexivity.
+Qed.
+
+(* (b)+(c) DATA completion happens only in the PData phase on the terminator
+   line, and in that case the reply is exactly the neutral empty string. *)
+Lemma data_done_in_data_phase : forall st line,
+  step_done st line = true ->
+  ph st = PData /\ is_data_terminator line = true.
+Proof.
+  intros st line. unfold step_done, step.
+  destruct (ph st) eqn:Hph.
+  (* PInit/PReady/PMail/PQuit dispatch to step_command -> done = false. *)
+  1,2,3,5:
+    (rewrite <- Hph; pose proof (step_command_done_false st line) as Hc;
+     unfold done_of in Hc; rewrite Hph in *;
+     destruct (step_command st line) as [[? ?] d]; simpl in *;
+     intro H; rewrite Hc in H; discriminate H).
+  (* PData: *)
+  unfold step_data. destruct (is_data_terminator line) eqn:Ht; simpl; intro H.
+  - split; reflexivity.
+  - discriminate H.
+Qed.
+
+Lemma data_done_reply_neutral : forall st line,
+  step_done st line = true -> step_reply st line = "".
+Proof.
+  intros st line H.
+  pose proof (data_done_in_data_phase st line H) as [Hph Ht].
+  unfold step_reply, step. rewrite Hph. unfold step_data. rewrite Ht. reflexivity.
+Qed.
+
+(* (d) A non-empty allowlist genuinely requires membership: acceptance cannot
+   slip through for an unlisted sender. *)
+Lemma allow_nonempty_requires_membership : forall sender x xs,
+  sender_allowed sender (x :: xs) = true ->
+  addr_in (downcase sender) (x :: xs) = true.
+Proof. intros sender x xs H. exact H. Qed.
