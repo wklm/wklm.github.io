@@ -1,5 +1,19 @@
 #pragma once
 
+// CRANE_BROWSER_BUILD guard: the Crane-extracted browser modules
+// (crane_decrypt.h / crane_enroll.h) inherit a `#include <crypto_helpers.h>`
+// because CryptoSpec.v registered this header for the nine primitive axioms,
+// and Crane unions the From-headers of every used constant even when a later
+// directive (BrowserCrypto.v) re-points the primitive bodies at
+// browser_helpers.h.  Under the browser / stub builds we therefore define
+// -DCRANE_BROWSER_BUILD so this header is INERT: it pulls no OpenSSL (absent
+// under Emscripten — crane-extraction-gotchas) and defines none of the nine
+// functions (browser_helpers.h provides them; without this guard the two
+// headers would doubly-define sha256/aes_256_gcm_*/... and fail to compile).
+// The native tool builds (encrypt_post / decrypt_post / blog_generator) do NOT
+// define the macro and get the full OpenSSL realization below, unchanged.
+#ifndef CRANE_BROWSER_BUILD
+
 // crypto_helpers.h -- OpenSSL EVP FFI shim for the CryptoSpec.v primitives.
 //
 // This is the *native* realization (C1 in the FFI boundary catalog) of the
@@ -376,3 +390,5 @@ inline void tool_eprint(const std::string& s) {
 inline void tool_exit(int64_t code) {
     std::exit(static_cast<int>(code));
 }
+
+#endif  // CRANE_BROWSER_BUILD

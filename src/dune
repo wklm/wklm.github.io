@@ -23,3 +23,51 @@ clang++ -std=c++2b -O2 -fbracket-depth=1024 \
   -I . -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
   -lssl -lcrypto \
   -o blog_generator.exe")))
+
+; ──────────────────────────────────────────────────────────────────────
+; Facet A — browser WASM apps (crane_decrypt / crane_enroll).
+;
+; DecryptApp.v / EnrollApp.v each end with [Crane Extraction "crane_<x>" run],
+; so building their .vo emits ../FormalBlog/crane_<x>.{h,cpp} (extraction is a
+; build side-effect; the .cpp is NOT a dune-tracked target, exactly like the
+; blog_generator / encrypt_post rules).  The actual .mjs/.wasm are produced by
+; the Dockerfile `wasm` stage with em++ (emsdk is not in crane-blog:builder).
+;
+; What we CAN do here, fast, in the builder image: a native clang++ compile of
+; the extracted C++ against the signature-identical, OpenSSL-free stub
+; (browser_helpers.h falls back to browser_helpers_stub.h when __EMSCRIPTEN__ is
+; undefined).  This catches std::any leaks and any C++ type error in the tight
+; loop before the heavy WASM link.  -O0 mirrors the WASM build; -c -o /dev/null
+; keeps it a pure type/compile check (the extracted unit has `run`, no `main`).
+
+(rule
+ (targets crane_decrypt.check)
+ (deps
+  (file DecryptApp.vo)
+  (file browser_helpers.h)
+  (file browser_helpers_stub.h)
+  (file crypto_helpers.h))
+ (action (bash "\
+clang++ -std=c++2b -O0 -fbracket-depth=1024 -fsyntax-only \
+  -DCRANE_BROWSER_BUILD \
+  -I ../src -I ../FormalBlog ../FormalBlog/crane_decrypt.cpp \
+  && touch crane_decrypt.check")))
+
+(rule
+ (targets crane_enroll.check)
+ (deps
+  (file EnrollApp.vo)
+  (file browser_helpers.h)
+  (file browser_helpers_stub.h)
+  (file crypto_helpers.h))
+ (action (bash "\
+clang++ -std=c++2b -O0 -fbracket-depth=1024 -fsyntax-only \
+  -DCRANE_BROWSER_BUILD \
+  -I ../src -I ../FormalBlog ../FormalBlog/crane_enroll.cpp \
+  && touch crane_enroll.check")))
+
+; Convenience aggregate so `dune build src/wasm_checks` runs both.
+(rule
+ (alias wasm_checks)
+ (deps crane_decrypt.check crane_enroll.check)
+ (action (progn)))

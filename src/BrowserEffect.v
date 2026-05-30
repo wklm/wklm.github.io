@@ -1,0 +1,156 @@
+(* BrowserEffect.v — browser-side effect algebra [brE] for the WASM decrypt /
+   enroll apps, plus the [BIO := itree brE] monad they run in.
+
+   This is the browser analogue of Logic.v's [dirE +' ioE] and IoEffects.v's
+   [toolE]: an inductive effect with one constructor per browser capability and
+   a per-constructor [Crane Extract Inlined Constant] directive.  The C++
+   realization lives in src/browser_helpers.h (FFI boundary C2/C3): DOM,
+   sessionStorage, IndexedDB, WebAuthn, and a CSPRNG, all via EM_ASM.  Async
+   capabilities (IndexedDB / WebAuthn) suspend the WASM stack with
+   Asyncify.handleAsync, so they present here as ordinary synchronous effects.
+
+   Crane extraction is per-operation, not per-sum-shape, and this module's apps
+   run over the *single* effect [brE] (no [+'] sum needed), keeping the monad
+   table trivial.
+
+   NO directive here pulls crypto_helpers.h / OpenSSL — browser_helpers.h is
+   Emscripten-only (per crane-extraction-gotchas: WASM headers must never drag
+   in OpenSSL). *)
+
+From Corelib Require Import PrimString PrimInt63.
+Require Crane.Extraction.
+From Crane Require Import Mapping.Std Mapping.NatIntStd Monads.ITree.
+From ExtLib Require Import Structures.Monad.
+Import MonadNotation.
+
+Open Scope pstring_scope.
+
+(* ---- The brE effect ------------------------------------------------- *)
+
+Inductive brE : Type -> Type :=
+(* DOM *)
+| DomGetText    : string -> brE string          (* element textContent *)
+| DomSetText    : string -> string -> brE unit  (* set textContent (safe) *)
+| DomSetHtml    : string -> string -> brE unit   (* set innerHTML (escaped only) *)
+| DomShow       : string -> brE unit
+| DomHide       : string -> brE unit
+| DomPathSlug   : brE string                      (* location.pathname last seg *)
+(* sessionStorage *)
+| SsGet         : string -> brE string
+| SsSet         : string -> string -> brE unit
+| SsRemove      : string -> brE unit
+(* IndexedDB *)
+| IdbGetAll     : string -> brE string             (* store -> JSON array str *)
+| IdbPut        : string -> string -> brE string   (* store, json record -> "1"/"" *)
+(* WebAuthn *)
+| WaCreate      : string -> string -> string -> brE string (* challenge,rp,disp -> credId hex/"" *)
+| WaGet         : string -> string -> brE string          (* credIdHex, challenge -> "1"/"" *)
+(* CSPRNG *)
+| RandomBytes   : int -> brE string
+(* keepalive click re-entry (binding only) *)
+| BindInvoke    : string -> brE unit              (* arm a button to re-run main *)
+| ActionFlag    : brE string.                      (* read-and-clear the click flag *)
+
+(* ---- Smart constructors (mirror IODefs.v's [print]/[read] style) ---- *)
+
+Definition dom_get_text {E} `{brE -< E} (id : string) : itree E string :=
+  embed (DomGetText id).
+Definition dom_set_text {E} `{brE -< E} (id text : string) : itree E unit :=
+  embed (DomSetText id text).
+Definition dom_set_html {E} `{brE -< E} (id html : string) : itree E unit :=
+  embed (DomSetHtml id html).
+Definition dom_show {E} `{brE -< E} (id : string) : itree E unit :=
+  embed (DomShow id).
+Definition dom_hide {E} `{brE -< E} (id : string) : itree E unit :=
+  embed (DomHide id).
+Definition dom_path_slug {E} `{brE -< E} : itree E string :=
+  embed DomPathSlug.
+
+Definition ss_get {E} `{brE -< E} (key : string) : itree E string :=
+  embed (SsGet key).
+Definition ss_set {E} `{brE -< E} (key value : string) : itree E unit :=
+  embed (SsSet key value).
+Definition ss_remove {E} `{brE -< E} (key : string) : itree E unit :=
+  embed (SsRemove key).
+
+Definition idb_get_all {E} `{brE -< E} (store : string) : itree E string :=
+  embed (IdbGetAll store).
+Definition idb_put {E} `{brE -< E} (store record : string) : itree E string :=
+  embed (IdbPut store record).
+
+Definition wa_create {E} `{brE -< E} (challenge rp disp : string) : itree E string :=
+  embed (WaCreate challenge rp disp).
+Definition wa_get {E} `{brE -< E} (cred_id challenge : string) : itree E string :=
+  embed (WaGet cred_id challenge).
+
+Definition random_bytes_e {E} `{brE -< E} (n : int) : itree E string :=
+  embed (RandomBytes n).
+
+Definition bind_invoke {E} `{brE -< E} (id : string) : itree E unit :=
+  embed (BindInvoke id).
+Definition action_flag {E} `{brE -< E} : itree E string :=
+  embed ActionFlag.
+
+(* ---- The browser IO monad ------------------------------------------- *)
+
+(* As in Logic.v / IoEffects.v, [BIO] is a [Notation] (not a [Definition]) so it
+   unfolds at extraction time, preserving Crane's monad-table dispatch. *)
+Notation BIO := (itree brE).
+
+(* ---- Crane C++ extraction for brE ----------------------------------- *)
+
+(* Positional mapping of the constructors, in declaration order.  Each maps to
+   an inline EM_ASM-backed wrapper in browser_helpers.h.  unit-returning ops
+   are realized by functions returning std::monostate (Crane's [unit]); Crane
+   applies the arg list positionally. *)
+Crane Extract Inductive brE => ""
+  [ "dom_get_text(%a0)"
+    "dom_set_text(%a0, %a1)"
+    "dom_set_inner_html(%a0, %a1)"
+    "dom_show(%a0)"
+    "dom_hide(%a0)"
+    "dom_path_slug(std::monostate{})"
+    "ss_get(%a0)"
+    "ss_set(%a0, %a1)"
+    "ss_remove(%a0)"
+    "idb_get_all(%a0)"
+    "idb_put(%a0, %a1)"
+    "webauthn_create(%a0, %a1, %a2)"
+    "webauthn_get(%a0, %a1)"
+    "random_bytes((int)(%a0))"
+    "bind_invoke(%a0)"
+    "crane_action_flag(std::monostate{})" ]
+  From "browser_helpers.h".
+
+Crane Extract Inlined Constant dom_get_text =>
+  "dom_get_text(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant dom_set_text =>
+  "dom_set_text(%a0, %a1)" From "browser_helpers.h".
+Crane Extract Inlined Constant dom_set_html =>
+  "dom_set_inner_html(%a0, %a1)" From "browser_helpers.h".
+Crane Extract Inlined Constant dom_show =>
+  "dom_show(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant dom_hide =>
+  "dom_hide(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant dom_path_slug =>
+  "dom_path_slug(std::monostate{})" From "browser_helpers.h".
+Crane Extract Inlined Constant ss_get =>
+  "ss_get(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant ss_set =>
+  "ss_set(%a0, %a1)" From "browser_helpers.h".
+Crane Extract Inlined Constant ss_remove =>
+  "ss_remove(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant idb_get_all =>
+  "idb_get_all(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant idb_put =>
+  "idb_put(%a0, %a1)" From "browser_helpers.h".
+Crane Extract Inlined Constant wa_create =>
+  "webauthn_create(%a0, %a1, %a2)" From "browser_helpers.h".
+Crane Extract Inlined Constant wa_get =>
+  "webauthn_get(%a0, %a1)" From "browser_helpers.h".
+Crane Extract Inlined Constant random_bytes_e =>
+  "random_bytes((int)(%a0))" From "browser_helpers.h".
+Crane Extract Inlined Constant bind_invoke =>
+  "bind_invoke(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant action_flag =>
+  "crane_action_flag(std::monostate{})" From "browser_helpers.h".

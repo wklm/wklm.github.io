@@ -1,63 +1,47 @@
-(* BridgeFFI.v — Axiomatized crane_bridge.js external calls.
-   These axioms model the browser-side Web Crypto + WebAuthn bridge
-   used by decrypt.ml and enroll.ml.  Extracted to OCaml, compiled
-   to JavaScript by js_of_ocaml, and linked against crane_bridge.js.
+(* BridgeFFI.v — browser marshalling + keepalive shims for the WASM apps.
 
-   The bridge handles:
-   - WebAuthn passkey creation and authentication
-   - ECDH P-256 keypair generation (Web Crypto API)
-   - HPKE decryption (ECDH deriveBits + AES-GCM decrypt)
-   - IndexedDB storage of reader keypairs
-   - SessionStorage for decryption state *)
+   REWRITTEN for Facet A: the old js_of_ocaml [Extract Constant => "Bridge_ffi.*"]
+   directives (compiled OCaml + crane_bridge.js) are gone.  This module now hosts
+   the small, *non-effect* marshalling and click-binding axioms shared by
+   DecryptApp.v / EnrollApp.v, realized by EM_ASM wrappers in
+   src/browser_helpers.h:
+
+     - json_array_len / json_array_field : project fields out of an IndexedDB
+       getAll() JSON-array string (the ROCQ side does all record matching);
+     - json_object4 : assemble an idb_put record JSON string.
+
+   The DOM / sessionStorage / IndexedDB / WebAuthn / RNG *effects* — and the
+   keepalive click re-entry (bind_invoke / action_flag) — live in
+   BrowserEffect.v ([brE]); the nine crypto primitives in BrowserCrypto.v.  None
+   of these directives carries a [From "crypto_helpers.h"] clause — browser
+   builds must never pull OpenSSL (crane-extraction-gotchas). *)
 
 From Corelib Require Import PrimString PrimInt63.
-Require Import StringLib.
+Require Crane.Extraction.
+From Crane Require Import Mapping.Std Mapping.NatIntStd.
 
 Open Scope pstring_scope.
 
-(* ---- Enrollment axioms -------------------------------------------- *)
+(* ---- JSON marshalling over IndexedDB getAll() strings -------------- *)
 
-Axiom crane_enroll_is_enrolled : unit -> bool.
-(* Check if any reader key is enrolled in IndexedDB. *)
+Axiom json_array_len : string -> int.
+(* Number of records in a JSON array string ("[]" or malformed -> 0). *)
 
-Axiom crane_enroll_create_reader : unit -> string.
-(* Create a WebAuthn passkey + ECDH P-256 keypair.  Returns the
-   hex-encoded public key for display.  Extraction: async JS call. *)
+Axiom json_array_field : string -> int -> string -> string.
+(* String field [f] of the [i]-th element of a JSON array string; nested object
+   values (e.g. privkeyJwk) are re-stringified.  "" if absent. *)
 
-Axiom crane_enroll_get_pubkeys : unit -> string.
-(* Get list of enrolled key IDs (comma-separated). *)
+Axiom json_object4 :
+  string -> string -> string -> string ->
+  string -> string -> string -> string -> string.
+(* Assemble {k0:v0, ..., k3:v3} skipping empty keys; for idb_put records. *)
 
-(* ---- Decryption axioms -------------------------------------------- *)
+(* ---- Crane C++ extraction (browser_helpers.h, From-clauses only for the
+        single Emscripten-only header — never crypto_helpers.h) ---------- *)
 
-Axiom crane_decrypt_post : (string -> unit) -> unit.
-(* Decrypt the current post.  Takes a callback that receives the
-   decrypted plaintext string.  Extraction: crane_bridge.js
-   crane_decryptPost function. *)
-
-Axiom crane_decrypt_body : string -> string -> (string -> unit) -> unit.
-(* Decrypt a body with a given CEK (hex) and ciphertext package
-   (base64).  Takes a callback for the plaintext result. *)
-
-(* ---- SessionStorage axioms ---------------------------------------- *)
-
-Axiom crane_session_storage_get : string -> string.
-(* Get a value from sessionStorage by key. *)
-
-Axiom crane_session_storage_set : string -> string -> unit.
-(* Set a value in sessionStorage. *)
-
-Axiom crane_session_storage_remove : string -> unit.
-(* Remove a key from sessionStorage. *)
-
-(* ---- Extraction to OCaml ------------------------------------------ *)
-
-Extraction Language OCaml.
-
-Extract Constant crane_enroll_is_enrolled    => "Bridge_ffi.enroll_is_enrolled".
-Extract Constant crane_enroll_create_reader  => "Bridge_ffi.enroll_create_reader".
-Extract Constant crane_enroll_get_pubkeys    => "Bridge_ffi.enroll_get_pubkeys".
-Extract Constant crane_decrypt_post          => "Bridge_ffi.decrypt_post".
-Extract Constant crane_decrypt_body          => "Bridge_ffi.decrypt_body".
-Extract Constant crane_session_storage_get   => "Bridge_ffi.session_storage_get".
-Extract Constant crane_session_storage_set   => "Bridge_ffi.session_storage_set".
-Extract Constant crane_session_storage_remove => "Bridge_ffi.session_storage_remove".
+Crane Extract Inlined Constant json_array_len =>
+  "json_array_len(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant json_array_field =>
+  "json_array_field(%a0, (int)(%a1), %a2)" From "browser_helpers.h".
+Crane Extract Inlined Constant json_object4 =>
+  "json_object4(%a0, %a1, %a2, %a3, %a4, %a5, %a6, %a7)" From "browser_helpers.h".
