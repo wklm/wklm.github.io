@@ -29,6 +29,12 @@ import {
 const SLUG = 'e2e-fixture';
 const PLAINTEXT_MARKER = 'crane-wasm-roundtrip-plaintext-marker';
 const SECRET_PARA = `This secret paragraph is ${PLAINTEXT_MARKER} and proves in-browser decrypt.`;
+// A deliberately long (>40-word) paragraph.  The Verified-Reader's original
+// O(n^3) Knuth-Plass breaker would hang the WASM module on a paragraph this size
+// and exceed the decrypt timeout below; the Wave-2b prefix-sum O(n^2) fix +
+// paragraph chunking must render it in well under a second.  This makes the gate
+// a real regression test for both, end to end in headless Chromium.
+const LONG_PARA = `The verified typesetter must lay out a paragraph considerably longer than forty words in order to exercise the Knuth and Plass optimal line breaking dynamic program inside the WebAssembly module under realistic conditions, because the original cubic time implementation that shipped with the first Verified Reader spike would effectively hang the browser tab on any genuine article length body and silently exceed the decryption timeout; the surrounding clauses, the deliberately winding subordinate structure, and this closing stretch of prose together push the total word count well beyond that critical threshold, so the prefix sum performance fix and the paragraph chunking renderer are both genuinely tested from end to end inside a real headless Chromium render rather than merely in an isolated native microbenchmark that never touches the canvas drawing path.`;
 const FIXTURE_TITLE = 'E2E WASM Round-Trip Fixture';
 const FIXTURE_MD = `---
 title: ${FIXTURE_TITLE}
@@ -37,7 +43,9 @@ slug: ${SLUG}
 ---
 ${SECRET_PARA}
 
-A second paragraph to exercise the markdown-to-paragraphs renderer.
+${LONG_PARA}
+
+A short closing paragraph to exercise the multi-paragraph chunked renderer.
 `;
 
 // Recipient key ids created in-browser during the run (for cleanup).
@@ -152,7 +160,11 @@ test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, p
   // assertion + screen readers see the plaintext) but visually subordinate
   // (.sr-only) to the Verified-Reader canvas.  textContent works on sr-only.
   await expect(page.locator('#real-body')).toContainText(PLAINTEXT_MARKER);
-  await expect(page.locator('#real-body')).toContainText('second paragraph');
+  await expect(page.locator('#real-body')).toContainText('closing paragraph');
+  // The long middle paragraph (>40 words) decrypted + rendered without the WASM
+  // module hanging or timing out — the Wave-2b DP perf fix + chunking working
+  // end to end (the old O(n^3) breaker would not have finished in time).
+  await expect(page.locator('#real-body')).toContainText('Knuth and Plass');
 
   // ---- Verified-Reader canvas: the ROCQ Typeset engine painted the body. ----
   // The decrypted body is rendered onto #reader-canvas via reader_begin/
