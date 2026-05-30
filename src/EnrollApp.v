@@ -33,6 +33,7 @@ Require Import CryptoSpec.      (* the 9 axioms + pure-ROCQ protocol (unchanged)
 Require Import BrowserCrypto.   (* re-points the 9 axioms to browser_helpers.h *)
 Require Import BridgeFFI.       (* json_array_len / json_array_field / json_object4 *)
 Require Import BrowserEffect.   (* brE effects incl. bind_invoke / action_flag *)
+Require Import BrowserPolicy.   (* WebAuthn ceremony policy (alg CSV, rk/uv, timeouts) *)
 
 Open Scope pstring_scope.
 
@@ -77,20 +78,34 @@ Definition do_enroll : BIO unit :=
   let compressed := compress_pubkey uncompressed in
   let kid := browser_key_id compressed in
   let pub_hex := hex_encode compressed in
-  (* 2. WebAuthn passkey. *)
-  cred_id <- wa_create (enroll_challenge kid) rp_name user_display ;;
+  (* 2. WebAuthn passkey.  Ceremony policy (offered COSE algs, resident-key /
+     user-verification posture, timeout) comes from BrowserPolicy.v — NOT from
+     the shim.  rk_discouraged (not 'required') is the residentKey bug fix: the
+     reader key protecting the content lives in IndexedDB, the passkey is only a
+     best-effort gate, so a discoverable credential is never required. *)
+  cred_id <- wa_create (enroll_challenge kid) rp_name user_display
+                       wa_alg_csv rk_discouraged uv_preferred wa_create_timeout ;;
   if is_empty cred_id then
     dom_set_text "enroll-status"
       "Enrollment failed. Make sure your browser supports WebAuthn."
   else
-    (* 3. Persist passkey + reader key. *)
+    (* 3. Persist passkey + reader key.  idb_put returns "1" on success / "" on
+       failure (browser_helpers.h).  The reader-key record is the ONLY copy of
+       the private key on this device: if its put fails we must NOT show success
+       (the old code discarded the result and reported success even when the
+       write was rejected — issue #5, swallowed storage failure — leaving the
+       reader permanently unable to decrypt with a key they believe is saved). *)
     _ <- idb_put "passkeys" (passkey_record cred_id kid) ;;
-    _ <- idb_put "reader-keys" (readerkey_record kid pub_hex priv_jwk) ;;
-    (* 4. Reveal the result. *)
-    _ <- dom_hide "enroll-ui" ;;
-    _ <- dom_show "enroll-result" ;;
-    _ <- dom_set_text "reader-key-id" kid ;;
-    dom_set_text "reader-pubkey-hex" pub_hex.
+    stored <- idb_put "reader-keys" (readerkey_record kid pub_hex priv_jwk) ;;
+    if negb (string_eqb stored "1") then
+      dom_set_text "enroll-status"
+        "Enrollment failed: could not save your reader key to this device's storage. Your key was NOT stored; please try again."
+    else
+      (* 4. Reveal the result. *)
+      _ <- dom_hide "enroll-ui" ;;
+      _ <- dom_show "enroll-result" ;;
+      _ <- dom_set_text "reader-key-id" kid ;;
+      dom_set_text "reader-pubkey-hex" pub_hex.
 
 (* ---- the on-load check --------------------------------------------- *)
 Definition on_load : BIO unit :=

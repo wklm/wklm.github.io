@@ -108,6 +108,10 @@ jobs:
         shell: bash
         run: bash scripts/check-single-source.sh
 
+      - name: Shim thinness (no ceremony/protocol policy literals; async fails closed)
+        shell: bash
+        run: bash scripts/check-shim-thinness.sh
+
       - name: Archive source snapshot (R5 recovery net)
         uses: actions/upload-artifact@v4
         with:

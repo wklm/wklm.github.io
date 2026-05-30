@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { CDPSession } from '@playwright/test';
+import type { CDPSession, Page } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   encryptFixturePost,
   reRenderSite,
   repoRoot,
+  type AuthenticatorProfile,
   type ReaderKeyRecord,
 } from './helpers';
 
@@ -25,6 +26,15 @@ import {
 //      encrypt_post, and re-render _site.
 //   3. /<slug>/  -> click Decrypt -> the decrypted markdown renders in #real-body
 //      with NO plaintext / <img> leaking into the public encrypted shell.
+//
+// HARDENED GATE.  The round-trip runs across a MATRIX of realistic virtual
+// authenticators — including a NON-resident-key one and a no-UV one — and a
+// separate "no authenticator" row asserts enroll FAILS VISIBLY.  These turn the
+// original residentKey:'required' bug red: that policy made create() reject on a
+// non-resident authenticator, so the non-resident row would never enroll.  The
+// gate also asserts ZERO console.error / unhandled-rejection across the whole
+// flow (the swallowed-failure + Asyncify-hang classes surface as console errors
+// or rejections even when a functional assertion might not catch them).
 
 const SLUG = 'e2e-fixture';
 const PLAINTEXT_MARKER = 'crane-wasm-roundtrip-plaintext-marker';
@@ -64,8 +74,45 @@ test.afterEach(() => {
   createdKids.clear();
 });
 
+/**
+ * Capture console.error + unhandled page errors + unhandled promise rejections.
+ * The swallowed-storage-failure and Asyncify-hang bug classes surface as console
+ * errors / rejections even when a functional assertion might not catch them, so
+ * the hardened gate asserts NONE occur (modulo a tiny benign allowlist).
+ */
+const BENIGN = [
+  /favicon/i, // favicon.ico 404 on the test server — unrelated to the app
+  /Failed to load resource:.*favicon/i,
+];
+function isBenign(msg: string): boolean {
+  return BENIGN.some((re) => re.test(msg));
+}
+interface ErrorSink {
+  fatal: string[];
+}
+function attachErrorCapture(page: Page): ErrorSink {
+  const sink: ErrorSink = { fatal: [] };
+  // WASM aborts: Asyncify state violations, "Maximum call stack size exceeded".
+  page.on('pageerror', (err) => sink.fatal.push(`pageerror: ${err.message}`));
+  // Any console.error the app emits (e.g. the shim's 'WebAuthn create failed').
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    if (!isBenign(text)) sink.fatal.push(`console.error: ${text}`);
+  });
+  // Unhandled promise rejections (an un-try/catch'd async shim would surface
+  // here as the WASM stack is abandoned).
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (/unhandled (promise )?rejection/i.test(text) && !isBenign(text)) {
+      sink.fatal.push(`unhandledrejection: ${text}`);
+    }
+  });
+  return sink;
+}
+
 /** Wait until the WASM module has run on-load and armed [buttonId]. */
-async function waitForArmed(page: import('@playwright/test').Page, buttonId: string) {
+async function waitForArmed(page: Page, buttonId: string) {
   await page.locator(`#${buttonId}`).waitFor({ state: 'attached' });
   await expect
     .poll(
@@ -79,19 +126,12 @@ async function waitForArmed(page: import('@playwright/test').Page, buttonId: str
     .toBe(true);
 }
 
-test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, page }) => {
-  // Capture uncaught page errors (WASM aborts: Asyncify state violations, the
-  // "Maximum call stack size exceeded" we hit pre-fix, etc.).  Ignore unrelated
-  // console noise (e.g. favicon 404); a real WASM failure surfaces as a pageerror
-  // AND would fail the functional assertions below anyway.
-  const fatalErrors: string[] = [];
-  page.on('pageerror', (err) => fatalErrors.push(`pageerror: ${err.message}`));
-
-  // The enabler: a virtual authenticator so navigator.credentials.* resolve.
-  // Kept alive for the whole test (passkey from enroll is reused at decrypt).
-  let cdp: CDPSession | undefined;
-  ({ cdp } = await addVirtualAuthenticator(context, page));
-
+/**
+ * The full in-browser enroll -> encrypt -> decrypt -> render round-trip, run
+ * against an already-attached virtual authenticator.  Shared by every matrix
+ * row so each authenticator profile exercises the identical flow + assertions.
+ */
+async function runRoundTrip(page: Page, sink: ErrorSink) {
   // ---- 1. ENROLL ----------------------------------------------------------
   await page.goto('/enroll/', { waitUntil: 'domcontentloaded' });
   await waitForArmed(page, 'enroll-button');
@@ -99,6 +139,8 @@ test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, p
   await page.locator('#enroll-button').click();
 
   // The WASM enroll reveals #enroll-result and fills the key id + pubkey hex.
+  // (With the residentKey policy fixed this now holds even for a non-resident
+  // authenticator — the row that used to fail.)
   await expect(page.locator('#enroll-result')).toBeVisible({ timeout: 60_000 });
   const renderedKid = (await page.locator('#reader-key-id').textContent())?.trim() || '';
   const renderedPubHex = (await page.locator('#reader-pubkey-hex').textContent())?.trim() || '';
@@ -152,7 +194,9 @@ test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, p
 
   await page.locator('#decrypt-button').click();
 
-  // Decryption succeeds: the inner content is revealed and rendered.
+  // Decryption succeeds: the inner content is revealed and rendered.  (A hung
+  // Asyncify shim would never reveal #decrypted-content and this would time
+  // out — the "Decrypting never finishes" regression, now caught here.)
   await expect(page.locator('#decrypted-content')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('#decrypt-error')).toHaveText('');
   await expect(page.locator('#real-title')).toHaveText(FIXTURE_TITLE);
@@ -214,8 +258,90 @@ test('Facet A WASM: in-browser enroll + decrypt round-trip', async ({ context, p
   expect(cipherText).not.toContain(PLAINTEXT_MARKER);
   expect(cipherText).toContain('application/aes-gcm');
 
-  // No uncaught WASM aborts during the whole flow.
-  expect(fatalErrors, `uncaught page errors:\n${fatalErrors.join('\n')}`).toEqual([]);
+  // No uncaught WASM aborts / console errors / unhandled rejections in the flow.
+  expect(sink.fatal, `unexpected console errors / page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
+}
 
-  if (cdp) await cdp.detach().catch(() => {});
+// The authenticator MATRIX.  Each row runs the identical round-trip.  The
+// non-resident + no-UV rows are the ones the original residentKey:'required' /
+// over-strict UV policy would have failed; with the policy lifted into
+// BrowserPolicy (rk_discouraged / uv_preferred) every row must pass.
+const MATRIX: Array<{ name: string; profile: AuthenticatorProfile }> = [
+  {
+    name: 'resident + UV (baseline platform authenticator)',
+    profile: { hasResidentKey: true, hasUserVerification: true, isUserVerified: true },
+  },
+  {
+    name: 'NON-resident key (residentKey:required would have failed enroll here)',
+    profile: { hasResidentKey: false, hasUserVerification: true, isUserVerified: true },
+  },
+  {
+    name: 'no user-verification (UV-incapable authenticator)',
+    profile: { hasResidentKey: false, hasUserVerification: false, isUserVerified: false },
+  },
+];
+
+for (const row of MATRIX) {
+  test(`Facet A WASM round-trip — ${row.name}`, async ({ context, page }) => {
+    const sink = attachErrorCapture(page);
+    let cdp: CDPSession | undefined;
+    ({ cdp } = await addVirtualAuthenticator(context, page, row.profile));
+    try {
+      await runRoundTrip(page, sink);
+    } finally {
+      if (cdp) await cdp.detach().catch(() => {});
+    }
+  });
+}
+
+// The "no usable authenticator" row: WebAuthn create() rejects (the realistic
+// case where the reader has no authenticator, or declines/cancels the prompt).
+// Enrollment MUST fail VISIBLY (a status error in the DOM) rather than silently
+// appearing to succeed — the swallowed-failure class.  This asserts the failure
+// is surfaced AND that nothing was persisted.
+//
+// We make create() reject DETERMINISTICALLY (and promptly) by intercepting it in
+// an init script: with the CDP virtual environment but no authenticator,
+// create() instead parks for the full ceremony timeout (BrowserPolicy
+// wa_create_timeout = 120 s), which would make this a slow, flaky test.  A
+// NotAllowedError is exactly what an absent/declining authenticator yields, so
+// this faithfully exercises the APP's failure path (EnrollApp surfacing the
+// empty cred_id + the shim's fail-closed catch), which is the behavior under
+// test — not WebAuthn's timeout timing.
+test('Facet A WASM enroll — no usable authenticator: enroll fails VISIBLY', async ({ page }) => {
+  // A WebAuthn create rejection legitimately produces the shim's
+  // console.error('WebAuthn create failed', ...) — the *expected* signal of a
+  // surfaced failure, so allow that one message for this row only.
+  const sink = attachErrorCapture(page);
+  const ALLOW_WEBAUTHN_FAIL = /WebAuthn create failed/i;
+
+  // Reject navigator.credentials.create immediately, before any navigation.
+  await page.addInitScript(() => {
+    if (navigator.credentials) {
+      navigator.credentials.create = () =>
+        Promise.reject(new DOMException('No usable authenticator', 'NotAllowedError'));
+    }
+  });
+
+  await page.goto('/enroll/', { waitUntil: 'domcontentloaded' });
+  await waitForArmed(page, 'enroll-button');
+
+  await page.locator('#enroll-button').click();
+
+  // The enroll status surfaces a failure message; the success panel stays hidden.
+  await expect(page.locator('#enroll-status')).toContainText(/fail/i, { timeout: 30_000 });
+  await expect(page.locator('#enroll-result')).toBeHidden();
+
+  // CRITICAL: nothing was persisted — no half-written reader key / passkey that
+  // a reader would mistake for a usable enrollment (the swallowed-failure class:
+  // do_enroll must NOT reach the idb_put / success-reveal branch on failure).
+  const readerKeys = await readIdbStore(page, 'reader-keys');
+  expect(readerKeys.length, 'no reader key should be stored when enroll fails').toBe(0);
+  const passkeys = await readIdbStore(page, 'passkeys');
+  expect(passkeys.length, 'no passkey should be stored when enroll fails').toBe(0);
+
+  // Only the expected WebAuthn-failure console.error is tolerated; any OTHER
+  // console error / pageerror / unhandled rejection is still a gate failure.
+  const unexpected = sink.fatal.filter((m) => !ALLOW_WEBAUTHN_FAIL.test(m));
+  expect(unexpected, `unexpected errors (beyond the surfaced WebAuthn failure):\n${unexpected.join('\n')}`).toEqual([]);
 });

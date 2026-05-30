@@ -56,6 +56,13 @@ fi
 # (a .js/.ml/.py creeping back would mean behavioral logic left ROCQ).
 bash "$repo/scripts/check-single-source.sh" >/dev/null
 
+# Shim-thinness guard -- the single-source guard only checks file TYPES; this
+# one checks that the FFI-shim headers (src/*helpers*.h) carry no WebAuthn
+# ceremony / crypto-protocol POLICY literals and that every Asyncify.handleAsync
+# body fails closed (try/catch).  Catches the residentKey:'required' class of
+# thin-shim contract violation + the Asyncify "never finishes" hang.
+bash "$repo/scripts/check-shim-thinness.sh" >/dev/null
+
 # Safety net: refuse to commit anything under posts-encrypted/ that is
 # not an .eml ciphertext (or the .gitkeep). Catches the case where a
 # plaintext file is misplaced directly into posts-encrypted/ and would

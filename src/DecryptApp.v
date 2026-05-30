@@ -48,6 +48,7 @@ Require Import CryptoSpec.       (* unwrap_cek / decrypt_body (pure ROCQ, unchan
 Require Import BrowserCrypto.    (* re-points the 9 axioms to browser_helpers.h *)
 Require Import BridgeFFI.        (* json_array_len / json_array_field *)
 Require Import BrowserEffect.    (* brE effects (incl. reader_begin / reader_glyph) *)
+Require Import BrowserPolicy.    (* WebAuthn ceremony policy (uv, get timeout) *)
 Require Import Typeset.Metrics.      (* shape_paragraph / advance_of *)
 Require Import Typeset.GlyphLayout.  (* layout_paragraph / quad (q_x/q_y/q_uv) *)
 
@@ -196,7 +197,8 @@ Definition passkey_gate (kid : string) : BIO bool :=
   let cred := find_cred pk_json kid in
   if is_empty cred then Ret true
   else
-    ok <- wa_get cred "crane-decrypt-challenge" ;;
+    (* UV / timeout posture from BrowserPolicy.v, not the shim. *)
+    ok <- wa_get cred "crane-decrypt-challenge" uv_preferred wa_get_timeout ;;
     Ret (string_eqb ok "1").
 
 (* ================= Verified-Reader canvas render =================== *)

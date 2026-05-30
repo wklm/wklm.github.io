@@ -62,10 +62,16 @@ inline std::string idb_get_all(const std::string&) { return std::string("[]"); }
 inline std::string idb_put(const std::string&, const std::string&) { return std::string(); }
 
 // ---- WebAuthn ----
-inline std::string webauthn_create(const std::string&, const std::string&, const std::string&) {
+// Signatures match browser_helpers.h: the ceremony policy (alg CSV, residentKey,
+// userVerification, timeout) is passed in by ROCQ (BrowserPolicy.v), not baked
+// into the shim.
+inline std::string webauthn_create(const std::string&, const std::string&, const std::string&,
+                                   const std::string&, const std::string&, const std::string&,
+                                   int) {
     return std::string();
 }
-inline std::string webauthn_get(const std::string&, const std::string&) { return std::string(); }
+inline std::string webauthn_get(const std::string&, const std::string&,
+                                const std::string&, int) { return std::string(); }
 
 // ---- keepalive ----
 inline std::monostate bind_invoke(const std::string&) { return {}; }
