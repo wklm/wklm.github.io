@@ -24,6 +24,9 @@ jobs:
       - name: Single-source contract (R8 — only .v + allowlisted non-.v artifacts)
         run: bash scripts/check-single-source.sh
 
+      - name: Shim thinness (no ceremony/protocol policy literals; async fails closed)
+        run: bash scripts/check-shim-thinness.sh
+
       - name: Public ciphertext policy
         run: |
           set -eu

@@ -57,9 +57,18 @@ Inductive brE : Type -> Type :=
 (* IndexedDB *)
 | IdbGetAll     : string -> brE string             (* store -> JSON array str *)
 | IdbPut        : string -> string -> brE string   (* store, json record -> "1"/"" *)
-(* WebAuthn *)
-| WaCreate      : string -> string -> string -> brE string (* challenge,rp,disp -> credId hex/"" *)
-| WaGet         : string -> string -> brE string          (* credIdHex, challenge -> "1"/"" *)
+(* WebAuthn.  The ceremony POLICY (which COSE algs to offer, resident-key /
+   user-verification requirements, timeouts) is supplied by the caller as
+   ARGUMENTS — it lives in BrowserPolicy.v (reviewable ROCQ), NOT in the shim.
+   alg_csv is the comma-joined offered-algorithm list (the shim splits it and
+   maps each token to a pubKeyCredParams entry); rk/uv are the residentKey /
+   userVerification strings; timeout is in ms.  See BrowserPolicy.v for why
+   (the residentKey:'required' thin-shim contract-violation bug). *)
+| WaCreate      : string -> string -> string ->
+                  string -> string -> string -> int -> brE string
+                  (* challenge, rp, disp, alg_csv, residentKey, uv, timeout -> credId hex/"" *)
+| WaGet         : string -> string -> string -> int -> brE string
+                  (* credIdHex, challenge, uv, timeout -> "1"/"" *)
 (* CSPRNG *)
 | RandomBytes   : int -> brE string
 (* keepalive click re-entry (binding only) *)
@@ -99,10 +108,13 @@ Definition idb_get_all {E} `{brE -< E} (store : string) : itree E string :=
 Definition idb_put {E} `{brE -< E} (store record : string) : itree E string :=
   embed (IdbPut store record).
 
-Definition wa_create {E} `{brE -< E} (challenge rp disp : string) : itree E string :=
-  embed (WaCreate challenge rp disp).
-Definition wa_get {E} `{brE -< E} (cred_id challenge : string) : itree E string :=
-  embed (WaGet cred_id challenge).
+Definition wa_create {E} `{brE -< E}
+  (challenge rp disp alg_csv residentKey uv : string) (timeout : int)
+  : itree E string :=
+  embed (WaCreate challenge rp disp alg_csv residentKey uv timeout).
+Definition wa_get {E} `{brE -< E}
+  (cred_id challenge uv : string) (timeout : int) : itree E string :=
+  embed (WaGet cred_id challenge uv timeout).
 
 Definition random_bytes_e {E} `{brE -< E} (n : int) : itree E string :=
   embed (RandomBytes n).
@@ -141,8 +153,8 @@ Crane Extract Inductive brE => ""
     "ss_remove(%a0)"
     "idb_get_all(%a0)"
     "idb_put(%a0, %a1)"
-    "webauthn_create(%a0, %a1, %a2)"
-    "webauthn_get(%a0, %a1)"
+    "webauthn_create(%a0, %a1, %a2, %a3, %a4, %a5, (int)(%a6))"
+    "webauthn_get(%a0, %a1, %a2, (int)(%a3))"
     "random_bytes((int)(%a0))"
     "bind_invoke(%a0)"
     "crane_action_flag(std::monostate{})"
@@ -173,9 +185,9 @@ Crane Extract Inlined Constant idb_get_all =>
 Crane Extract Inlined Constant idb_put =>
   "idb_put(%a0, %a1)" From "browser_helpers.h".
 Crane Extract Inlined Constant wa_create =>
-  "webauthn_create(%a0, %a1, %a2)" From "browser_helpers.h".
+  "webauthn_create(%a0, %a1, %a2, %a3, %a4, %a5, (int)(%a6))" From "browser_helpers.h".
 Crane Extract Inlined Constant wa_get =>
-  "webauthn_get(%a0, %a1)" From "browser_helpers.h".
+  "webauthn_get(%a0, %a1, %a2, (int)(%a3))" From "browser_helpers.h".
 Crane Extract Inlined Constant random_bytes_e =>
   "random_bytes((int)(%a0))" From "browser_helpers.h".
 Crane Extract Inlined Constant bind_invoke =>

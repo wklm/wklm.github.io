@@ -101,14 +101,23 @@ inline std::string random_bytes(int n) {
 }
 
 // sha256(bytes): crypto.subtle.digest -> 32 raw bytes.
+// FAIL-CLOSED: the await is wrapped in try/catch.  A crypto.subtle.digest
+// rejection (e.g. context teardown) inside an Asyncify.handleAsync body that
+// does not resolve leaves the suspended WASM stack permanently parked — the
+// "Decrypting never finishes" hang.  On error we return a SENTINEL of 32 zero
+// bytes so the call returns; an all-zero digest never matches a real key_id /
+// MAC, so downstream comparisons fail safely rather than hanging.
 inline std::string sha256(const std::string& in) {
     char* p = reinterpret_cast<char*>(EM_ASM_PTR({
         return Asyncify.handleAsync(async () => {
-            var buf = HEAPU8.slice($0, $0 + $1);
-            var hash = await crypto.subtle.digest('SHA-256', buf);
-            var result = new Uint8Array(hash);
             var ptr = _malloc(32);
-            HEAPU8.set(result, ptr);
+            try {
+                var buf = HEAPU8.slice($0, $0 + $1);
+                var hash = await crypto.subtle.digest('SHA-256', buf); // TRUSTED-OK(C2): 'SHA-256' is the crypto.subtle.digest algorithm parameter realizing CryptoSpec.sha256 — platform delegation, not policy
+                HEAPU8.set(new Uint8Array(hash), ptr);
+            } catch (e) {
+                for (var i = 0; i < 32; i++) HEAPU8[ptr + i] = 0;
+            }
             return ptr;
         });
     }, in.data(), (int)in.size()));
@@ -124,27 +133,37 @@ inline std::string sha256(const std::string& in) {
 inline std::pair<std::string, std::string> ecdh_p256_generate(std::monostate) {
     char* p = reinterpret_cast<char*>(EM_ASM_PTR({
         return Asyncify.handleAsync(async () => {
-            var kp = await crypto.subtle.generateKey(
-                { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
-            var rawPub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-            var jwkPriv = await crypto.subtle.exportKey('jwk', kp.privateKey);
-            var jwkStr = JSON.stringify(jwkPriv);
-            var enc = new TextEncoder();
-            var jwkBytes = enc.encode(jwkStr);
-            var total = 4 + rawPub.length + 4 + jwkBytes.length;
-            var ptr = _malloc(total);
-            var off = 0;
-            HEAPU8[ptr + off++] = (rawPub.length >> 0) & 0xff;
-            HEAPU8[ptr + off++] = (rawPub.length >> 8) & 0xff;
-            HEAPU8[ptr + off++] = (rawPub.length >> 16) & 0xff;
-            HEAPU8[ptr + off++] = (rawPub.length >> 24) & 0xff;
-            HEAPU8.set(rawPub, ptr + off); off += rawPub.length;
-            HEAPU8[ptr + off++] = (jwkBytes.length >> 0) & 0xff;
-            HEAPU8[ptr + off++] = (jwkBytes.length >> 8) & 0xff;
-            HEAPU8[ptr + off++] = (jwkBytes.length >> 16) & 0xff;
-            HEAPU8[ptr + off++] = (jwkBytes.length >> 24) & 0xff;
-            HEAPU8.set(jwkBytes, ptr + off);
-            return ptr;
+            // FAIL-CLOSED: wrap the awaits.  A crypto.subtle.generateKey /
+            // exportKey rejection inside an unresolved Asyncify.handleAsync body
+            // parks the suspended WASM stack forever (the enroll counterpart of
+            // the decrypt hang).  On error return the 0/nullptr sentinel; the
+            // C++ wrapper below maps nullptr to {"",""}, so enrollment fails
+            // visibly (EnrollApp sees an empty pubkey) instead of suspending.
+            try {
+                var kp = await crypto.subtle.generateKey(
+                    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']); // TRUSTED-OK(C2): ECDH P-256 is the crypto.subtle.generateKey curve parameter realizing CryptoSpec.ecdh_p256_generate — the curve is fixed by the protocol spec, not a per-call policy choice
+                var rawPub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+                var jwkPriv = await crypto.subtle.exportKey('jwk', kp.privateKey);
+                var jwkStr = JSON.stringify(jwkPriv);
+                var enc = new TextEncoder();
+                var jwkBytes = enc.encode(jwkStr);
+                var total = 4 + rawPub.length + 4 + jwkBytes.length;
+                var ptr = _malloc(total);
+                var off = 0;
+                HEAPU8[ptr + off++] = (rawPub.length >> 0) & 0xff;
+                HEAPU8[ptr + off++] = (rawPub.length >> 8) & 0xff;
+                HEAPU8[ptr + off++] = (rawPub.length >> 16) & 0xff;
+                HEAPU8[ptr + off++] = (rawPub.length >> 24) & 0xff;
+                HEAPU8.set(rawPub, ptr + off); off += rawPub.length;
+                HEAPU8[ptr + off++] = (jwkBytes.length >> 0) & 0xff;
+                HEAPU8[ptr + off++] = (jwkBytes.length >> 8) & 0xff;
+                HEAPU8[ptr + off++] = (jwkBytes.length >> 16) & 0xff;
+                HEAPU8[ptr + off++] = (jwkBytes.length >> 24) & 0xff;
+                HEAPU8.set(jwkBytes, ptr + off);
+                return ptr;
+            } catch (e) {
+                return 0;
+            }
         });
     }, 0));
     if (p == nullptr) return { std::string(), std::string() };
@@ -171,10 +190,10 @@ inline std::string ecdh_p256_public_key(const std::string& priv_jwk) {
                 var jwk = JSON.parse(UTF8ToString($0));
                 delete jwk.key_ops; delete jwk.use; delete jwk.alg; delete jwk.ext;
                 var priv = await crypto.subtle.importKey('jwk', jwk,
-                    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
-                var pub = { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y };
+                    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']); // TRUSTED-OK(C2): ECDH P-256 importKey parameter (ecdh_p256_public_key) — protocol-fixed curve, not policy
+                var pub = { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }; // TRUSTED-OK(C2): re-deriving the public JWK from the private one's coords; 'P-256' is the spec curve, not policy
                 var k = await crypto.subtle.importKey('jwk', pub,
-                    { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+                    { name: 'ECDH', namedCurve: 'P-256' }, true, []); // TRUSTED-OK(C2): ECDH P-256 importKey parameter (ecdh_p256_public_key) — protocol-fixed curve, not policy
                 var raw = new Uint8Array(await crypto.subtle.exportKey('raw', k));
                 var ptr = _malloc(4 + raw.length);
                 HEAPU8[ptr] = (raw.length >> 0) & 0xff;
@@ -210,14 +229,14 @@ inline std::string ecdh_p256_agree(const std::string& priv_jwk,
                 }
                 var x = pubBytes.slice(1, 33);
                 var y = pubBytes.slice(33, 65);
-                var pubJwk = { kty: 'EC', crv: 'P-256', x: b64url(x), y: b64url(y) };
+                var pubJwk = { kty: 'EC', crv: 'P-256', x: b64url(x), y: b64url(y) }; // TRUSTED-OK(C2): building the EC JWK for the encapsulated key; 'P-256' is the spec curve, not policy
                 var encPub = await crypto.subtle.importKey('jwk', pubJwk,
-                    { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+                    { name: 'ECDH', namedCurve: 'P-256' }, false, []); // TRUSTED-OK(C2): ECDH P-256 importKey parameter (ecdh_p256_agree) — protocol-fixed curve, not policy
                 delete privJwk.key_ops; delete privJwk.use; delete privJwk.alg; delete privJwk.ext;
                 var privKey = await crypto.subtle.importKey('jwk', privJwk,
-                    { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+                    { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']); // TRUSTED-OK(C2): ECDH P-256 importKey parameter (ecdh_p256_agree) — protocol-fixed curve, not policy
                 var bits = await crypto.subtle.deriveBits(
-                    { name: 'ECDH', public: encPub }, privKey, 256);
+                    { name: 'ECDH', public: encPub }, privKey, 256); // TRUSTED-OK(C2): ECDH deriveBits parameter (ecdh_p256_agree) — protocol-fixed, not policy
                 var shared = new Uint8Array(bits);
                 var ptr = _malloc(32);
                 HEAPU8.set(shared, ptr);
@@ -247,8 +266,8 @@ inline std::pair<std::string, std::string> aes_256_gcm_encrypt(
                 var ptBuf = HEAPU8.slice($4, $4 + $5);
                 var aadBuf = HEAPU8.slice($6, $6 + $7);
                 var k = await crypto.subtle.importKey('raw', keyBuf,
-                    { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-                var algo = { name: 'AES-GCM', iv: nonceBuf, tagLength: 128 };
+                    { name: 'AES-GCM', length: 256 }, false, ['encrypt']); // TRUSTED-OK(C2): AES-256-GCM importKey parameter (aes_256_gcm_encrypt) — protocol-fixed cipher, not policy
+                var algo = { name: 'AES-GCM', iv: nonceBuf, tagLength: 128 }; // TRUSTED-OK(C2): AES-256-GCM algorithm parameters (128-bit tag) realizing the CryptoSpec AES-GCM packaging — protocol-fixed, not policy
                 if (aadBuf.length > 0) algo.additionalData = aadBuf;
                 var out = new Uint8Array(await crypto.subtle.encrypt(algo, k, ptBuf));
                 var ptr = _malloc(4 + out.length);
@@ -288,8 +307,8 @@ inline std::string aes_256_gcm_decrypt(
                 combined.set(ctBuf, 0);
                 combined.set(tagBuf, ctBuf.length);
                 var k = await crypto.subtle.importKey('raw', keyBuf,
-                    { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-                var algo = { name: 'AES-GCM', iv: nonceBuf, tagLength: 128 };
+                    { name: 'AES-GCM', length: 256 }, false, ['decrypt']); // TRUSTED-OK(C2): AES-256-GCM importKey parameter (aes_256_gcm_decrypt) — protocol-fixed cipher, not policy
+                var algo = { name: 'AES-GCM', iv: nonceBuf, tagLength: 128 }; // TRUSTED-OK(C2): AES-256-GCM algorithm parameters (128-bit tag) realizing the CryptoSpec AES-GCM packaging — protocol-fixed, not policy
                 if (aadBuf.length > 0) algo.additionalData = aadBuf;
                 var plainBuf = await crypto.subtle.decrypt(algo, k, combined);
                 var plain = new Uint8Array(plainBuf);
@@ -464,7 +483,10 @@ inline std::monostate reader_glyph(double x_sp, double y_sp, int cp) {
         var PXPT = 96 / 72;          // CSS px per typographic point
         var x = ($0 / 65536) * PXPT; // sp -> pt -> px
         var y = ($1 / 65536) * PXPT;
-        r.cx.fillText(String.fromCharCode($2), x, y);
+        // #4: fromCodePoint, not fromCharCode — $2 is a Unicode codepoint, and
+        // fromCharCode would mangle anything outside the BMP (>0xFFFF) into a
+        // lone/incorrect UTF-16 unit.
+        r.cx.fillText(String.fromCodePoint($2), x, y);
     }, x_sp, y_sp, cp);
     return std::monostate{};
 }
@@ -537,14 +559,14 @@ inline std::string idb_get_all(const std::string& store) {
         return Asyncify.handleAsync(async () => {
             try {
                 var storeName = UTF8ToString($0);
-                var req = indexedDB.open('crane-blog-v2', 1);
+                var req = indexedDB.open('crane-blog-v2', 1); // TRUSTED-OK(C2): the IndexedDB storage schema (DB name + version) is the persistence realization; the store NAMES the records go to are chosen by ROCQ (idb_get_all/idb_put args), and which record matches is ROCQ logic — this is marshalling to a fixed local store, not domain policy
                 await new Promise((resolve, reject) => {
                     req.onupgradeneeded = () => {
                         var db = req.result;
                         if (!db.objectStoreNames.contains('reader-keys'))
-                            db.createObjectStore('reader-keys', { keyPath: 'id' });
+                            db.createObjectStore('reader-keys', { keyPath: 'id' }); // TRUSTED-OK(C2): one-time object-store creation (storage schema); record CONTENT + which store each write targets are decided in ROCQ
                         if (!db.objectStoreNames.contains('passkeys'))
-                            db.createObjectStore('passkeys', { keyPath: 'credentialId' });
+                            db.createObjectStore('passkeys', { keyPath: 'credentialId' }); // TRUSTED-OK(C2): one-time object-store creation (storage schema); record CONTENT + which store each write targets are decided in ROCQ
                     };
                     req.onsuccess = () => resolve();
                     req.onerror = () => reject(req.error);
@@ -592,14 +614,14 @@ inline std::string idb_put(const std::string& store, const std::string& json_rec
             try {
                 var storeName = UTF8ToString($0);
                 var value = JSON.parse(UTF8ToString($1));
-                var req = indexedDB.open('crane-blog-v2', 1);
+                var req = indexedDB.open('crane-blog-v2', 1); // TRUSTED-OK(C2): the IndexedDB storage schema (DB name + version) is the persistence realization; the store NAMES the records go to are chosen by ROCQ (idb_get_all/idb_put args), and which record matches is ROCQ logic — this is marshalling to a fixed local store, not domain policy
                 await new Promise((resolve, reject) => {
                     req.onupgradeneeded = () => {
                         var db = req.result;
                         if (!db.objectStoreNames.contains('reader-keys'))
-                            db.createObjectStore('reader-keys', { keyPath: 'id' });
+                            db.createObjectStore('reader-keys', { keyPath: 'id' }); // TRUSTED-OK(C2): one-time object-store creation (storage schema); record CONTENT + which store each write targets are decided in ROCQ
                         if (!db.objectStoreNames.contains('passkeys'))
-                            db.createObjectStore('passkeys', { keyPath: 'credentialId' });
+                            db.createObjectStore('passkeys', { keyPath: 'credentialId' }); // TRUSTED-OK(C2): one-time object-store creation (storage schema); record CONTENT + which store each write targets are decided in ROCQ
                     };
                     req.onsuccess = () => resolve();
                     req.onerror = () => reject(req.error);
@@ -630,31 +652,55 @@ inline std::string idb_put(const std::string& store, const std::string& json_rec
 // ===========================================================================
 // WebAuthn (brE).  create returns the new credential rawId as hex ("" on
 // failure); get authenticates an existing credential by hex id, returning "1"
-// on success / "" on failure.  Challenge/user strings are supplied by ROCQ.
+// on success / "" on failure.
+//
+// THIN-SHIM CONTRACT (TRUSTED.md C2): the ceremony POLICY is NOT here.  The
+// caller (ROCQ EnrollApp / DecryptApp, sourcing BrowserPolicy.v) passes the
+// offered-algorithm CSV, the residentKey + userVerification strings, and the
+// timeout (ms) as ARGUMENTS.  These bodies only marshal those args into the
+// options dict the WebAuthn API expects — ZERO domain/policy literals
+// (no alg numbers, no 'required'/'preferred', no timeout constants).  This is
+// what fixes the residentKey:'required' enroll bug at the boundary: the policy
+// is decided + guarded in ROCQ (see BrowserPolicy.rs256_offered), not frozen
+// in a string literal no proof could see.
 // ===========================================================================
 
 inline std::string webauthn_create(const std::string& challenge,
                                    const std::string& rp_name,
-                                   const std::string& user_display) {
+                                   const std::string& user_display,
+                                   const std::string& alg_csv,
+                                   const std::string& resident_key,
+                                   const std::string& user_verification,
+                                   int timeout_ms) {
     char* p = reinterpret_cast<char*>(EM_ASM_PTR({
         return Asyncify.handleAsync(async () => {
             try {
                 var challengeStr = UTF8ToString($0);
                 var rpName = UTF8ToString($1);
                 var userDisplay = UTF8ToString($2);
+                var algCsv = UTF8ToString($3);
+                var residentKey = UTF8ToString($4); // TRUSTED-OK(C2): unmarshalling the caller-passed residentKey policy string (BrowserPolicy.rk_discouraged) — value chosen in ROCQ, not here
+                var userVerification = UTF8ToString($5); // TRUSTED-OK(C2): unmarshalling the caller-passed userVerification policy string (BrowserPolicy.uv_preferred) — value chosen in ROCQ, not here
+                var timeoutMs = $6;
                 var challenge = new TextEncoder().encode(challengeStr);
-                var userIdBuf = await crypto.subtle.digest('SHA-256', challenge);
-                var userId = new Uint8Array(userIdBuf).slice(0, 16);
+                // #6: the user handle is an opaque random identifier (spec
+                // intent — a fresh, unlinkable id), NOT SHA-256(challenge).
+                var userId = crypto.getRandomValues(new Uint8Array(16));
+                // pubKeyCredParams come ENTIRELY from the passed CSV: split on
+                // ',' and map each token to a public-key param.  No alg literal
+                // appears here — the offered set is BrowserPolicy.wa_alg_csv.
+                var pubKeyCredParams = algCsv.split(',').map(function (a) {
+                    return { type: 'public-key', alg: +a }; // TRUSTED-OK(C2): pure marshalling — each alg id comes from the caller-passed CSV (BrowserPolicy.wa_alg_csv), no literal algorithm number appears here
+                });
                 var cred = await navigator.credentials.create({ publicKey: {
                     rp: { name: rpName },
                     user: { id: userId, name: 'reader-' + challengeStr.slice(-12),
                             displayName: userDisplay },
                     challenge: challenge,
-                    pubKeyCredParams: [ { type: 'public-key', alg: -7 },
-                                        { type: 'public-key', alg: -8 } ],
-                    authenticatorSelection: { residentKey: 'required',
-                                              userVerification: 'preferred' },
-                    timeout: 120000 } });
+                    pubKeyCredParams: pubKeyCredParams,
+                    authenticatorSelection: { residentKey: residentKey, // TRUSTED-OK(C2): the value is the caller-passed variable (BrowserPolicy.rk_discouraged), not a literal like 'required' — this is the residentKey-bug fix
+                                              userVerification: userVerification }, // TRUSTED-OK(C2): caller-passed variable (BrowserPolicy.uv_preferred), not a literal
+                    timeout: timeoutMs } });
                 var rawId = new Uint8Array(cred.rawId);
                 var hex = Array.from(rawId).map(function(b) {
                     return b.toString(16).padStart(2, '0'); }).join('');
@@ -670,24 +716,32 @@ inline std::string webauthn_create(const std::string& challenge,
                 HEAPU8[ptr+2]=0; HEAPU8[ptr+3]=0; return ptr;
             }
         });
-    }, challenge.data(), rp_name.data(), user_display.data()));
+    }, challenge.data(), rp_name.data(), user_display.data(),
+       alg_csv.data(), resident_key.data(), user_verification.data(),
+       timeout_ms));
     return crane_browser_detail::take_lp(p);
 }
 
-// webauthn_get(credIdHex, challenge): assert an existing passkey.  "1" success.
+// webauthn_get(credIdHex, challenge, uv, timeoutMs): assert an existing passkey.
+// "1" success.  userVerification + timeout are caller-supplied (BrowserPolicy),
+// not literals.
 inline std::string webauthn_get(const std::string& cred_id_hex,
-                                const std::string& challenge) {
+                                const std::string& challenge,
+                                const std::string& user_verification,
+                                int timeout_ms) {
     char* p = reinterpret_cast<char*>(EM_ASM_PTR({
         return Asyncify.handleAsync(async () => {
             try {
                 var hex = UTF8ToString($0);
+                var userVerification = UTF8ToString($2); // TRUSTED-OK(C2): unmarshalling the caller-passed userVerification policy string (BrowserPolicy.uv_preferred) — value chosen in ROCQ
+                var timeoutMs = $3;
                 var n = hex.length / 2;
                 var idBuf = new Uint8Array(n);
                 for (var i = 0; i < n; i++) idBuf[i] = parseInt(hex.substr(i*2, 2), 16);
                 await navigator.credentials.get({ publicKey: {
                     challenge: new TextEncoder().encode(UTF8ToString($1)),
-                    allowCredentials: [ { id: idBuf, type: 'public-key' } ],
-                    timeout: 60000, userVerification: 'preferred' } });
+                    allowCredentials: [ { id: idBuf, type: 'public-key' } ], // TRUSTED-OK(C2): scoping the assertion to THE one credential id ROCQ selected (find_cred); 'public-key' is the only WebAuthn credential type — marshalling, not policy
+                    timeout: timeoutMs, userVerification: userVerification } }); // TRUSTED-OK(C2): both values are caller-passed variables (BrowserPolicy uv_preferred / wa_get_timeout), not literals
                 var enc = new TextEncoder(); var b = enc.encode('1');
                 var ptr = _malloc(4 + b.length);
                 HEAPU8[ptr] = (b.length >> 0) & 0xff; HEAPU8[ptr+1] = (b.length >> 8) & 0xff;
@@ -699,7 +753,8 @@ inline std::string webauthn_get(const std::string& cred_id_hex,
                 HEAPU8[ptr+2]=0; HEAPU8[ptr+3]=0; return ptr;
             }
         });
-    }, cred_id_hex.data(), challenge.data()));
+    }, cred_id_hex.data(), challenge.data(),
+       user_verification.data(), timeout_ms));
     return crane_browser_detail::take_lp(p);
 }
 
@@ -762,8 +817,20 @@ inline std::monostate bind_invoke(const std::string& id) {
         if (el && !el.__craneBound) {
             el.__craneBound = true;
             el.addEventListener('click', function () {
+                // #11: re-entrancy guard.  callMain runs the WASM main, which
+                // suspends across crypto.subtle / IndexedDB / WebAuthn via
+                // Asyncify.  A second click (or a rapid double-fire) before the
+                // first run resumes would call callMain WHILE the Asyncify stack
+                // is mid-suspend — corrupting it (Asyncify state violation /
+                // unreachable).  Skip the click entirely while a run is in
+                // flight; clear the flag in finally so a thrown/rejected run
+                // still re-arms the button.
+                if (Module.__craneBusy) return;
+                Module.__craneBusy = true;
                 window.__crane_action = '1';
-                try { Module.callMain([]); } catch (e) { console.error(e); }
+                try { Module.callMain([]); }
+                catch (e) { console.error(e); }
+                finally { Module.__craneBusy = false; }
             });
         }
     }, id.data());

@@ -14,15 +14,36 @@ export const repoRoot = join(here, '..', '..');
 const GEN_IMAGE = process.env.CRANE_BLOG_GEN_IMAGE || 'crane-blog-gen';
 
 /**
- * Attach a CTAP2 internal virtual authenticator (resident keys + user
- * verification, auto presence + verified) to the page via CDP.  This is the
- * enabler: navigator.credentials.create/get then resolve headlessly.  Returns
- * the CDP session so the caller can keep it alive across the whole flow (the
- * passkey created during enroll must remain available for the decrypt gate).
+ * Capability profile of a CDP virtual authenticator.  Parameterized so the e2e
+ * can run the round-trip across a MATRIX of realistic authenticators — crucially
+ * a NON-resident-key one (hasResidentKey:false), which is exactly what the old
+ * hard-coded residentKey:'required' enroll policy silently failed on.  With the
+ * policy lifted to BrowserPolicy.rk_discouraged, enroll must now succeed here.
+ */
+export interface AuthenticatorProfile {
+  hasResidentKey: boolean;
+  hasUserVerification: boolean;
+  isUserVerified: boolean;
+}
+
+/**
+ * Attach a CTAP2 internal virtual authenticator with the given capability
+ * profile to the page via CDP (auto presence simulation).  This is the enabler:
+ * navigator.credentials.create/get then resolve headlessly.  Returns the CDP
+ * session so the caller can keep it alive across the whole flow (the passkey
+ * created during enroll must remain available for the decrypt gate).
+ *
+ * Defaults preserve the original full-capability authenticator
+ * (resident keys + UV) for callers that don't care about the matrix.
  */
 export async function addVirtualAuthenticator(
   context: BrowserContext,
   page: Page,
+  profile: AuthenticatorProfile = {
+    hasResidentKey: true,
+    hasUserVerification: true,
+    isUserVerified: true,
+  },
 ): Promise<{ cdp: CDPSession; authenticatorId: string }> {
   const cdp = await context.newCDPSession(page);
   await cdp.send('WebAuthn.enable');
@@ -30,10 +51,10 @@ export async function addVirtualAuthenticator(
     options: {
       protocol: 'ctap2',
       transport: 'internal',
-      hasResidentKey: true,
-      hasUserVerification: true,
+      hasResidentKey: profile.hasResidentKey,
+      hasUserVerification: profile.hasUserVerification,
       automaticPresenceSimulation: true,
-      isUserVerified: true,
+      isUserVerified: profile.isUserVerified,
     },
   });
   return { cdp, authenticatorId };

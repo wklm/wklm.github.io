@@ -90,18 +90,40 @@ thin-shim test.
   capability *effects* — WebAuthn, IndexedDB, sessionStorage, CSPRNG — are the
   `brE` constructors `WaCreate`/`WaGet`, `IdbGetAll`/`IdbPut`,
   `SsGet`/`SsSet`/`SsRemove`, `RandomBytes` in `src/BrowserEffect.v`, mapped via
-  one `Crane Extract Inductive brE … From "browser_helpers.h"` table.
+  one `Crane Extract Inductive brE … From "browser_helpers.h"` table. The
+  WebAuthn **ceremony policy** (offered COSE algorithms, resident-key /
+  user-verification posture, ceremony timeouts) is **pure ROCQ data** in
+  `src/BrowserPolicy.v` (`cose_es256`/`rs256`/`eddsa`, `wa_alg_csv`,
+  `rk_discouraged`, `uv_preferred`, `wa_create_timeout`/`wa_get_timeout`) and is
+  passed to `WaCreate`/`WaGet` as **arguments** — it is NOT baked into the shim.
+  A compile-time `Example rs256_offered : alg_offered "-257" = true` (plus
+  `es256_`/`eddsa_offered`) pins the offered set so dropping an algorithm fails
+  the builder stage. (This closes the `residentKey:'required'` thin-shim
+  contract-violation class: the policy was previously a hard-coded EM_ASM literal
+  invisible to every proof; the `scripts/check-shim-thinness.sh` guard, wired
+  into pre-commit + both deploy workflows, now also rejects any policy/protocol
+  literal re-creeping into the shim.)
 - **Realized by.** `src/browser_helpers.h` (Emscripten, 29 `EM_ASM` blocks; the
   literal `EM_ASM` text lives in this **header**, not in the `.v` files for
   C2/C3). Real symbols: `random_bytes` (`crypto.getRandomValues`), `sha256` /
   `ecdh_p256_generate` / `ecdh_p256_public_key` / `ecdh_p256_agree` /
   `aes_256_gcm_encrypt` / `aes_256_gcm_decrypt` (`crypto.subtle.*`),
-  `webauthn_create` / `webauthn_get` (`navigator.credentials.create/get`),
+  `webauthn_create` / `webauthn_get` (`navigator.credentials.create/get`) — both
+  now assemble the WebAuthn options dict ENTIRELY from caller-passed
+  `BrowserPolicy.v` arguments (alg CSV split into `pubKeyCredParams`, the passed
+  residentKey/userVerification strings, the passed timeout); the user handle is a
+  fresh `crypto.getRandomValues` id (spec intent), not `SHA-256(challenge)`.
   `idb_get_all` / `idb_put` (`indexedDB`), `ss_get`/`ss_set`/`ss_remove`. Async
   primitives suspend the WASM stack via `Asyncify.handleAsync` (built with
   `-sASYNCIFY`), so the pure-ROCQ caller sees ordinary synchronous effects. A
   signature-identical native fallback, `src/browser_helpers_stub.h`, is used
   when `__EMSCRIPTEN__` is undefined (powers the `crane_*.check` compile gates).
+  Every `Asyncify.handleAsync` body wraps its `await`s in `try/catch` and FAILS
+  CLOSED on rejection (a sentinel: 32 zero bytes for `sha256`, `nullptr→{"",""}`
+  for `ecdh_p256_generate`, `""`/`0` elsewhere) so a `crypto.subtle` / IndexedDB
+  / WebAuthn rejection can never park the suspended WASM stack forever (the
+  "Decrypting never finishes" hang); `check-shim-thinness.sh` enforces the
+  try/catch invariant.
 - **Thin-shim justification.** (1) Each body is a single WebCrypto/WebAuthn/
   IndexedDB call. (2) The one representational quirk — a browser `privkey`
   carries a WebCrypto JWK string instead of a raw 32-byte scalar — is internal
@@ -238,7 +260,8 @@ thin-shim test.
   (builder + `wasm` + smtp stages) and `smtp/`; CI workflows
   `.forgejo/workflows/{e2e,deploy}.yml` and `.github/workflows/deploy.yml`;
   `compose.yml`; the `.githooks/pre-commit` hook; `scripts/` (`new-post.sh`,
-  `setup-hooks.sh`, `setup_fuji.sh`, `test-roundtrip.sh`); and the
+  `setup-hooks.sh`, `setup_fuji.sh`, `test-roundtrip.sh`,
+  `check-single-source.sh`, `check-shim-thinness.sh`); and the
   `tests/e2e/` Playwright harness (`playwright.config.ts`, `package.json`).
 - **Thin-shim justification.** Build/test orchestration only; produces no
   shipped runtime behavior beyond invoking the compilers and the proven units.
