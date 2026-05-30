@@ -1,0 +1,15 @@
+{
+  "name": "crane-blog-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright e2e acceptance gate for the Facet A WASM browser runtime (in-browser enroll + decrypt round-trip).",
+  "type": "module",
+  "scripts": {
+    "stage": "bash tests/e2e/stage-site.sh",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}

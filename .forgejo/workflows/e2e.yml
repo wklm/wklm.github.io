@@ -1,0 +1,80 @@
+# Facet A WASM acceptance gate — the durable proof that the ROCQ->C++->WASM
+# browser runtime (enroll + decrypt) works in a real headless browser.
+#
+# Runs on the self-hosted runner (fuji), which has Node + Playwright 1.60 +
+# Chromium preinstalled (~/.cache/ms-playwright) and the host Docker daemon with
+# the cached crane-blog:builder / wasm layers.  The job:
+#   1. builds the WASM artifacts (em++ links the Crane-extracted browser C++) and
+#      the runtime generator image;
+#   2. stages a servable _site (extract the four crane_*.{mjs,wasm} into static/,
+#      render _site from posts-encrypted/ + static/) via tests/e2e/stage-site.sh;
+#   3. runs the Playwright e2e: HTTPS-served https://wklm.online + a CDP virtual
+#      WebAuthn authenticator -> in-browser enroll, then encrypt a fixture to the
+#      enrolled key and decrypt + render it in-browser.
+name: Facet A WASM e2e (browser enroll + decrypt)
+
+on:
+  push:
+    branches: [main, feat/rocq-single-source]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    env:
+      # Image names the staging script / helpers expect.
+      CRANE_BLOG_WASM_IMAGE: crane-blog:wasm-merged
+      CRANE_BLOG_GEN_IMAGE: crane-blog-gen
+      # Playwright's bundled Chromium is already installed on the runner; never
+      # try to download it in CI.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Source present (refuse a wiped tree)
+        run: |
+          set -eu
+          ls src/*.v >/dev/null 2>&1 || { echo 'No src/*.v — refusing to run on a wiped source tree.'; exit 1; }
+
+      - name: Tooling versions
+        run: |
+          set -eu
+          docker version
+          node --version
+          npx --no-install playwright --version
+
+      # The WASM artifacts come from the wasm stage (em++ links the Crane-extracted
+      # browser C++).  Layer caching on the self-hosted runner keeps the heavy
+      # builder stage warm; only the em++ link re-runs when src/ changes.
+      - name: Build WASM image (crane_{decrypt,enroll}.{mjs,wasm})
+        run: docker build --target wasm -t "$CRANE_BLOG_WASM_IMAGE" .
+
+      - name: Build runtime generator image
+        run: docker build --target runtime -t "$CRANE_BLOG_GEN_IMAGE" .
+
+      - name: Install e2e deps (Playwright test runner)
+        run: npm ci || npm install
+
+      - name: Stage servable _site (extract WASM + render)
+        # The image is already built above; skip the in-script rebuild.
+        env:
+          CRANE_BLOG_BUILD_GEN: "0"
+        run: bash tests/e2e/stage-site.sh
+
+      - name: Run Playwright e2e (Facet A gate)
+        # _site is staged above; don't re-stage inside global-setup.
+        env:
+          CRANE_BLOG_SKIP_STAGE: "1"
+        run: npx --no-install playwright test
+
+      - name: Upload Playwright report + traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
+          retention-days: 7

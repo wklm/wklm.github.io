@@ -1,5 +1,6 @@
 _build/
 _site/
+node_modules/
 *.vo
 *.vok
 *.vos
@@ -26,3 +27,21 @@ posts/
 secret*
 passphrase*
 tools/encrypt_post
+
+# Playwright e2e (Facet A WASM acceptance gate) — generated artifacts.
+# The WASM bundles are extracted from the wasm image at stage time; the certs
+# are self-signed per run; reports/results/scratch are transient.
+tests/e2e/.certs/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+tests/e2e/.cache/
+
+# Crane-extracted WASM browser runtime, staged into static/ from the wasm image
+# (crane-blog:wasm-merged). Rebuilt by CI / stage-site.sh; never committed.
+static/crane_decrypt.mjs
+static/crane_decrypt.wasm
+static/crane_enroll.mjs
+static/crane_enroll.wasm
+
+# encrypt_post / round-trip scratch (key material + plaintext fixtures).
+keys/
