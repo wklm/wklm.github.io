@@ -1,5 +1,24 @@
 # TRUSTED.md — crane_blog trusted-boundary registry
 
+## Irreducible TCB (trusted, not proven)
+
+No system is 100% verified. The boundaries that remain **trusted** (not proven
+in ROCQ) in crane_blog are:
+
+| Layer | Trusted component | Why trusted |
+|-------|-------------------|-------------|
+| **Browser platform** | `crypto.subtle`, WebAuthn, IndexedDB, DOM, JS engine, canvas | Realize the 9 crypto axioms + `brE` effects; no domain logic in the shims |
+| **Toolchain** | Crane/clang/Emscripten/Asyncify (C7) | Extraction correctness, WASM compilation |
+| **Crypto primitives** | 4 round-trip axioms in CryptoSpec.v (C1/C2) | HPKE/AEAD/base64 soundness — stated as axioms |
+| **Thin marshalling shims** | `browser_helpers.h`, `crypto_helpers.h`, `net_helpers.h`, `proc_helpers.h` (C1–C6) | Pure platform delegation per the thin-shim test; guarded by `check-shim-thinness.sh` |
+| **Delivery/cache layer** | Cloudflare, git-pages HTTP cache headers (C14) | HTML served with `no-store`, assets with `max-age=14400`; cache-busting via `?v=` query parameter on asset URLs (Logic.v `asset_version`) |
+| **Build config** | dune, Dockerfile, CI workflows (C10) | Orchestration only; crane_*.check syntax gates guard extraction |
+
+**Everything above** — every behavioral decision, the generated artifact's
+structure/safety, page rendering, DOM coherence, UX observability, browser-path
+leakage — becomes **proven** in ROCQ `.v` theorems, machine-checked in CI via
+`dune build @proofs` (src/dune `@proofs` alias, Phase 0b).
+
 ## The single-source contract
 
 crane_blog's design contract is that **every behavioral decision — the exact
@@ -269,6 +288,25 @@ thin-shim test.
   sources faithfully and adds no behavior (the `crane_*.check` syntax gates and
   `test-roundtrip.sh` guard this).
 
+## C14 — Delivery / HTTP cache layer (Cloudflare, git-pages)
+
+- **ROCQ side.** `Logic.v` `asset_version` (Phase 0a) appends `?v=` cache-busting
+  query parameters to asset URLs (`styles/site.css`, `crane_*.mjs`). HTML pages
+  serve `Cache-Control: no-store` (cf-cache DYNAMIC, always fresh). Assets are
+  served `max-age=14400` (4h) — a stale cached stylesheet once hid the now-set
+  `.decrypt-error` text, causing apparent silent failure.
+- **Realized by.** Cloudflare CDN + git-pages HTTP PUT deploy
+  (`.forgejo/workflows/deploy.yml`, `.github/workflows/deploy.yml`). The
+  cache-busting `?v=` parameter on asset URLs in fresh HTML bypasses stale
+  caches. The robust target (Phase 0a step 2) is content-hash filenames.
+- **Thin-shim justification.** (1) Pure HTTP delivery — no domain logic. (2) HTML
+  is always fresh; asset identity is encoded in the URL via the version parameter.
+  (3) N/A (delivery layer, not an axiom). (4) The delivery layer is swappable for
+  any CDN or static host that respects `Cache-Control` headers.
+- **Trusted-not-proven.** That Cloudflare/git-pages respects the `Cache-Control:
+  no-store` on HTML and serves assets at the declared `max-age`. The
+  cache-faithful e2e test (Phase 0a verification step) models real cache headers.
+
 ---
 
 ## Verified-Reader typesetter (C11–C13) — PLANNED, not yet realized
@@ -318,10 +356,25 @@ completeness but are **not active trusted boundaries today**.
 ---
 
 > **Governing theorems.** What is *allowed* to cross these boundaries is
-> constrained by the proven privacy/leakage results in `src/Spec.v` — notably
-> **T1** (the `privacy` theorem: a public post page renders only the ciphertext
-> body and fixed template strings; `parse_eml` provably discards `Subject` /
-> `From` / `To`, and untrusted decrypted text reaches the DOM only via
-> `textContent`) together with the `html_escape_char` case lemmas. The FFI
-> shims above are trusted to *realize* those boundaries faithfully; the `.v`
-> theorems are what prove the boundaries are safe in the first place.
+> constrained by the proven privacy/leakage results across the formalized
+> spec:
+>
+> | Theorem | File | Phase | Guarantee |
+> |---------|------|-------|-----------|
+> | **T1** (`privacy`) | `src/Spec.v` | gen | Generator renders only ciphertext + fixed template; `parse_eml` discards Subject/From/To |
+> | `html_escape_char` (6 cases) | `src/Spec.v` | gen | Every HTML-special character is replaced; passthrough for safe chars |
+> | `esm_specifier_valid` (4 thms) | `src/PageModel.v` | 1 | Every ES module specifier starts with `./`/`../`/`/`; bare-`static/` proven invalid |
+> | `ids_unique` (3 thms) | `src/PageModel.v` | 1 | No element-id collisions in per-page ID lists |
+> | `post_page_all_ids_present` | `src/PageModel.v` | 1 | Serialized HTML contains every ID from the page model (no drift) |
+> | `contains_id` lemmas (27) | `src/PageModel.v` + `src/DecryptApp.v` + `src/EnrollApp.v` | 2 | Every DOM target is proven present on the page that loads the app; negative lemmas prove post-only IDs are absent from inbox |
+> | `all_decrypt_error_messages_nonempty` | `src/DecryptApp.v` | 3 | All 6 error paths produce non-empty `#decrypt-error` text (visible per `.decrypt-error:empty{display:none}`) |
+> | `do_decrypt_no_silent_noop` | `src/DecryptApp.v` | 3 | Every error message is ≥10 chars (measurable proxy for non-trivial UX feedback) |
+> | `all_enroll_error_messages_nonempty` / `do_enroll_no_silent_noop` | `src/EnrollApp.v` | 3 | Both enrollment failure paths produce observable `#enroll-status` text |
+> | `decrypt_never_writes_ciphertext` / `decrypt_never_writes_encrypted_shell` | `src/DecryptApp.v` | 4 | Decrypted plaintext never reaches the public ciphertext element or shell |
+> | `enroll_privkey_never_to_dom_writes` | `src/EnrollApp.v` | 4 | Private key JWK flows only to IndexedDB, never to DOM |
+>
+> All theorems close with `Qed` and are machine-checked continuously in CI via
+> the `@proofs` alias (`dune build @proofs`, Phase 0b). The TCB (trusted, not
+> proven) is documented in the irreducible TCB table at the top of this file.
+
+(End of file — total 420 lines)
