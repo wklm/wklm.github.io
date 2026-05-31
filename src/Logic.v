@@ -578,12 +578,15 @@ Definition run : IO unit :=
   _ <- create_directory "./_site" ;;
   _ <- create_directory "./_site/styles" ;;
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
-  (* Content-hash the stylesheet: read back, hash, rename to site.<sha>.css *)
+  (* Content-hash both CSS and WASM for cache-busting.  If EITHER changes,
+     the version tag changes → all asset URLs get a fresh URL → stale
+     max-age=14400 caches are bypassed. *)
   css <- read (styles_output_path "./_site") ;;
-  let hash := sha256_trunc css in
+  wasm <- read "./static/crane_decrypt.mjs" ;;
+  let hash := sha256_trunc (cat css wasm) in
   let hashed_css := cat "./_site/styles/site." (cat hash ".css") in
   _ <- write_file hashed_css css ;;
-  (* Use the hash as the cache-busting version on all pages *)
+  (* Use the combined hash as the cache-busting version on all pages *)
   _ <- write_file (index_output_path "./_site") (render_inbox_page eps hash) ;;
   _ <- write_eml_pages "./_site" eps hash ;;
   _ <- create_directory (enroll_dir_output_path "./_site") ;;
