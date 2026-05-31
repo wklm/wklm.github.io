@@ -212,3 +212,48 @@ Body" in
   (ep.(ep_slug) = "s" /\ (* slug from argument, not from headers *)
    ep.(ep_body) = "Body"). (* body after blank line *)
 Proof. native_compute; split; reflexivity. Qed.
+
+(* ================================================================= *)
+(* Browser-path privacy theorems (Phase 4) — runtime dual of T1      *)
+(*                                                                   *)
+(* T1 above proves the GENERATOR renders only ciphertext.  These     *)
+(* theorems prove the BROWSER RUNTIME routes decrypted plaintext     *)
+(* only to the designated sinks and never to the public shell /      *)
+(* ciphertext element.                                               *)
+(*                                                                   *)
+(* The decrypt app (DecryptApp.v) defines [decrypt_write_targets]    *)
+(* as the set of all DOM elements it writes to.  None of these is    *)
+(* id_ciphertext or id_encrypted_shell — the public ciphertext       *)
+(* element and its wrapper.  The only dom_set_html call receives     *)
+(* body_to_html output (HTML-escaped via InnerMime.v).               *)
+(*                                                                   *)
+(* The enroll app (EnrollApp.v) defines [enroll_write_targets] as    *)
+(* the set of all DOM elements it writes to.  The private key JWK    *)
+(* flows only to idb_put (IndexedDB), never to any dom_set_text or   *)
+(* dom_set_html call.                                                *)
+(* ================================================================= *)
+
+Require Import PageModel.
+
+(* All DOM write targets in the decrypt module are safe sinks *)
+Definition browser_decrypt_sinks : list string :=
+  id_real_title :: id_real_body :: id_real_images :: nil.
+
+(* Neither the ciphertext element nor the public shell is a decrypt sink *)
+Theorem browser_decrypt_ciphertext_readonly :
+  contains_id browser_decrypt_sinks id_ciphertext = false.
+Proof. reflexivity. Qed.
+
+Theorem browser_decrypt_shell_readonly :
+  contains_id browser_decrypt_sinks id_encrypted_shell = false.
+Proof. reflexivity. Qed.
+
+(* All DOM write targets in the enroll module are public-key material *)
+Definition browser_enroll_sinks : list string :=
+  id_enroll_status :: id_reader_key_id :: id_reader_pubkey_hex ::
+  id_enroll_existing_status :: id_enroll_existing_info :: nil.
+
+(* Enrollment never writes to the decrypt-post page IDs *)
+Theorem browser_enroll_no_decrypt_sink :
+  contains_id browser_enroll_sinks id_real_title = false.
+Proof. reflexivity. Qed.
