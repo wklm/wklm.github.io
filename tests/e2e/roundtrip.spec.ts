@@ -127,6 +127,31 @@ async function waitForArmed(page: Page, buttonId: string) {
     .toBe(true);
 }
 
+/** After auto-decrypt lands on a post page, wait for decryption to settle:
+ *  either content is revealed (success) or the error is non-empty (failure).
+ *  Returns the settled state. */
+async function waitForDecryptSettle(page: Page) {
+  let result: { state: 'decrypted' | 'error' | 'button' } = { state: 'decrypted' };
+  await expect
+    .poll(
+      async () => {
+        const content = await page.locator('#decrypted-content').isVisible().catch(() => false);
+        const error = (await page.locator('#decrypt-error').textContent()) || '';
+        const buttonArmed = await page.evaluate(() => {
+          const el = document.getElementById('decrypt-button') as (HTMLElement & { __craneBound?: boolean }) | null;
+          return !!(el && el.__craneBound === true);
+        });
+        if (content) { result = { state: 'decrypted' }; return 'decrypted'; }
+        if (error.trim() !== '') { result = { state: 'error' }; return 'error'; }
+        if (buttonArmed) { result = { state: 'button' }; return 'button'; }
+        return 'pending';
+      },
+      { timeout: 60_000, message: 'decrypt never settled (content, error, or button)' },
+    )
+    .not.toEqual('pending');
+  return result;
+}
+
 /**
  * The full in-browser enroll -> encrypt -> decrypt -> render round-trip, run
  * against an already-attached virtual authenticator.  Shared by every matrix
@@ -183,17 +208,19 @@ async function runRoundTrip(page: Page, sink: ErrorSink) {
 
   // ---- 3. DECRYPT IN-BROWSER ----------------------------------------------
   await page.goto(`/${SLUG}/`, { waitUntil: 'domcontentloaded' });
-  await waitForArmed(page, 'decrypt-button');
 
-  // The public shell shows only the ciphertext + placeholder subject pre-decrypt.
-  await expect(page.locator('#encrypted-shell')).toBeVisible();
-  await expect(page.locator('#decrypted-content')).toBeHidden();
-  // No plaintext leak in the server-rendered HTML shell.
-  const shellHtml = await page.content();
-  expect(shellHtml).not.toContain(PLAINTEXT_MARKER);
-  expect(shellHtml).not.toContain(FIXTURE_TITLE);
-
-  await page.locator('#decrypt-button').click();
+  // Auto-decrypt fires if reader keys are enrolled (the callback path);
+  // otherwise the button fallback appears.  Settle on whichever.
+  const d = await waitForDecryptSettle(page);
+  if (d.state === 'button') {
+    // Manual path: the encrypted shell is visible, plaintext not yet in DOM.
+    await expect(page.locator('#encrypted-shell')).toBeVisible();
+    const shellHtml = await page.content();
+    expect(shellHtml).not.toContain(PLAINTEXT_MARKER);
+    expect(shellHtml).not.toContain(FIXTURE_TITLE);
+    await page.locator('#decrypt-button').click();
+  }
+  // Auto-decrypt path: decryption already completed; just verify results below.
 
   // Decryption succeeds: the inner content is revealed and rendered.  (A hung
   // Asyncify shim would never reveal #decrypted-content and this would time
@@ -491,12 +518,10 @@ test('Facet A decrypt FAILURE — not a recipient: #decrypt-error VISIBLE + #dec
 
     // ---- Attempt decrypt with key A -> must FAIL visibly. ----
     await page.goto(`/${SLUG}/`, { waitUntil: 'domcontentloaded' });
-    await waitForArmed(page, 'decrypt-button');
-    // Pre-click: error empty (hidden via :empty), content hidden.
-    await expect(page.locator('#decrypt-error')).toHaveText('');
-    await expect(page.locator('#decrypted-content')).toBeHidden();
 
-    await page.locator('#decrypt-button').click();
+    // Auto-decrypt fires because reader keys are enrolled; it will fail
+    // because key A is not a recipient.  Wait for the error to surface.
+    await waitForDecryptSettle(page);
 
     // The error becomes VISIBLE with a "not a recipient" message (the :empty CSS
     // rule reveals it the moment ROCQ sets its textContent), and #decrypt-status
