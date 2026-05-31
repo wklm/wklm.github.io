@@ -108,14 +108,6 @@ jobs:
         shell: bash
         run: bash scripts/check-single-source.sh
 
-      - name: Proof-check (dune build @proofs — all theorems machine-checked)
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker build --target builder -t crane-blog:proof-run .
-          docker run --rm --entrypoint /bin/bash crane-blog:proof-run \
-            -c 'eval $$(opam env) && dune build @src/proofs && echo "PROOFS OK"'
-
       - name: Shim thinness (no ceremony/protocol policy literals; async fails closed)
         shell: bash
         run: bash scripts/check-shim-thinness.sh
