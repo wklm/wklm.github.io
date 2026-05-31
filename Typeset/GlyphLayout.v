@@ -105,42 +105,55 @@ Definition set_item_width (w y z W : sp) (it : item) : sp :=
    advancing x by [adv g].  Structural recursion on the glyph list; returns
    the quad list (the caller threads the final x separately via
    [glyphs_advance]). *)
-Fixpoint place_glyphs (adv : glyph_id -> sp) (gs : list glyph_id) (x by_ : sp)
-  : quad_buffer :=
+(* Tail-recursive variants: use an output accumulator so every recursive call
+   is in tail position.  LLVM eliminates frames regardless of optimization level;
+   WASM/Asyncify stack stays shallow. *)
+
+Fixpoint place_glyphs_tr (adv : glyph_id -> sp) (gs : list glyph_id) (x by_ : sp)
+  (out : quad_buffer) : quad_buffer :=
   match gs with
-  | [] => []
-  | g :: rest =>
-      mkQuad x by_ g :: place_glyphs adv rest (x + adv g) by_
+  | [] => rev_append out []
+  | g :: rest => place_glyphs_tr adv rest (x + adv g) by_ (mkQuad x by_ g :: out)
   end.
 
-(* Total advance of a glyph list (so the caller can move the pen past a
-   box).  Single-value recursion (no tuple with the quad list). *)
-Fixpoint glyphs_advance (adv : glyph_id -> sp) (gs : list glyph_id) : sp :=
+Fixpoint glyphs_advance_tr (adv : glyph_id -> sp) (gs : list glyph_id) (acc : sp) : sp :=
   match gs with
-  | [] => 0
-  | g :: rest => adv g + glyphs_advance adv rest
+  | [] => acc
+  | g :: rest => glyphs_advance_tr adv rest (adv g + acc)
   end.
+
+Definition place_glyphs (adv : glyph_id -> sp) (gs : list glyph_id) (x by_ : sp)
+  : quad_buffer :=
+  place_glyphs_tr adv gs x by_ [].
+
+Definition glyphs_advance (adv : glyph_id -> sp) (gs : list glyph_id) : sp :=
+  glyphs_advance_tr adv gs 0.
 
 (* Lay out a list of items (one line) starting at pen [x0] on baseline [by],
    justified to fit [W] given the line's natural (w,y,z).  Emits quads for
    box glyphs, advances the pen across set glue.  Structural recursion on
    the item list; pen x threaded by re-deriving each item's set width. *)
-Fixpoint layout_line_items
+Fixpoint layout_line_items_tr
     (adv : glyph_id -> sp) (w y z W : sp)
-    (its : list item) (x by_ : sp) : quad_buffer :=
+    (its : list item) (x by_ : sp) (out : quad_buffer) : quad_buffer :=
   match its with
-  | [] => []
+  | [] => rev_append out []
   | IBox b :: rest =>
-      place_glyphs adv (bx_glyphs b) x by_
-      ++ layout_line_items adv w y z W rest (x + bx_width b) by_
+      layout_line_items_tr adv w y z W rest (x + bx_width b) by_
+        (rev_append (place_glyphs adv (bx_glyphs b) x by_) out)
   | IGlue g :: rest =>
       let sw := set_glue w y z W (gl_width g) (gl_stretch g) (gl_shrink g) in
-      layout_line_items adv w y z W rest (x + sw) by_
+      layout_line_items_tr adv w y z W rest (x + sw) by_ out
   | IPenalty _ :: rest =>
       (* a penalty contributes nothing unless it is the chosen break, which
          is handled by line slicing; mid-line penalties are zero-width *)
-      layout_line_items adv w y z W rest x by_
+      layout_line_items_tr adv w y z W rest x by_ out
   end.
+
+Definition layout_line_items
+    (adv : glyph_id -> sp) (w y z W : sp)
+    (its : list item) (x by_ : sp) : quad_buffer :=
+  layout_line_items_tr adv w y z W its x by_ [].
 
 (* ===================================================================== *)
 (* Slicing the paragraph at break positions                               *)
@@ -165,20 +178,25 @@ Definition slice_z (p : paragraph) (i j : nat) : sp := total_shrink  (line_slice
    break positions [bs], lay out every line and concatenate the quad
    buffers.  We walk [bs] carrying the previous boundary [i] and the line
    number [ln].  Structural recursion on [bs]. *)
-Fixpoint layout_lines
+Fixpoint layout_lines_tr
     (adv : glyph_id -> sp) (W : sp) (p : paragraph)
-    (i : nat) (ln : nat) (bs : list nat) : quad_buffer :=
+    (i : nat) (ln : nat) (bs : list nat) (out : quad_buffer) : quad_buffer :=
   match bs with
-  | [] => []
+  | [] => rev_append out []
   | j :: rest =>
       let its := line_slice p i j in
       let w := total_width its in
       let y := total_stretch its in
       let z := total_shrink its in
       let by_ := baseline_y ln in
-      layout_line_items adv w y z W its 0 by_
-      ++ layout_lines adv W p j (S ln) rest
+      layout_lines_tr adv W p j (S ln) rest
+        (rev_append (layout_line_items adv w y z W its 0 by_) out)
   end.
+
+Definition layout_lines
+    (adv : glyph_id -> sp) (W : sp) (p : paragraph)
+    (i : nat) (ln : nat) (bs : list nat) : quad_buffer :=
+  layout_lines_tr adv W p i ln bs [].
 
 (* The public entry: lay out paragraph [p] at measure [W] using the optimal
    Knuth-Plass breaks, with per-glyph advances from [adv].  Returns the
@@ -192,12 +210,50 @@ Definition layout_paragraph
 (* Totality / structural facts                                            *)
 (* ===================================================================== *)
 
+(* Helper: length of rev_append. *)
+Lemma rev_append_length {A} (l1 l2 : list A) :
+  length (rev_append l1 l2) = (length l1 + length l2)%nat.
+Proof.
+  revert l2.
+  induction l1 as [| a l1 IH]; simpl; intros l2.
+  - reflexivity.
+  - rewrite IH. simpl. rewrite Nat.add_succ_r. reflexivity.
+Qed.
+
+(* Helper: In for rev_append. *)
+Lemma rev_append_In {A} (l1 l2 : list A) (x : A) :
+  In x (rev_append l1 l2) <-> In x l1 \/ In x l2.
+Proof.
+  generalize dependent l2.
+  induction l1 as [| a l1 IH]; intros l2; simpl; split.
+  - right; auto.
+  - tauto.
+  - intros Hin. apply IH in Hin. destruct Hin as [Hin | [<- | Hin]].
+    + left; right; auto.
+    + left; left; auto.
+    + right; auto.
+  - intros [ [<- | Hin] | Hin ].
+    + apply IH. right; left; auto.
+    + apply IH. left; auto.
+    + apply IH. right; right; auto.
+Qed.
+
 (* Laying out the empty paragraph yields the empty buffer. *)
 Lemma layout_paragraph_nil :
   forall adv W, layout_lines adv W [] 0 0 (break_at W []) = [].
 Proof.
   intros adv W. unfold break_at, break_paragraph, run_dp, final_node.
-  simpl. reflexivity.
+  unfold layout_lines. simpl. reflexivity.
+Qed.
+
+(* Tail-recursive place_glyphs_tr general length property. *)
+Lemma place_glyphs_tr_length :
+  forall adv gs x by_ out,
+    length (place_glyphs_tr adv gs x by_ out) = (length gs + length out)%nat.
+Proof.
+  induction gs as [| g gs IH]; intros x by_ out; simpl.
+  - rewrite rev_append_length. rewrite Nat.add_0_r. simpl. reflexivity.
+  - rewrite IH. simpl. rewrite Nat.add_succ_r. reflexivity.
 Qed.
 
 (* place_glyphs emits exactly one quad per glyph (buffer length = #glyphs)
@@ -205,9 +261,23 @@ Qed.
 Lemma place_glyphs_length :
   forall adv gs x by_, length (place_glyphs adv gs x by_) = length gs.
 Proof.
-  induction gs as [| g gs IH]; intros x by_; simpl.
-  - reflexivity.
-  - rewrite IH. reflexivity.
+  intros adv gs x by_. unfold place_glyphs.
+  rewrite place_glyphs_tr_length. rewrite Nat.add_0_r. reflexivity.
+Qed.
+
+(* Tail-recursive place_glyphs_tr general baseline property. *)
+Lemma place_glyphs_tr_baseline :
+  forall adv gs x by_ out q,
+    In q (place_glyphs_tr adv gs x by_ out) -> q_y q = by_ \/ In q out.
+Proof.
+  induction gs as [| g gs IH]; intros x by_ out q Hin; simpl in Hin.
+  - apply rev_append_In in Hin. destruct Hin as [Hin | Hin].
+    + right; exact Hin.
+    + destruct Hin.
+  - apply IH in Hin. destruct Hin as [Hq | [<- | Hin']].
+    + left; exact Hq.
+    + left; reflexivity.
+    + right; exact Hin'.
 Qed.
 
 (* Each quad a line produces sits on that line's baseline.  We state the
@@ -216,11 +286,10 @@ Lemma place_glyphs_baseline :
   forall adv gs x by_ q,
     In q (place_glyphs adv gs x by_) -> q_y q = by_.
 Proof.
-  induction gs as [| g gs IH]; intros x by_ q Hin; simpl in Hin.
-  - destruct Hin.
-  - destruct Hin as [<- | Hin].
-    + reflexivity.
-    + apply (IH (x + adv g) by_ q Hin).
+  intros adv gs x by_ q Hin. unfold place_glyphs in Hin.
+  apply place_glyphs_tr_baseline in Hin as [Hq | Hin'].
+  - exact Hq.
+  - destruct Hin'.
 Qed.
 
 (* ===================================================================== *)

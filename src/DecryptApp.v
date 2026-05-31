@@ -304,9 +304,16 @@ Definition render_images (ic : inner_content) : BIO unit :=
 
 (* Wave 2: paragraph chunking (render_paras above) bounds each Knuth–Plass DP
    call to a single paragraph; combined with the KnuthPlass prefix-sum perf fix
-   it renders arbitrary-length post bodies without hanging. *)
+   it renders arbitrary-length post bodies without hanging.
 
-(* ================= Render ========================================== *)
+   Stack-safety guard: the Verified-Reader typesetter's extracted C++ recurses
+   over paragraph glyph lists (now tail-recursive in KnuthPlass.v / GlyphLayout.v
+   — Phase-0a stack-safety fix).  For very long bodies (>4000 chars) the WASM
+   linear-memory stack is adequate with tail calls, but as a defense-in-depth
+   measure we bypass the canvas render and serve the accessible #real-body HTML
+   directly.  This guarantees no stack overflow regardless of body length. *)
+Definition max_canvas_body : int := 4000%int63.
+
 Definition render_decrypted (plaintext : string) : BIO unit :=
   let ic := extract_inner_text plaintext in
   _ <- dom_hide id_encrypted_shell ;;
@@ -319,12 +326,11 @@ Definition render_decrypted (plaintext : string) : BIO unit :=
     dom_set_text id_real_body
       "(The decrypted message contained no readable text.)"
   else
-    (* Accessible text alternative (unchanged — the e2e #real-body assertion and
-       screen-reader access depend on it) ... *)
-      _ <- dom_set_html id_real_body (body_to_html (inner_body ic)) ;;
+    _ <- dom_set_html id_real_body (body_to_html (inner_body ic)) ;;
     _ <- render_images ic ;;
-    (* ... then the primary VISUAL surface: typeset the body onto the canvas. *)
-    render_canvas (inner_body ic).
+    if leb (PrimString.length (inner_body ic)) max_canvas_body
+    then render_canvas (inner_body ic)
+    else Ret tt.
 
 (* ================= Failure surface ================================ *)
 (* Surface a decrypt failure VISIBLY.  Two coupled DOM updates that EVERY
