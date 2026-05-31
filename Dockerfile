@@ -70,6 +70,10 @@ COPY --chown=opam:opam tools/ ./tools/
 # + Facet-C SMTP listener (smtp/ image consumes smtp_server.exe) + Facet-A
 # browser Crane extraction & native stub-check (emits FormalBlog/crane_{decrypt,
 # enroll}.{h,cpp} for the wasm stage; proves the extracted C++ is std::any-free).
+# Step 1: proof-check all .v files (Phase 0b — machine-checked in CI).
+RUN eval $(opam env) && dune build @proofs
+
+# Step 2: build the extractable targets.
 RUN eval $(opam env) && \
     dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe \
                src/smtp_server.exe src/crane_decrypt.check src/crane_enroll.check

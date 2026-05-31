@@ -38,6 +38,13 @@ jobs:
           set -eu
           ls src/*.v >/dev/null 2>&1 || { echo 'No src/*.v — refusing to run on a wiped source tree.'; exit 1; }
 
+      - name: Proof-check (dune build @proofs — all theorems machine-checked)
+        run: |
+          set -eu
+          docker build --target builder -t crane-blog:proof-run .
+          docker run --rm --entrypoint /bin/bash crane-blog:proof-run \
+            -c 'eval $$(opam env) && dune build @src/proofs && echo "PROOFS OK"'
+
       - name: Tooling versions
         run: |
           set -eu

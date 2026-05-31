@@ -10,6 +10,15 @@
  (theories Stdlib Crane ITree ExtLib Paco Typeset)
  (plugins rocq-crane.plugin))
 
+; @proofs alias — compiles ALL .v source files in the theory, so every theorem
+; (T1, T5, T6, T7, and the new Phase 1–4 theorems) is machine-checked in CI on
+; every push.  Depending on the .v sources forces dune to compile each one to
+; .vo via the coq.theory rules.  Run as [dune build @proofs] in CI.
+(rule
+ (alias proofs)
+ (deps (glob_files *.v))
+ (action (progn)))
+
 (rule
  (with-stdout-to main.cpp
    (echo "\
