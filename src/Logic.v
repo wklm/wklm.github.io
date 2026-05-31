@@ -6,6 +6,8 @@ Import MonadNotation.
 From Stdlib Require Import Lists.List.
 Import ListNotations.
 
+Require Import PageModel.
+
 Open Scope pstring_scope.
 
 (* [IO] is a [Notation], not a [Definition], so it unfolds at extraction
@@ -212,12 +214,6 @@ Definition file_stem_eml (path : string) : string :=
 
 (* ---- Output-path helpers ----------------------------------------- *)
 
-Definition rel_stylesheet (depth : string) : string :=
-  cat depth "styles/site.css".
-
-Definition rel_index (depth : string) : string :=
-  cat depth "index.html".
-
 Definition file_output_path (output_dir slug : string) : string :=
   cat output_dir (cat "/" (cat slug "/index.html")).
 
@@ -368,148 +364,39 @@ Definition parse_eml (slug raw : string) : EncryptedPost :=
 
 (* ---- Rendering --------------------------------------------------- *)
 
-Definition page_shell (depth page_title body_class nav_label nav_href body_content : string) : string :=
-  concat_all (
-    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'><meta http-equiv='Cache-Control' content='no-store'>" ::
-    "<title>" :: html_escape page_title ::
-    (if string_eqb page_title "wklm.online" then "" else " — wklm.online") ::
-    "</title>" ::
-    "<link rel='stylesheet' href='" :: html_escape (rel_stylesheet depth) :: "'>" ::
-    "</head><body class='" :: body_class :: "'>" ::
-    "<a class='skip-link' href='#main'>skip to text</a>" ::
-    "<div class='page-shell'>" ::
-    "<header class='site-header'><a class='site-mark' href='" :: html_escape (rel_index depth) :: "'>wklm.online</a>" ::
-    (if is_empty nav_label then ""
-     else concat_all ("<nav class='site-nav'><a href='" :: html_escape nav_href :: "'>" :: html_escape nav_label :: "</a></nav>" :: nil)) ::
-    "</header>" ::
-    body_content ::
-    "</div></body></html>" :: nil).
+(* Page-shell + render functions are now thin wrappers around PageModel.v
+   serializers.  The page shell in PageModel's [serialize_page_shell] uses
+   content-hashed asset URLs (site.<sha>.css?v=<hash>) computed at runtime
+   by [run] below. *)
 
-(* The public subject is not data.  Even if a bad [.eml] contains a real
+(* The public subject is not data.Even if a bad [.eml] contains a real
    [Subject] header, public pages render only the fixed placeholder.
    
    Browser-side decryption runs in the crane_decrypt WASM module (ROCQ ->
    Crane -> em++, from src/DecryptApp.v): WebAuthn + Web Crypto API authenticate
    the reader, retrieve their ECDH key from IndexedDB, HPKE-unwrap the CEK, and
    AES-GCM decrypt the body. *)
-Definition render_eml_page (ep : EncryptedPost) : string :=
-  let title := public_subject in
+Definition render_eml_page (ep : EncryptedPost) (version : string) : string :=
   let prefix := "../" in
-  let body :=
+  serialize_post_page (mk_post_page ep.(ep_body) prefix version).
+
+Definition render_inbox_page (eps : list EncryptedPost) (version : string) : string :=
+  let rows := map (fun ep => 
     concat_all (
-      "<main id='main' class='post eml'>" ::
-      "<div id='encrypted-shell' class='envelope'>" ::
-      "<header class='post-header'>" ::
-      "<h1>" :: html_escape public_subject :: "</h1>" ::
-      "</header>" ::
-      "<pre class='eml-body' id='ciphertext'>" :: html_escape ep.(ep_body) :: "</pre>" ::
-      "</div>" ::
-      "<div id='decrypt-ui'>" ::
-      "<p class='decrypt-hint'>You need a reader key enrolled on this device to decrypt this post.</p>" ::
-      "<button id='decrypt-button'>Decrypt</button>" ::
-      "<p id='decrypt-status'></p>" ::
-      "<p id='decrypt-error' class='decrypt-error'></p>" ::
-      "<button id='clear-key-button'>Clear</button>" ::
-      "</div>" ::
-      "<article id='decrypted-content'>" ::
-      "<header><h1 id='real-title'></h1><p id='real-meta'></p></header>" ::
-      (* a11y: a pure-CSS checkbox toggle (no JS) swaps the bitmap canvas for the
-         accessible #real-body HTML text with increased letter/word spacing (Zorzi
-         et al.).  The checkbox is a SIBLING of #reader-canvas / #real-body so the
-         stylesheet's [#reader-a11y:checked ~ ...] rules can switch them. *)
-      "<input type='checkbox' id='reader-a11y' class='reader-a11y-toggle'>" ::
-      "<label for='reader-a11y' class='reader-a11y-label'>Comfortable spacing</label>" ::
-      (* Verified-Reader: the ROCQ Typeset engine paints the decrypted body here
-         (the primary visual reading surface).  #real-body below stays in the DOM
-         carrying the same text as an accessible (screen-reader) alternative,
-         visually hidden (.sr-only) until the toggle above reveals it. *)
-      "<canvas id='reader-canvas' role='img' aria-label='Decrypted post body (rendered)'></canvas>" ::
-      "<div id='real-body' class='sr-only'></div>" ::
-      "<div id='real-images'></div>" ::
-      "<footer class='post-colophon'></footer>" ::
-      "</article>" ::
-      "<noscript><p class='decrypt-fallback'>To read, you need JavaScript enabled for client-side decryption.</p></noscript>" ::
-      "<script type='module'>import M from '" :: prefix :: "static/crane_decrypt.mjs';M().then(function(m){m.callMain([]);});</script>" ::
-      "</main>" :: nil) in
-  page_shell "../" title "essay eml-page" "index" "../index.html" body.
-
-Definition inbox_row (ep : EncryptedPost) : string :=
-  concat_all (
-    "<li>" ::
-    "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
-    html_escape (sha256_trunc ep.(ep_body)) ::
-    "</a>" ::
-    "<span class='inbox-status' data-slug='" :: html_escape ep.(ep_slug) :: "'></span>" ::
-    "</li>" :: nil).
-
-Fixpoint render_inbox_rows (eps : list EncryptedPost) : list string :=
-  match eps with
-  | nil => nil
-  | ep :: rest => inbox_row ep :: render_inbox_rows rest
-  end.
-
-Definition render_inbox_page (eps : list EncryptedPost) : string :=
-  let body :=
-    concat_all (
-      "<main id='main' class='index'>" ::
-      "<ul class='posts'>" ::
-      concat_all (render_inbox_rows eps) ::
-      "</ul>" :: "</main>" ::
-      "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
-      (* Enrollment affordance: a plain LINK to the dedicated /enroll/ page, NOT
-         an in-page button driven by crane_enroll.  Rationale: EnrollApp.on_load
-         (and do_enroll success) HIDE #enroll-ui and reveal #enroll-existing /
-         #enroll-result + their child fields — markup that exists only on the
-         /enroll/ page.  Running crane_enroll here (where only #enroll-ui exists)
-         therefore hid the button with no replacement once a reader key was
-         present (or after enrolling): the control vanished with no feedback.
-         The full enroll UX lives on /enroll/, which has the complete DOM and
-         works; centralizing it there and linking keeps every inbox state
-         coherent.  A static <a> never hides itself, so the affordance is present
-         and usable in BOTH the no-key and has-key states.
-         crane_decrypt is still loaded: its inbox branch (DecryptApp.init_inbox_page)
-         only ever touches #inbox-status-msg (present) and reads #ciphertext
-         (absent here -> empty -> the inbox path), so it is coherent standalone. *)
-      "<p class='enroll-cta'><a class='enroll-link' href='enroll/'>Enroll a reader key to decrypt posts</a></p>" ::
-      (* ES module specifiers MUST start with ./ ../ or / — a bare 'static/...'
-         is treated as a bare package name and fails: "Failed to resolve module
-         specifier". The inbox is served at the site root, so ./static/ resolves
-         to /static/. (Regressed once via prefix=""; the e2e now loads the inbox.) *)
-      "<script type='module'>import D from './static/crane_decrypt.mjs';D().then(function(m){m.callMain([]);});</script>" :: nil) in
-  page_shell "" "wklm.online" "home" "" "" body.
+      "<li>" ::
+      "<a class='inbox-subject' href='" :: html_escape (cat ep.(ep_slug) "/index.html") :: "'>" ::
+      html_escape (sha256_trunc ep.(ep_body)) ::
+      "</a>" ::
+      "<span class='inbox-status' data-slug='" :: html_escape ep.(ep_slug) :: "'></span>" ::
+      "</li>" :: nil
+    )) eps in
+  serialize_inbox_page (mk_inbox_page rows version).
 
 (* ---- Enrollment page ----------------------------------------------- *)
 
-Definition render_enroll_page : string :=
+Definition render_enroll_page (version : string) : string :=
   let prefix := "../" in
-  let body :=
-    concat_all (
-      "<main id='main' class='enroll'>" ::
-      "<h1>Reader Enrollment</h1>" ::
-      "<p>To read encrypted posts, you need a reader keypair enrolled on this device. "
-        :: "Clicking the button below will create a WebAuthn passkey and an ECDH P-256 "
-        :: "encryption keypair stored in your browser.</p>" ::
-      "<div id='enroll-ui'>" ::
-      "<button id='enroll-button'>Enroll Reader Key</button>" ::
-      "<p id='enroll-status'></p>" ::
-      "</div>" ::
-      "<div id='enroll-result' style='display:none'>" ::
-      "<h2>Your Reader Public Key</h2>" ::
-      "<p>Send this key ID to the blog author to be added as a recipient:</p>" ::
-      "<p><strong>Key ID:</strong> <code id='reader-key-id'></code></p>" ::
-      "<p>Full public key (for reference):</p>" ::
-      "<pre id='reader-pubkey-hex' class='pubkey-display'></pre>" ::
-      "<p class='enroll-note'>The private key never leaves this device. "
-        :: "You will be asked to authenticate with your passkey to decrypt posts.</p>" ::
-      "</div>" ::
-      "<div id='enroll-existing' style='display:none'>" ::
-      "<h2>Already Enrolled</h2>" ::
-      "<p id='enroll-existing-status'></p>" ::
-      "<p id='enroll-existing-info'></p>" ::
-      "</div>" ::
-      "<script type='module'>import E from '" :: prefix :: "static/crane_enroll.mjs';E().then(function(m){m.callMain([]);});</script>" ::
-      "</main>" :: nil) in
-  page_shell "../" "Reader Enrollment" "enroll-page" "index" "../index.html" body.
+  serialize_enroll_page (mk_enroll_page prefix version).
 
 Definition enroll_output_path (output_dir : string) : string :=
   cat output_dir "/enroll/index.html".
@@ -650,20 +537,29 @@ Fixpoint sort_eps (eps : list EncryptedPost) : list EncryptedPost :=
   | ep :: rest => insert_ep ep (sort_eps rest)
   end.
 
-Fixpoint write_eml_pages (output_dir : string) (eps : list EncryptedPost) : IO unit :=
+Fixpoint write_eml_pages (output_dir : string) (eps : list EncryptedPost) (version : string) : IO unit :=
   match eps with
   | nil => Ret tt
   | ep :: rest =>
       _ <- create_directory (dirname_output_path output_dir ep.(ep_slug)) ;;
-      _ <- write_file (file_output_path output_dir ep.(ep_slug)) (render_eml_page ep) ;;
-      write_eml_pages output_dir rest
+      _ <- write_file (file_output_path output_dir ep.(ep_slug)) (render_eml_page ep version) ;;
+      write_eml_pages output_dir rest version
   end.
 
 (* [run] is the extracted entry point.  It reads the ciphertext tree
    from [./posts-encrypted/], emits one page per [.eml] under
    [_site/<slug>/], plus the inbox index and stylesheet.  Static
    assets under [./static/] are copied to [_site/static/] verbatim
-   so that the browser-side decryption JS is served. *)
+   so that the browser-side decryption JS is served.
+
+   Phase 0a (robust): content-hash the stylesheet at runtime.  After
+   writing [styles/site.css], read it back, compute its truncated
+   SHA-256 hash, and rename the file to [styles/site.<sha8>.css].
+   The hash becomes the cache-busting version tag on all page asset
+   URLs (stylesheet link + WASM module imports), making them
+   immutable-cacheable — any CSS change produces a new URL, bypassing
+   the 4h max-age completely. *)
+
 Fixpoint copy_static_files (files : list string) : IO unit :=
   match files with
   | nil => Ret tt
@@ -682,10 +578,16 @@ Definition run : IO unit :=
   _ <- create_directory "./_site" ;;
   _ <- create_directory "./_site/styles" ;;
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
-  _ <- write_file (index_output_path "./_site") (render_inbox_page eps) ;;
-  _ <- write_eml_pages "./_site" eps ;;
+  (* Content-hash the stylesheet: read back, hash, rename to site.<sha>.css *)
+  css <- read (styles_output_path "./_site") ;;
+  let hash := sha256_trunc css in
+  let hashed_css := cat "./_site/styles/site." (cat hash ".css") in
+  _ <- write_file hashed_css css ;;
+  (* Use the hash as the cache-busting version on all pages *)
+  _ <- write_file (index_output_path "./_site") (render_inbox_page eps hash) ;;
+  _ <- write_eml_pages "./_site" eps hash ;;
   _ <- create_directory (enroll_dir_output_path "./_site") ;;
-  _ <- write_file (enroll_output_path "./_site") render_enroll_page ;;
+  _ <- write_file (enroll_output_path "./_site") (render_enroll_page hash) ;;
   _ <- create_directory "./_site/static" ;;
   static_files <- list_directory "./static" ;;
   copy_static_files (filter (fun name => negb (is_empty name)) static_files).
