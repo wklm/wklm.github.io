@@ -43,7 +43,7 @@ jobs:
             exit 0
           fi
           changed="$(git diff --name-only "$before" "${{ github.sha }}")"
-          if grep -Eq '^(Dockerfile|dune-project|src/|\.dockerignore)' <<<"$changed"; then
+          if grep -Eq '^(Dockerfile|dune-project|src/|Typeset/|\.dockerignore)' <<<"$changed"; then
             echo "generator=true" >> "$GITHUB_OUTPUT"
           else
             echo "generator=false" >> "$GITHUB_OUTPUT"

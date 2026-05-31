@@ -73,7 +73,7 @@ COPY --chown=opam:opam tools/ ./tools/
 # Step 1: proof-check all .v files (Phase 0b — machine-checked in CI).
 RUN eval $(opam env) && dune build @proofs
 
-# Step 2: build the extractable targets.
+# Step 2: build the extractable targets (gen, CLI tools, SMTP listener, WASM stub checks).
 RUN eval $(opam env) && \
     dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe \
                src/smtp_server.exe src/crane_decrypt.check src/crane_enroll.check

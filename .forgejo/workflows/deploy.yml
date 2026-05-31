@@ -12,7 +12,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -38,12 +39,6 @@ jobs:
             printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
             if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
           done
-
-      - name: Setup Docker CLI
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq docker.io
-          docker version
 
       - name: Build generator image
         run: docker build -t crane-blog .
