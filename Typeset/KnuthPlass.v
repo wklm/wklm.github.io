@@ -404,8 +404,16 @@ Definition is_forced_break (p : paragraph) (k : nat) : bool :=
 (* All legal breakpoints, ascending, including the forced end-of-paragraph.
    We always include position (length p) (the very end) as a forced break
    because shape_paragraph appends a forced-break penalty there. *)
+Fixpoint legal_positions_tr (p : paragraph) (k : nat) (acc : list nat) : list nat :=
+  match k with
+  | O => acc
+  | S k' =>
+      if legal_after p k' then legal_positions_tr p k' (k :: acc)
+      else legal_positions_tr p k' acc
+  end.
+
 Definition legal_positions (p : paragraph) : list nat :=
-  filter (fun k => legal_after p (Nat.pred k)) (seq 1 (length p)).
+  legal_positions_tr p (length p) [].
 
 (* ===================================================================== *)
 (* The dynamic-programming line breaker                                   *)

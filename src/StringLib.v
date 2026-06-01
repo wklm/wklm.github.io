@@ -119,18 +119,21 @@ Definition string_eqb (a b : string) : bool :=
 
 (* ---- Split on character (line breaking) ---------------------------- *)
 
-Fixpoint split_on_char_fuel (s : string) (ch : int) (pos : int) (f : nat) : list string :=
+Fixpoint split_on_char_fuel_tr (s : string) (ch : int) (pos : int) (f : nat) (acc : list string) : list string :=
   match f with
-  | O => []
+  | O => rev acc
   | S f' =>
       let len := PrimString.length s in
-      if leb len pos then []
+      if leb len pos then rev acc
       else
         let nl := find_char s ch pos mime_fuel in
         let piece := PrimString.sub s pos (sub nl pos) in
-        if leb len nl then piece :: []
-        else piece :: split_on_char_fuel s ch (add nl 1%int63) f'
+        if leb len nl then rev (piece :: acc)
+        else split_on_char_fuel_tr s ch (add nl 1%int63) f' (piece :: acc)
   end.
+
+Definition split_on_char_fuel (s : string) (ch : int) (pos : int) (f : nat) : list string :=
+  split_on_char_fuel_tr s ch pos f [].
 
 Definition split_lines (s : string) : list string :=
   split_on_char_fuel s ch_newline 0%int63 mime_fuel.
