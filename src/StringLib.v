@@ -75,7 +75,7 @@ Definition starts_with (s pref : string) : bool :=
       match f with
       | O => O
       | S f' =>
-          if leb (PrimString.length pref) i then go i f'
+          if leb (PrimString.length pref) i then O
           else S (go (add i 1%int63) f')
       end
     in go 0%int63 scanner_fuel
