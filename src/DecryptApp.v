@@ -256,11 +256,15 @@ Definition para_gap : Z := 786432%Z.
 
 (* Total stacked height (sp) of all paragraphs + gaps, used to size the canvas
    before drawing.  Lays each paragraph out (the DP is O(n^2) after the Wave-2
-   KnuthPlass perf fix, so this pre-pass is cheap). *)
-Fixpoint layout_all (ps : list string) : list (list quad) :=
+   KnuthPlass perf fix, so this pre-pass is cheap).
+
+   Tail-recursive via accumulator + [rev] so Crane-extracted C++ can be
+   tail-call-optimized by em++ -O2, keeping the WASM call stack shallow
+   under Emscripten Asyncify instrumentation. *)
+Fixpoint layout_all_tr (ps : list string) (acc : list (list quad)) : list (list quad) :=
   match ps with
-  | nil => nil
-  | body :: rest => layout_paragraph advance_of MEASURE (shape_paragraph body) :: layout_all rest
+  | nil => rev acc
+  | body :: rest => layout_all_tr rest (layout_paragraph advance_of MEASURE (shape_paragraph body) :: acc)
   end.
 
 Fixpoint total_height (qss : list (list quad)) (acc : Z) : Z :=
@@ -293,7 +297,7 @@ Fixpoint render_paras (qss : list (list quad)) (dy : Z) : BIO unit :=
    sizing the canvas to the total stacked height first. *)
 Definition render_canvas (body : string) : BIO unit :=
   let ps := split_paragraphs body in
-  let qss := layout_all ps in
+  let qss := layout_all_tr ps nil in
   _ <- reader_begin "reader-canvas" (Z.add (total_height qss 0%Z) para_gap) ;;
   render_paras qss 0%Z.
 
