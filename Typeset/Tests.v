@@ -55,19 +55,16 @@ Definition fixture_equal : paragraph :=
 Definition measure_equal : sp := 2900000.
 
 (* The word-box width is exactly as derived. *)
-Example equal_word_width : total_width (shape "aaaa") = 1310720.
-Proof. vm_compute. reflexivity. Qed.
+Example equal_word_width : total_width (shape "aaaa") = 1310720 := eq_refl.
 
 (* PARITY: the optimal breaking is 2|2|2. *)
 Example parity_equal_222 :
-  break_at measure_equal fixture_equal = [4%nat; 8%nat; 13%nat].
-Proof. vm_compute. reflexivity. Qed.
+  break_at measure_equal fixture_equal = [4%nat; 8%nat; 13%nat] := eq_refl.
 
 (* The returned breaking is feasible (no overfull/over-tolerance line). *)
 Example parity_equal_feasible :
   breaking_feasible (default_spec measure_equal) fixture_equal
-                    (break_at measure_equal fixture_equal) = true.
-Proof. vm_compute. reflexivity. Qed.
+                    (break_at measure_equal fixture_equal) = true := eq_refl.
 
 (* ===================================================================== *)
 (* (B) Optimality spot-check (concrete instance of T6)                    *)
@@ -83,8 +80,7 @@ Definition measure5 : sp := 2200000.
 Definition spec5 := default_spec measure5.
 
 (* The DP's answer at this measure. *)
-Example dp5_answer : break_at measure5 fixture5 = [4%nat; 8%nat; 11%nat].
-Proof. vm_compute. reflexivity. Qed.
+Example dp5_answer : break_at measure5 fixture5 = [4%nat; 8%nat; 11%nat] := eq_refl.
 
 (* Its demerits (the computed optimum). *)
 Definition dp5_demerits : Z := breaking_demerits spec5 fixture5 (break_at measure5 fixture5).
@@ -102,13 +98,11 @@ Example dp5_is_optimal :
   forallb (fun b =>
      negb (breaking_feasible spec5 fixture5 b)
      || Z.leb dp5_demerits (breaking_demerits spec5 fixture5 b))
-    cands5 = true.
-Proof. vm_compute. reflexivity. Qed.
+    cands5 = true := eq_refl.
 
 (* And the DP answer is itself feasible. *)
 Example dp5_feasible :
-  breaking_feasible spec5 fixture5 (break_at measure5 fixture5) = true.
-Proof. vm_compute. reflexivity. Qed.
+  breaking_feasible spec5 fixture5 (break_at measure5 fixture5) = true := eq_refl.
 
 (* ===================================================================== *)
 (* (C) Monotonicity in the measure                                        *)
@@ -123,37 +117,30 @@ Definition fixture_sentence : paragraph :=
 Definition nbreaks (M : sp) : nat := List.length (break_at M fixture_sentence).
 
 (* 1 line at a very wide measure, more as it narrows. *)
-Example mono_wide   : nbreaks (pt 300) = 1%nat.
-Proof. vm_compute. reflexivity. Qed.
+Example mono_wide   : nbreaks (pt 300) = 1%nat := eq_refl.
 
-Example mono_medium : nbreaks (pt 158) = 2%nat.
-Proof. vm_compute. reflexivity. Qed.
+Example mono_medium : nbreaks (pt 158) = 2%nat := eq_refl.
 
-Example mono_narrow : nbreaks (pt 86) = 3%nat.
-Proof. vm_compute. reflexivity. Qed.
+Example mono_narrow : nbreaks (pt 86) = 3%nat := eq_refl.
 
 (* The descending-measure line counts are non-decreasing. *)
 Example mono_monotone :
   Nat.leb (nbreaks (pt 300)) (nbreaks (pt 158)) = true
-  /\ Nat.leb (nbreaks (pt 158)) (nbreaks (pt 86)) = true.
-Proof. vm_compute. split; reflexivity. Qed.
+  /\ Nat.leb (nbreaks (pt 158)) (nbreaks (pt 86)) = true := conj eq_refl eq_refl.
 
 (* ===================================================================== *)
 (* (D) Shaper smoke tests                                                  *)
 (* ===================================================================== *)
 
 (* "ab cd" shapes to box, glue, box (3 items). *)
-Example shape_three : List.length (shape "ab cd") = 3%nat.
-Proof. vm_compute. reflexivity. Qed.
+Example shape_three : List.length (shape "ab cd") = 3%nat := eq_refl.
 
 (* shape_paragraph appends finishing glue + forced break (+2). *)
-Example shape_par_five : List.length (shape_paragraph "ab cd") = 5%nat.
-Proof. vm_compute. reflexivity. Qed.
+Example shape_par_five : List.length (shape_paragraph "ab cd") = 5%nat := eq_refl.
 
 (* Leading/trailing spaces are collapsed: same as the unpadded text. *)
 Example shape_collapse :
-  List.length (shape "  ab   cd  ") = 3%nat.
-Proof. vm_compute. reflexivity. Qed.
+  List.length (shape "  ab   cd  ") = 3%nat := eq_refl.
 
 (* ===================================================================== *)
 (* (E) Break-position regression on a realistic ~28-word paragraph        *)
@@ -176,24 +163,20 @@ Definition fixture_para : paragraph :=
 
 (* Pin the shaped item count so the fixture text itself cannot silently
    change underneath the break-position assertions below. *)
-Example fixture_para_len : List.length fixture_para = 59%nat.
-Proof. vm_compute. reflexivity. Qed.
+Example fixture_para_len : List.length fixture_para = 59%nat := eq_refl.
 
 (* At a ~200pt measure the optimum is a 4-line breaking. *)
 Example regress_break_wide :
-  break_at (pt 200) fixture_para = [16%nat; 32%nat; 50%nat; 59%nat].
-Proof. vm_compute. reflexivity. Qed.
+  break_at (pt 200) fixture_para = [16%nat; 32%nat; 50%nat; 59%nat] := eq_refl.
 
 (* At a narrower ~120pt measure it is a 6-line breaking. *)
 Example regress_break_narrow :
   break_at (pt 120) fixture_para
-  = [10%nat; 24%nat; 32%nat; 42%nat; 52%nat; 59%nat].
-Proof. vm_compute. reflexivity. Qed.
+  = [10%nat; 24%nat; 32%nat; 42%nat; 52%nat; 59%nat] := eq_refl.
 
 (* Both returned breakings are feasible (no overfull / over-tolerance line). *)
 Example regress_break_feasible :
   breaking_feasible (default_spec (pt 200)) fixture_para
                     (break_at (pt 200) fixture_para) = true
   /\ breaking_feasible (default_spec (pt 120)) fixture_para
-                       (break_at (pt 120) fixture_para) = true.
-Proof. vm_compute. split; reflexivity. Qed.
+                       (break_at (pt 120) fixture_para) = true := conj eq_refl eq_refl.

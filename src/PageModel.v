@@ -160,96 +160,67 @@ Fixpoint contains_id (ids : list string) (id : string) : bool :=
   end.
 
 (* Post-page: every known post-page ID is in the list *)
-Lemma post_page_contains_ciphertext : contains_id post_page_ids id_ciphertext = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_ciphertext : contains_id post_page_ids id_ciphertext = true := eq_refl.
 
-Lemma post_page_contains_decrypt_ui : contains_id post_page_ids id_decrypt_ui = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_decrypt_ui : contains_id post_page_ids id_decrypt_ui = true := eq_refl.
 
-Lemma post_page_contains_decrypt_error : contains_id post_page_ids id_decrypt_error = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_decrypt_error : contains_id post_page_ids id_decrypt_error = true := eq_refl.
 
-Lemma post_page_contains_decrypted_content : contains_id post_page_ids id_decrypted_content = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_decrypted_content : contains_id post_page_ids id_decrypted_content = true := eq_refl.
 
-Lemma post_page_contains_real_title : contains_id post_page_ids id_real_title = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_real_title : contains_id post_page_ids id_real_title = true := eq_refl.
 
-Lemma post_page_contains_real_body : contains_id post_page_ids id_real_body = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_real_body : contains_id post_page_ids id_real_body = true := eq_refl.
 
-Lemma post_page_contains_real_images : contains_id post_page_ids id_real_images = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_real_images : contains_id post_page_ids id_real_images = true := eq_refl.
 
-Lemma post_page_contains_reader_canvas : contains_id post_page_ids id_reader_canvas = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_reader_canvas : contains_id post_page_ids id_reader_canvas = true := eq_refl.
 
-Lemma post_page_contains_encrypted_shell : contains_id post_page_ids id_encrypted_shell = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_encrypted_shell : contains_id post_page_ids id_encrypted_shell = true := eq_refl.
 
-Lemma post_page_contains_decrypt_button : contains_id post_page_ids id_decrypt_button = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_decrypt_button : contains_id post_page_ids id_decrypt_button = true := eq_refl.
 
-Lemma post_page_contains_decrypt_status : contains_id post_page_ids id_decrypt_status = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_decrypt_status : contains_id post_page_ids id_decrypt_status = true := eq_refl.
 
-Lemma post_page_contains_clear_key_button : contains_id post_page_ids id_clear_key_button = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_clear_key_button : contains_id post_page_ids id_clear_key_button = true := eq_refl.
 
-Lemma post_page_contains_reader_a11y : contains_id post_page_ids id_reader_a11y = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_reader_a11y : contains_id post_page_ids id_reader_a11y = true := eq_refl.
 
-Lemma post_page_contains_real_meta : contains_id post_page_ids id_real_meta = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_real_meta : contains_id post_page_ids id_real_meta = true := eq_refl.
 
-Lemma post_page_contains_main : contains_id post_page_ids id_main = true.
-Proof. reflexivity. Qed.
+Lemma post_page_contains_main : contains_id post_page_ids id_main = true := eq_refl.
 
 (* Inbox page: every known inbox-page ID is present *)
-Lemma inbox_page_contains_main : contains_id inbox_page_ids id_main = true.
-Proof. reflexivity. Qed.
+Lemma inbox_page_contains_main : contains_id inbox_page_ids id_main = true := eq_refl.
 
-Lemma inbox_page_contains_inbox_status_msg : contains_id inbox_page_ids id_inbox_status_msg = true.
-Proof. reflexivity. Qed.
+Lemma inbox_page_contains_inbox_status_msg : contains_id inbox_page_ids id_inbox_status_msg = true := eq_refl.
 
-Lemma inbox_page_contains_ciphertext : contains_id inbox_page_ids id_ciphertext = true.
-Proof. reflexivity. Qed.
+Lemma inbox_page_contains_ciphertext : contains_id inbox_page_ids id_ciphertext = true := eq_refl.
 
 (* Critical coherence safety: the inbox page does NOT contain post-page-only IDs.
    If DecryptApp's inbox branch tried to target these, it would be a bug. *)
-Lemma inbox_page_no_decrypt_error : contains_id inbox_page_ids id_decrypt_error = false.
-Proof. reflexivity. Qed.
+Lemma inbox_page_no_decrypt_error : contains_id inbox_page_ids id_decrypt_error = false := eq_refl.
 
-Lemma inbox_page_no_decrypt_ui : contains_id inbox_page_ids id_decrypt_ui = false.
-Proof. reflexivity. Qed.
+Lemma inbox_page_no_decrypt_ui : contains_id inbox_page_ids id_decrypt_ui = false := eq_refl.
 
-Lemma inbox_page_no_decrypted_content : contains_id inbox_page_ids id_decrypted_content = false.
-Proof. reflexivity. Qed.
+Lemma inbox_page_no_decrypted_content : contains_id inbox_page_ids id_decrypted_content = false := eq_refl.
 
 (* Enroll page: every known enroll-page ID is present *)
-Lemma enroll_page_contains_enroll_ui : contains_id enroll_page_ids id_enroll_ui = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_enroll_ui : contains_id enroll_page_ids id_enroll_ui = true := eq_refl.
 
-Lemma enroll_page_contains_enroll_button : contains_id enroll_page_ids id_enroll_button = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_enroll_button : contains_id enroll_page_ids id_enroll_button = true := eq_refl.
 
-Lemma enroll_page_contains_enroll_status : contains_id enroll_page_ids id_enroll_status = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_enroll_status : contains_id enroll_page_ids id_enroll_status = true := eq_refl.
 
-Lemma enroll_page_contains_enroll_result : contains_id enroll_page_ids id_enroll_result = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_enroll_result : contains_id enroll_page_ids id_enroll_result = true := eq_refl.
 
-Lemma enroll_page_contains_reader_key_id : contains_id enroll_page_ids id_reader_key_id = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_reader_key_id : contains_id enroll_page_ids id_reader_key_id = true := eq_refl.
 
-Lemma enroll_page_contains_reader_pubkey_hex : contains_id enroll_page_ids id_reader_pubkey_hex = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_reader_pubkey_hex : contains_id enroll_page_ids id_reader_pubkey_hex = true := eq_refl.
 
-Lemma enroll_page_contains_enroll_existing : contains_id enroll_page_ids id_enroll_existing = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_enroll_existing : contains_id enroll_page_ids id_enroll_existing = true := eq_refl.
 
-Lemma enroll_page_contains_main : contains_id enroll_page_ids id_main = true.
-Proof. reflexivity. Qed.
+Lemma enroll_page_contains_main : contains_id enroll_page_ids id_main = true := eq_refl.
 
 (* =================================================================== *)
 (* 5. ES-module specifier validity theorems                            *)
@@ -262,21 +233,17 @@ Definition spec_decrypt_post : string := "../static/crane_decrypt.mjs".
 Definition spec_decrypt_inbox : string := "./static/crane_decrypt.mjs".
 Definition spec_enroll : string := "../static/crane_enroll.mjs".
 
-Theorem spec_decrypt_post_valid : esm_specifier_valid spec_decrypt_post = true.
-Proof. reflexivity. Qed.
+Theorem spec_decrypt_post_valid : esm_specifier_valid spec_decrypt_post = true := eq_refl.
 
-Theorem spec_decrypt_inbox_valid : esm_specifier_valid spec_decrypt_inbox = true.
-Proof. reflexivity. Qed.
+Theorem spec_decrypt_inbox_valid : esm_specifier_valid spec_decrypt_inbox = true := eq_refl.
 
-Theorem spec_enroll_valid : esm_specifier_valid spec_enroll = true.
-Proof. reflexivity. Qed.
+Theorem spec_enroll_valid : esm_specifier_valid spec_enroll = true := eq_refl.
 
 (* A bare `static/crane_decrypt.mjs` (the regression that once broke the
    inbox) is PROVABLY INVALID under our specifier predicate. *)
 Definition spec_bare_static : string := "static/crane_decrypt.mjs".
 
-Theorem spec_bare_static_invalid : esm_specifier_valid spec_bare_static = false.
-Proof. reflexivity. Qed.
+Theorem spec_bare_static_invalid : esm_specifier_valid spec_bare_static = false := eq_refl.
 
 (* =================================================================== *)
 (* 6. Page model records                                              *)
@@ -458,34 +425,28 @@ Proof. reflexivity. Qed.
 (* The page shell includes a mandatory HTML fragment *)
 Example page_shell_has_closing_html :
   let s := serialize_page_shell "../" "T" "b" "" "" "<p>x</p>" "v2" in
-  is_empty s = false.
-Proof. reflexivity. Qed.
+  is_empty s = false := eq_refl.
 
 Example page_shell_has_stylesheet_link :
   str_contains (serialize_page_shell "" "wklm.online" "home" "" "" "<p>x</p>" "v2")
-               "styles/site.v2.css" = true.
-Proof. vm_compute. reflexivity. Qed.
+               "styles/site.v2.css" = true := eq_refl.
 
 (* Post-page serializer uses the correct prefix and version *)
 Example post_page_uses_asset_version :
   let p := mk_post_page "x" "../" "v9" in
-  str_contains (serialize_post_page p) "crane_decrypt.mjs?v=v9" = true.
-Proof. vm_compute. reflexivity. Qed.
+  str_contains (serialize_post_page p) "crane_decrypt.mjs?v=v9" = true := eq_refl.
 
 (* Inbox page contains the decrypt script tag *)
 Example inbox_page_has_decrypt_script :
   let p := mk_inbox_page nil "v2" in
-  str_contains (serialize_inbox_page p) "crane_decrypt.mjs" = true.
-Proof. vm_compute. reflexivity. Qed.
+  str_contains (serialize_inbox_page p) "crane_decrypt.mjs" = true := eq_refl.
 
 (* Enroll page contains the enroll script tag *)
 Example enroll_page_has_enroll_script :
   let p := mk_enroll_page "../" "v2" in
-  str_contains (serialize_enroll_page p) "crane_enroll.mjs" = true.
-Proof. vm_compute. reflexivity. Qed.
+  str_contains (serialize_enroll_page p) "crane_enroll.mjs" = true := eq_refl.
 
 (* The bare-specifier regression string does NOT appear in the inbox. *)
 Example inbox_page_no_bare_static_specifier :
   let p := mk_inbox_page nil "v2" in
-  str_contains (serialize_inbox_page p) "from 'static/" = false.
-Proof. vm_compute. reflexivity. Qed.
+  str_contains (serialize_inbox_page p) "from 'static/" = false := eq_refl.

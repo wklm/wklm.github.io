@@ -162,27 +162,6 @@ Definition par_finish_glue (big_stretch : sp) : item :=
 (* Width / stretch / shrink accumulation                                  *)
 (* ===================================================================== *)
 
-(* The natural width contribution of a single item to a running line.
-   Penalties contribute zero width unless a break is taken there (then the
-   penalty's own width, which we model as zero, is irrelevant). *)
-Definition item_width (it : item) : sp :=
-  match it with
-  | IBox b     => bx_width b
-  | IGlue g    => gl_width g
-  | IPenalty _ => 0
-  end.
-
-Definition item_stretch (it : item) : sp :=
-  match it with
-  | IGlue g    => gl_stretch g
-  | _          => 0
-  end.
-
-Definition item_shrink (it : item) : sp :=
-  match it with
-  | IGlue g    => gl_shrink g
-  | _          => 0
-  end.
 
 (* Fold a (sub)list of items into its total natural width, stretch and
    shrink.  These are the three quantities the line-breaker needs to size
@@ -236,61 +215,23 @@ Qed.
 (* Total width is additive over concatenation: width(p ++ q) =
    width(p) + width(q).  KnuthPlass uses this to size a line [i..j] as a
    difference of prefix sums. *)
+Lemma fold_left_app_add : forall (p q : paragraph) (f : item -> sp),
+  fold_left (fun acc it => acc + f it) (p ++ q) 0 =
+  fold_left (fun acc it => acc + f it) p 0 + fold_left (fun acc it => acc + f it) q 0.
+Proof.
+  intros p q f. rewrite fold_left_app. apply fold_left_add_start.
+Qed.
+
 Lemma total_width_app :
   forall p q, total_width (p ++ q) = total_width p + total_width q.
-Proof.
-  intros p q. unfold total_width.
-  rewrite fold_left_app.
-  now rewrite (fold_left_add_start q
-    (fun it => match it with IBox b => bx_width b | IGlue g => gl_width g | IPenalty _ => 0 end)
-    (fold_left _ p 0)).
-Qed.
+Proof. apply fold_left_app_add. Qed.
 
 Lemma total_stretch_app :
   forall p q, total_stretch (p ++ q) = total_stretch p + total_stretch q.
-Proof.
-  intros p q. unfold total_stretch.
-  rewrite fold_left_app.
-  now rewrite (fold_left_add_start q
-    (fun it => match it with IGlue g => gl_stretch g | _ => 0 end)
-    (fold_left _ p 0)).
-Qed.
+Proof. apply fold_left_app_add. Qed.
 
 Lemma total_shrink_app :
   forall p q, total_shrink (p ++ q) = total_shrink p + total_shrink q.
-Proof.
-  intros p q. unfold total_shrink.
-  rewrite fold_left_app.
-  now rewrite (fold_left_add_start q
-    (fun it => match it with IGlue g => gl_shrink g | _ => 0 end)
-    (fold_left _ p 0)).
-Qed.
+Proof. apply fold_left_app_add. Qed.
 
-(* Stretch and shrink are non-negative whenever every glue's are.  We state
-   the per-item facts; the list-level versions follow by induction in
-   KnuthPlass.v where they are needed for the badness sign argument. *)
-Definition glue_wellformed (g : glue) : Prop :=
-  0 <= gl_stretch g /\ 0 <= gl_shrink g.
 
-Definition item_wellformed (it : item) : Prop :=
-  match it with
-  | IGlue g => glue_wellformed g
-  | _       => True
-  end.
-
-Definition paragraph_wellformed (p : paragraph) : Prop :=
-  Forall item_wellformed p.
-
-Lemma item_stretch_nonneg :
-  forall it, item_wellformed it -> 0 <= item_stretch it.
-Proof.
-  intros [b|g|pn]; simpl; try (intros; apply Z.le_refl).
-  intros [Hst _]; exact Hst.
-Qed.
-
-Lemma item_shrink_nonneg :
-  forall it, item_wellformed it -> 0 <= item_shrink it.
-Proof.
-  intros [b|g|pn]; simpl; try (intros; apply Z.le_refl).
-  intros [_ Hsh]; exact Hsh.
-Qed.

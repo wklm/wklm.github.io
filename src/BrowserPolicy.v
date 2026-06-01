@@ -89,13 +89,10 @@ Definition alg_offered (tok : string) : bool :=
 
 (* The guard: RS256 (-257) is in the offered algorithm list.  [reflexivity]
    forces full computation of the split + comparison at type-check time. *)
-Example rs256_offered : alg_offered "-257" = true.
-Proof. reflexivity. Qed.
+Example rs256_offered : alg_offered "-257" = true := eq_refl.
 
 (* Companion guards (same shape) so the whole declared set is pinned: dropping
    ES256 or EdDSA would also break the build here. *)
-Example es256_offered : alg_offered "-7" = true.
-Proof. reflexivity. Qed.
+Example es256_offered : alg_offered "-7" = true := eq_refl.
 
-Example eddsa_offered : alg_offered "-8" = true.
-Proof. reflexivity. Qed.
+Example eddsa_offered : alg_offered "-8" = true := eq_refl.

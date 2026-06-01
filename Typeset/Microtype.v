@@ -48,7 +48,7 @@ Definition clamp_expansion (e : Z) : Z :=
    is deterministic. *)
 Definition expand_width (e : Z) (w : sp) : sp :=
   let e' := clamp_expansion e in
-  w + (w * e') / 1000.
+  w + Z.quot (w * e') 1000.
 
 (* Expand every box in a paragraph by [e]; glue/penalties are untouched
    (interword glue carries its own stretch/shrink and is not "expanded").
@@ -67,23 +67,18 @@ Definition expand_paragraph (e : Z) (p : paragraph) : paragraph :=
 Lemma clamp_expansion_bounded :
   forall e, - max_expansion <= clamp_expansion e <= max_expansion.
 Proof.
-  intros e. unfold clamp_expansion.
-  destruct (Z.ltb e (- max_expansion)) eqn:H1.
-  - split; [ apply Z.le_refl | unfold max_expansion; lia ].
-  - destruct (Z.ltb max_expansion e) eqn:H2.
-    + split; [ unfold max_expansion; lia | apply Z.le_refl ].
-    + apply Z.ltb_ge in H1. apply Z.ltb_ge in H2. lia.
+  intros e. unfold clamp_expansion, max_expansion in *.
+  destruct (e <? -50) eqn:E1; destruct (50 <? e) eqn:E2;
+  try apply Z.ltb_lt in E1; try apply Z.ltb_ge in E1;
+  try apply Z.ltb_lt in E2; try apply Z.ltb_ge in E2;
+  lia.
 Qed.
 
 (* Expanding by 0 is the identity on widths. *)
 Lemma expand_width_zero : forall w, expand_width 0 w = w.
 Proof.
-  intros w. unfold expand_width, clamp_expansion. simpl.
-  (* clamp 0 = 0 since -50 <? 0 is false ... actually -50 < 0 true; but
-     the first branch tests e <? -max = 0 <? -50 = false. *)
-  replace (Z.ltb 0 (- max_expansion)) with false by reflexivity.
-  replace (Z.ltb max_expansion 0) with false by reflexivity.
-  rewrite Z.mul_0_r. rewrite Zdiv.Zdiv_0_l. apply Z.add_0_r.
+  intros; unfold expand_width; change (clamp_expansion 0) with 0;
+  rewrite Z.mul_0_r; reflexivity.
 Qed.
 
 (* ===================================================================== *)
@@ -143,8 +138,12 @@ Definition protr_left_sp (c : int) : sp :=
    protrusion of its last glyph.  Given the glyphs of the box STARTING a
    line, the left credit is the protrusion of its first glyph.  We expose
    helpers operating on a box's glyph list. *)
-Definition last_glyph (gs : list glyph_id) : option glyph_id :=
-  match rev gs with [] => None | g :: _ => Some g end.
+Fixpoint last_glyph (gs : list glyph_id) : option glyph_id :=
+  match gs with
+  | [] => None
+  | g :: [] => Some g
+  | _ :: t => last_glyph t
+  end.
 
 Definition first_glyph (gs : list glyph_id) : option glyph_id :=
   match gs with [] => None | g :: _ => Some g end.
@@ -182,7 +181,6 @@ Definition effective_line_width
 Lemma effective_width_trivial :
   forall raw, effective_line_width 0 raw (mkBox raw []) (mkBox raw []) = raw.
 Proof.
-  intros raw. unfold effective_line_width, box_left_protrusion,
-    box_right_protrusion, first_glyph, last_glyph. simpl.
-  rewrite expand_width_zero. rewrite Z.sub_0_r. apply Z.sub_0_r.
+  intros; unfold effective_line_width, box_left_protrusion, box_right_protrusion;
+  rewrite expand_width_zero; lia.
 Qed.

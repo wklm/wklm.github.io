@@ -112,22 +112,13 @@ Definition set_item_width (w y z W : sp) (it : item) : sp :=
 Fixpoint place_glyphs_tr (adv : glyph_id -> sp) (gs : list glyph_id) (x by_ : sp)
   (out : quad_buffer) : quad_buffer :=
   match gs with
-  | [] => rev_append out []
+  | [] => out
   | g :: rest => place_glyphs_tr adv rest (x + adv g) by_ (mkQuad x by_ g :: out)
-  end.
-
-Fixpoint glyphs_advance_tr (adv : glyph_id -> sp) (gs : list glyph_id) (acc : sp) : sp :=
-  match gs with
-  | [] => acc
-  | g :: rest => glyphs_advance_tr adv rest (adv g + acc)
   end.
 
 Definition place_glyphs (adv : glyph_id -> sp) (gs : list glyph_id) (x by_ : sp)
   : quad_buffer :=
   place_glyphs_tr adv gs x by_ [].
-
-Definition glyphs_advance (adv : glyph_id -> sp) (gs : list glyph_id) : sp :=
-  glyphs_advance_tr adv gs 0.
 
 (* Lay out a list of items (one line) starting at pen [x0] on baseline [by],
    justified to fit [W] given the line's natural (w,y,z).  Emits quads for
@@ -137,10 +128,10 @@ Fixpoint layout_line_items_tr
     (adv : glyph_id -> sp) (w y z W : sp)
     (its : list item) (x by_ : sp) (out : quad_buffer) : quad_buffer :=
   match its with
-  | [] => rev_append out []
+  | [] => out
   | IBox b :: rest =>
       layout_line_items_tr adv w y z W rest (x + bx_width b) by_
-        (rev_append (place_glyphs adv (bx_glyphs b) x by_) out)
+        (place_glyphs_tr adv (bx_glyphs b) x by_ out)
   | IGlue g :: rest =>
       let sw := set_glue w y z W (gl_width g) (gl_stretch g) (gl_shrink g) in
       layout_line_items_tr adv w y z W rest (x + sw) by_ out
@@ -150,10 +141,6 @@ Fixpoint layout_line_items_tr
       layout_line_items_tr adv w y z W rest x by_ out
   end.
 
-Definition layout_line_items
-    (adv : glyph_id -> sp) (w y z W : sp)
-    (its : list item) (x by_ : sp) : quad_buffer :=
-  layout_line_items_tr adv w y z W its x by_ [].
 
 (* ===================================================================== *)
 (* Slicing the paragraph at break positions                               *)
@@ -190,7 +177,7 @@ Fixpoint layout_lines_tr
       let z := total_shrink its in
       let by_ := baseline_y ln in
       layout_lines_tr adv W p j (S ln) rest
-        (rev_append (layout_line_items adv w y z W its 0 by_) out)
+        (layout_line_items_tr adv w y z W its 0 by_ out)
   end.
 
 Definition layout_lines
@@ -214,37 +201,20 @@ Definition layout_paragraph
 Lemma rev_append_length {A} (l1 l2 : list A) :
   length (rev_append l1 l2) = (length l1 + length l2)%nat.
 Proof.
-  revert l2.
-  induction l1 as [| a l1 IH]; simpl; intros l2.
-  - reflexivity.
-  - rewrite IH. simpl. rewrite Nat.add_succ_r. reflexivity.
+  rewrite rev_append_rev, app_length, rev_length. reflexivity.
 Qed.
 
 (* Helper: In for rev_append. *)
 Lemma rev_append_In {A} (l1 l2 : list A) (x : A) :
   In x (rev_append l1 l2) <-> In x l1 \/ In x l2.
 Proof.
-  generalize dependent l2.
-  induction l1 as [| a l1 IH]; intros l2; simpl; split.
-  - right; auto.
-  - tauto.
-  - intros Hin. apply IH in Hin. destruct Hin as [Hin | [<- | Hin]].
-    + left; right; auto.
-    + left; left; auto.
-    + right; auto.
-  - intros [ [<- | Hin] | Hin ].
-    + apply IH. right; left; auto.
-    + apply IH. left; auto.
-    + apply IH. right; right; auto.
+  rewrite rev_append_rev, in_app_iff, in_rev. reflexivity.
 Qed.
 
 (* Laying out the empty paragraph yields the empty buffer. *)
 Lemma layout_paragraph_nil :
   forall adv W, layout_lines adv W [] 0 0 (break_at W []) = [].
-Proof.
-  intros adv W. unfold break_at, break_paragraph, run_dp, final_node.
-  unfold layout_lines. simpl. reflexivity.
-Qed.
+Proof. reflexivity. Qed.
 
 (* Tail-recursive place_glyphs_tr general length property. *)
 Lemma place_glyphs_tr_length :
@@ -252,7 +222,7 @@ Lemma place_glyphs_tr_length :
     length (place_glyphs_tr adv gs x by_ out) = (length gs + length out)%nat.
 Proof.
   induction gs as [| g gs IH]; intros x by_ out; simpl.
-  - rewrite rev_append_length. rewrite Nat.add_0_r. simpl. reflexivity.
+  - reflexivity.
   - rewrite IH. simpl. rewrite Nat.add_succ_r. reflexivity.
 Qed.
 
@@ -271,13 +241,8 @@ Lemma place_glyphs_tr_baseline :
     In q (place_glyphs_tr adv gs x by_ out) -> q_y q = by_ \/ In q out.
 Proof.
   induction gs as [| g gs IH]; intros x by_ out q Hin; simpl in Hin.
-  - apply rev_append_In in Hin. destruct Hin as [Hin | Hin].
-    + right; exact Hin.
-    + destruct Hin.
-  - apply IH in Hin. destruct Hin as [Hq | [<- | Hin']].
-    + left; exact Hq.
-    + left; reflexivity.
-    + right; exact Hin'.
+  - intuition.
+  - apply IH in Hin. intuition.
 Qed.
 
 (* Each quad a line produces sits on that line's baseline.  We state the
@@ -286,10 +251,8 @@ Lemma place_glyphs_baseline :
   forall adv gs x by_ q,
     In q (place_glyphs adv gs x by_) -> q_y q = by_.
 Proof.
-  intros adv gs x by_ q Hin. unfold place_glyphs in Hin.
-  apply place_glyphs_tr_baseline in Hin as [Hq | Hin'].
-  - exact Hq.
-  - destruct Hin'.
+  unfold place_glyphs. intros * Hin.
+  apply place_glyphs_tr_baseline in Hin. intuition.
 Qed.
 
 (* ===================================================================== *)

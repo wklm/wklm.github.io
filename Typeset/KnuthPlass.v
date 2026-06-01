@@ -363,22 +363,11 @@ Definition is_forced_break (p : paragraph) (k : nat) : bool :=
   | _ => false
   end.
 
-(* Build the list of legal break positions in [1 .. length p].  A break
-   "position j" means: the j-th item boundary, i.e. a line ends just after
-   item index (j-1).  We enumerate positions structurally. *)
-Fixpoint legal_positions_aux (p : paragraph) (k : nat) : list nat :=
-  match k with
-  | O => []
-  | S k' =>
-      let rest := legal_positions_aux p k' in
-      if legal_after p k' then (S k') :: rest else rest
-  end.
-
 (* All legal breakpoints, ascending, including the forced end-of-paragraph.
    We always include position (length p) (the very end) as a forced break
    because shape_paragraph appends a forced-break penalty there. *)
 Definition legal_positions (p : paragraph) : list nat :=
-  rev (legal_positions_aux p (length p)).
+  filter (fun k => legal_after p (Nat.pred k)) (seq 1 (length p)).
 
 (* ===================================================================== *)
 (* The dynamic-programming line breaker                                   *)
@@ -488,9 +477,12 @@ Definition best_to (sp_ : line_spec) (p : paragraph) (actives : list node) (j : 
 Definition dp_step (sp_ : line_spec) (p : paragraph) (ps : psums)
     (actives : list node) (j : nat)
   : list node :=
+  let it := nth (Nat.pred j) p forbidden_break in
+  let forcedj := match it with IPenalty pn => penalty_forced pn | _ => false end in
+  let penj := match it with IPenalty pn => pn_penalty pn | _ => 0 end in
+  let flj := match it with IPenalty pn => pn_flagged pn | _ => false end in
   match best_to sp_ p actives j (pw_at ps j) (py_at ps j) (pz_at ps j)
-                (is_forced_break p (Nat.pred j)) (break_penalty p (Nat.pred j))
-                (break_flagged p (Nat.pred j)) with
+                forcedj penj flj with
   | None => actives
   | Some n => actives ++ [n]
   end.
@@ -523,6 +515,7 @@ Lemma dp_step_table_eq :
 Proof.
   intros sp_ p actives j Hj. unfold dp_step.
   rewrite (pw_at_correct p j Hj), (py_at_correct p j Hj), (pz_at_correct p j Hj).
+  unfold is_forced_break, break_penalty, break_flagged.
   reflexivity.
 Qed.
 
@@ -546,19 +539,20 @@ Definition final_node (sp_ : line_spec) (p : paragraph) : option node :=
 
 (* Given the final active set and a starting node, walk [nd_prev] back to 0,
    collecting break positions.  Bounded by the number of nodes (fuel). *)
-Fixpoint trace_back (actives : list node) (cur : node) (fuel : nat) : list nat :=
+Fixpoint trace_back_aux (actives : list node) (cur : node) (fuel : nat) (acc : list nat) : list nat :=
   match fuel with
-  | O => [nd_pos cur]
+  | O => nd_pos cur :: acc
   | S f =>
-      if Nat.eqb (nd_pos cur) 0 then []
+      if Nat.eqb (nd_pos cur) 0 then acc
       else
-        (* find the predecessor node by position *)
-        let prev_pos := nd_prev cur in
-        match find (fun n => Nat.eqb (nd_pos n) prev_pos) actives with
-        | None => [nd_pos cur]
-        | Some pn => trace_back actives pn f ++ [nd_pos cur]
+        match find (fun n => Nat.eqb (nd_pos n) (nd_prev cur)) actives with
+        | None => nd_pos cur :: acc
+        | Some pn => trace_back_aux actives pn f (nd_pos cur :: acc)
         end
   end.
+
+Definition trace_back (actives : list node) (cur : node) (fuel : nat) : list nat :=
+  trace_back_aux actives cur fuel [].
 
 (* The public entry point: return the ascending list of break positions
    (item boundaries) of the optimal breaking, or [] if no feasible breaking
@@ -573,19 +567,6 @@ Definition break_paragraph (sp_ : line_spec) (p : paragraph) : list nat :=
 (* Convenience: break at a fixed measure with default tuning. *)
 Definition break_at (measure : sp) (p : paragraph) : list nat :=
   break_paragraph (default_spec measure) p.
-
-(* ===================================================================== *)
-(* T7 (a): termination is structural                                      *)
-(* ===================================================================== *)
-
-(* [run_dp] is a [fold_left] over the finite list [legal_positions p];
-   [trace_back] is structural on [fuel].  Both are total Coq functions, so
-   [break_paragraph] is total -- it always returns a value, never diverges
-   or panics.  We record this as a trivial-but-meaningful fact: the result
-   is well-defined for every input. *)
-Theorem break_paragraph_total :
-  forall sp_ p, exists bs, break_paragraph sp_ p = bs.
-Proof. intros; eexists; reflexivity. Qed.
 
 (* ===================================================================== *)
 (* Prefix-sum cache correctness (ties the fast DP to the cache-free spec)  *)
@@ -655,22 +636,12 @@ Lemma try_extend_feasible :
 Proof.
   intros sp_ p a j n Hcache Hforced Hext.
   unfold try_extend in Hext.
-  (* Rewrite the fast cached line sizes back to the canonical [line_*]. *)
   destruct (line_width_cache p a j Hcache) as (Ew & Ey & Ez).
   rewrite Ew, Ey, Ez in Hext.
   rewrite Hforced in Hext. simpl in Hext.
-  (* the guard is: if (negb false && (overfull || tol<b)) then None else Some.
-     negb false = true, so the disjunction must be false for Some. *)
-  destruct (overfull (line_width (nd_pos a) j p) (line_stretch (nd_pos a) j p)
-              (line_shrink (nd_pos a) j p) (ls_measure sp_)) eqn:Hover;
-  destruct (Z.ltb (ls_tolerance sp_)
-              (badness_of (line_width (nd_pos a) j p) (line_stretch (nd_pos a) j p)
-                 (line_shrink (nd_pos a) j p) (ls_measure sp_))) eqn:Htol;
-  simpl in Hext; try discriminate.
-  cbv zeta. split.
-  - exact Hover.
-  - (* Z.ltb tol b = false  ->  Z.leb b tol = true *)
-    apply Z.ltb_ge in Htol. apply Z.leb_le. exact Htol.
+  destruct (overfull _ _ _ _ || Z.ltb _ _) eqn:Hguard; try discriminate.
+  apply orb_false_iff in Hguard; destruct Hguard as [Hover Htol].
+  split; [exact Hover | apply Z.leb_le; apply Z.ltb_ge; exact Htol].
 Qed.
 
 (* ===================================================================== *)
@@ -761,10 +732,8 @@ Proof.
   unfold try_extend in Hext.
   destruct (line_width_cache p a j Hcache) as (Ew & Ey & Ez).
   rewrite Ew, Ey, Ez in Hext.
-  destruct (is_forced_break p (Nat.pred j)) eqn:Hf; simpl in Hext;
-  [ | destruct (overfull _ _ _ _) eqn:Hov; simpl in Hext ];
   repeat (match goal with
-          | H : (if ?c then _ else _) = Some _ |- _ => destruct c eqn:?
+          | H : (if ?c then _ else _) = Some _ |- _ => destruct c
           end; simpl in Hext);
   try discriminate; inversion Hext; subst; cbn [nd_demerits];
   unfold seg_demerits; reflexivity.
@@ -796,17 +765,12 @@ Lemma best_to_minimal :
     nd_demerits m <= nd_demerits n.
 Proof.
   intros sp_ p actives j wj yj zj forcedj penj flj. unfold best_to.
-  (* The minimality argument is entirely about the [nd_demerits] comparison
-     in the fold and is unaffected by HOW the line sizes [wj]/[yj]/[zj] were
-     obtained (here they are read once from the precomputed prefix table). *)
-  (* generalise the accumulator: prove for any starting acc that the fold
-     result is <= any feasible candidate seen in [actives], and <= acc when
-     acc is Some. *)
+  Ltac solve_in Hx IHin IHacc :=
+    intros a0 n0 Hin0 Hext0; simpl in Hin0; destruct Hin0 as [->|Hin0];
+    [ rewrite Hx in Hext0; try discriminate; inversion Hext0; subst; eapply IHacc; reflexivity
+    | apply (IHin a0 n0 Hin0 Hext0) ].
   assert (GEN:
     forall l acc,
-      (forall m0, acc = Some m0 ->
-         forall a0 n0, In a0 l -> try_extend sp_ p a0 j wj yj zj forcedj penj flj = Some n0 ->
-                       True) ->
       forall res, fold_left
         (fun acc a =>
            match try_extend sp_ p a j wj yj zj forcedj penj flj with
@@ -821,59 +785,35 @@ Proof.
          nd_demerits res <= nd_demerits n0)
       /\ (forall m0, acc = Some m0 -> nd_demerits res <= nd_demerits m0)).
   { induction l as [| x l IH]; intros acc Hpre res Hfold; simpl in Hfold.
-    - (* empty list *) split.
+    - split.
       + intros a0 n0 [] _.
       + intros m0 Hacc. rewrite Hacc in Hfold. inversion Hfold; subst.
         apply Z.le_refl.
-    - (* x :: l *)
-      destruct (try_extend sp_ p x j wj yj zj forcedj penj flj) as [nx|] eqn:Hx.
-      + (* x feasible *)
-        destruct acc as [m0|] eqn:Hacc.
+    - destruct (try_extend sp_ p x j wj yj zj forcedj penj flj) as [nx|] eqn:Hx.
+      + destruct acc as [m0|] eqn:Hacc.
         * destruct (Z.ltb (nd_demerits nx) (nd_demerits m0)) eqn:Hlt.
-          -- (* take nx *)
-             specialize (IH (Some nx) ltac:(intros; exact I) res Hfold).
-             destruct IH as [IHin IHacc].
-             split.
-             ++ intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
-                ** rewrite Hx in Hext0. inversion Hext0; subst.
-                   eapply IHacc; reflexivity.
-                ** apply (IHin a0 n0 Hin0 Hext0).
-             ++ intros mm Hmm. inversion Hmm; subst.
+          -- specialize (IH (Some nx) res Hfold). destruct IH as [IHin IHacc].
+             split; [solve_in Hx IHin IHacc |].
+             intros mm Hmm. inversion Hmm; subst.
+             eapply Z.le_trans; [ eapply IHacc; reflexivity | ].
+             apply Z.ltb_lt in Hlt. apply Z.lt_le_incl. exact Hlt.
+          -- specialize (IH (Some m0) res Hfold). destruct IH as [IHin IHacc].
+             split; [| intros mm Hmm; inversion Hmm; subst; eapply IHacc; reflexivity].
+             intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
+             ** rewrite Hx in Hext0. inversion Hext0; subst.
                 eapply Z.le_trans; [ eapply IHacc; reflexivity | ].
-                apply Z.ltb_lt in Hlt. apply Z.lt_le_incl. exact Hlt.
-          -- (* keep m0 *)
-             specialize (IH (Some m0) ltac:(intros; exact I) res Hfold).
-             destruct IH as [IHin IHacc].
-             split.
-             ++ intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
-                ** rewrite Hx in Hext0. inversion Hext0; subst.
-                   eapply Z.le_trans; [ eapply IHacc; reflexivity | ].
-                   apply Z.ltb_ge in Hlt. exact Hlt.
-                ** apply (IHin a0 n0 Hin0 Hext0).
-             ++ intros mm Hmm. inversion Hmm; subst.
-                eapply IHacc; reflexivity.
-        * (* acc = None, take nx *)
-          specialize (IH (Some nx) ltac:(intros; exact I) res Hfold).
-          destruct IH as [IHin IHacc].
-          split.
-          -- intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
-             ++ rewrite Hx in Hext0. inversion Hext0; subst.
-                eapply IHacc; reflexivity.
-             ++ apply (IHin a0 n0 Hin0 Hext0).
-          -- intros mm Hmm. discriminate Hmm.
-      + (* x infeasible: skip *)
-        specialize (IH acc ltac:(intros; exact I) res Hfold).
-        destruct IH as [IHin IHacc].
-        split.
-        * intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
-          -- rewrite Hx in Hext0. discriminate Hext0.
-          -- apply (IHin a0 n0 Hin0 Hext0).
-        * exact IHacc. }
+                apply Z.ltb_ge in Hlt. exact Hlt.
+             ** apply (IHin a0 n0 Hin0 Hext0).
+        * specialize (IH (Some nx) res Hfold). destruct IH as [IHin IHacc].
+          split; [solve_in Hx IHin IHacc |].
+          intros mm Hmm. discriminate Hmm.
+      + specialize (IH acc res Hfold). destruct IH as [IHin IHacc].
+        split; [| exact IHacc].
+        intros a0 n0 Hin0 Hext0. simpl in Hin0. destruct Hin0 as [->|Hin0].
+        * rewrite Hx in Hext0. discriminate Hext0.
+        * apply (IHin a0 n0 Hin0 Hext0). }
   intros a n m Hin Hext Hbest.
-  assert (Hpre : forall m0, (@None node) = Some m0 ->
-            forall a0 n0, In a0 actives -> try_extend sp_ p a0 j wj yj zj forcedj penj flj = Some n0 -> True)
-    by (intros m0 Hd; discriminate Hd).
-  specialize (GEN actives None Hpre m Hbest).
+  specialize (GEN actives None m Hbest).
   destruct GEN as [Hin' _].
   apply (Hin' a n Hin Hext).
 Qed.
