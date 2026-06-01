@@ -95,24 +95,55 @@ Fixpoint wrap_base64_aux (s : string) (pos : int) (fuel : nat) : string :=
 Definition wrap_base64 (s : string) : string :=
   wrap_base64_aux s 0%int63 mime_fuel.
 
-(* ---- Whitespace strip (for base64 bodies on decrypt) --------------- *)
-Fixpoint strip_ws_aux (s : string) (pos : int) (fuel : nat) : string :=
+(* Find next whitespace character *)
+Fixpoint find_ws (s : string) (pos : int) (fuel : nat) : int :=
   match fuel with
-  | O => ""
+  | O => pos
   | S f' =>
       let n := PrimString.length s in
-      if leb n pos then ""
+      if leb n pos then n
       else
         let c := PrimString.get s pos in
         if orb (int_eqb c ch_newline)
                (orb (int_eqb c ch_cr)
                     (orb (int_eqb c ch_space) (int_eqb c ch_tab)))
-        then strip_ws_aux s (add pos 1%int63) f'
-        else cat (PrimString.sub s pos 1%int63) (strip_ws_aux s (add pos 1%int63) f')
+        then pos
+        else find_ws s (add pos 1%int63) f'
+  end.
+
+(* Find next non-whitespace character *)
+Fixpoint find_non_ws (s : string) (pos : int) (fuel : nat) : int :=
+  match fuel with
+  | O => pos
+  | S f' =>
+      let n := PrimString.length s in
+      if leb n pos then n
+      else
+        let c := PrimString.get s pos in
+        if orb (int_eqb c ch_newline)
+               (orb (int_eqb c ch_cr)
+                    (orb (int_eqb c ch_space) (int_eqb c ch_tab)))
+        then find_non_ws s (add pos 1%int63) f'
+        else pos
+  end.
+
+Fixpoint strip_ws_aux (s : string) (pos : int) (fuel : nat) (acc : list string) : list string :=
+  match fuel with
+  | O => rev acc
+  | S f' =>
+      let n := PrimString.length s in
+      if leb n pos then rev acc
+      else
+        let start_pos := find_non_ws s pos f' in
+        if leb n start_pos then rev acc
+        else
+          let end_pos := find_ws s start_pos f' in
+          let chunk := PrimString.sub s start_pos (sub end_pos start_pos) in
+          strip_ws_aux s end_pos f' (chunk :: acc)
   end.
 
 Definition strip_ws (s : string) : string :=
-  strip_ws_aux s 0%int63 mime_fuel.
+  concat_all (strip_ws_aux s 0%int63 mime_fuel nil).
 
 (* ---- Frontmatter parsing ------------------------------------------- *)
 (* Mirrors io_helpers.parse_frontmatter: requires '---\n' (or '---\r\n') at

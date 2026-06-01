@@ -267,6 +267,9 @@ Fixpoint layout_all_tr (ps : list string) (acc : list (list quad)) : list (list 
   | body :: rest => layout_all_tr rest (layout_paragraph advance_of MEASURE (shape_paragraph body) :: acc)
   end.
 
+Definition layout_all (ps : list string) : list (list quad) :=
+  layout_all_tr ps nil.
+
 Fixpoint total_height (qss : list (list quad)) (acc : Z) : Z :=
   match qss with
   | nil => acc

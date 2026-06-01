@@ -878,3 +878,4 @@ inline std::string json_object4(const std::string& k0, const std::string& v0,
 }
 
 #endif  // __EMSCRIPTEN__
+
