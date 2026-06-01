@@ -38,10 +38,6 @@ tests/e2e/.cache/
 
 # Crane-extracted WASM browser runtime, staged into static/ from the wasm image
 # (crane-blog:wasm-merged). Rebuilt by CI / stage-site.sh; never committed.
-static/crane_decrypt.mjs
-static/crane_decrypt.wasm
-static/crane_enroll.mjs
-static/crane_enroll.wasm
 
 # encrypt_post / round-trip scratch (key material + plaintext fixtures).
 keys/
