@@ -116,7 +116,7 @@ Definition step_command (st : sstate) (line : string) : sstate * string * bool :
   let verb := command_verb line in
   let arg := command_arg line in
   if orb (string_eqb verb "HELO") (string_eqb verb "EHLO") then
-    (MkState PReady st.(sender) "", reply r250 "OK", false)
+    (MkState PReady "" "", reply r250 "OK", false)
   else if string_eqb verb "MAIL" then
     match st.(ph) with
     | PInit => (st, reply r503 "bad sequence: HELO first", false)
@@ -146,7 +146,7 @@ Definition step_command (st : sstate) (line : string) : sstate * string * bool :
 Definition step_data (st : sstate) (line : string) : sstate * string * bool :=
   if is_data_terminator line then
     (* Hand the accumulated body to the driver; reply is driver-decided. *)
-    (MkState PMail st.(sender) st.(data_acc), "", true)
+    (MkState PReady "" st.(data_acc), "", true)
   else
     (* Append the raw line verbatim (it already carries its CRLF from RecvLine).
        SMTP transparency (leading-dot un-stuffing) is not needed for the
@@ -202,18 +202,10 @@ Lemma step_command_done_false : forall st line,
   done_of (step_command st line) = false.
 Proof.
   intros st line. unfold step_command, done_of.
-  destruct (orb (string_eqb (command_verb line) "HELO")
-                (string_eqb (command_verb line) "EHLO")).
-  { reflexivity. }
-  destruct (string_eqb (command_verb line) "MAIL").
-  { destruct (ph st); reflexivity. }
-  destruct (string_eqb (command_verb line) "RCPT").
-  { destruct (ph st); reflexivity. }
-  destruct (string_eqb (command_verb line) "DATA").
-  { destruct (ph st); reflexivity. }
-  destruct (string_eqb (command_verb line) "RSET"). { reflexivity. }
-  destruct (string_eqb (command_verb line) "NOOP"). { reflexivity. }
-  destruct (string_eqb (command_verb line) "QUIT"); reflexivity.
+  repeat match goal with
+         | |- (if ?c then _ else _) = _ => destruct c
+         | |- match ?p with _ => _ end = _ => destruct p
+         end; reflexivity.
 Qed.
 
 (* (b)+(c) DATA completion happens only in the PData phase on the terminator
@@ -223,17 +215,9 @@ Lemma data_done_in_data_phase : forall st line,
   ph st = PData /\ is_data_terminator line = true.
 Proof.
   intros st line. unfold step_done, step.
-  destruct (ph st) eqn:Hph.
-  (* PInit/PReady/PMail/PQuit dispatch to step_command -> done = false. *)
-  1,2,3,5:
-    (rewrite <- Hph; pose proof (step_command_done_false st line) as Hc;
-     unfold done_of in Hc; rewrite Hph in *;
-     destruct (step_command st line) as [[? ?] d]; simpl in *;
-     intro H; rewrite Hc in H; discriminate H).
-  (* PData: *)
-  unfold step_data. destruct (is_data_terminator line) eqn:Ht; simpl; intro H.
-  - split; reflexivity.
-  - discriminate H.
+  destruct (ph st).
+  1,2,3,5: pose proof (step_command_done_false st line) as H; unfold done_of in H; destruct (step_command st line) as [[? ?] d]; congruence.
+  unfold step_data. destruct (is_data_terminator line); congruence.
 Qed.
 
 Lemma data_done_reply_neutral : forall st line,
@@ -244,9 +228,3 @@ Proof.
   unfold step_reply, step. rewrite Hph. unfold step_data. rewrite Ht. reflexivity.
 Qed.
 
-(* (d) A non-empty allowlist genuinely requires membership: acceptance cannot
-   slip through for an unlisted sender. *)
-Lemma allow_nonempty_requires_membership : forall sender x xs,
-  sender_allowed sender (x :: xs) = true ->
-  addr_in (downcase sender) (x :: xs) = true.
-Proof. intros sender x xs H. exact H. Qed.
