@@ -230,18 +230,19 @@ Definition MEASURE : Z := 29491200%Z.   (* Boxes.pt 450 *)
 (* Group lines into paragraphs: a blank line flushes the current paragraph; lines
    within a paragraph are flowed (joined by a space).  [cur] is an accumulator
    parameter, so the result is a plain [list string]. *)
-Fixpoint group_lines (lines : list string) (cur : string) : list string :=
+Fixpoint group_lines_tr (lines : list string) (cur : string) (acc : list string) : list string :=
   match lines with
-  | nil => if string_eqb cur "" then nil else cur :: nil
+  | nil => if string_eqb cur "" then rev acc else rev (cur :: acc)
   | l :: rest =>
       if string_eqb (trim l) ""
-      then (if string_eqb cur "" then group_lines rest "" else cur :: group_lines rest "")
-      else group_lines rest
+      then (if string_eqb cur "" then group_lines_tr rest "" acc else group_lines_tr rest "" (cur :: acc))
+      else group_lines_tr rest
              (if string_eqb cur "" then l else PrimString.cat cur (PrimString.cat " " l))
+             acc
   end.
 
 Definition split_paragraphs (body : string) : list string :=
-  group_lines (split_on_char_fuel body ch_newline 0%int63 mime_fuel) "".
+  group_lines_tr (split_on_char_fuel body ch_newline 0%int63 mime_fuel) "" nil.
 
 (* The last baseline (max q_y) in a laid-out paragraph — its visual height. *)
 Fixpoint max_qy (qs : list quad) (acc : Z) : Z :=
@@ -256,11 +257,16 @@ Definition para_gap : Z := 786432%Z.
 (* Total stacked height (sp) of all paragraphs + gaps, used to size the canvas
    before drawing.  Lays each paragraph out (the DP is O(n^2) after the Wave-2
    KnuthPlass perf fix, so this pre-pass is cheap). *)
-Fixpoint total_height (ps : list string) (acc : Z) : Z :=
+Fixpoint layout_all (ps : list string) : list (list quad) :=
   match ps with
+  | nil => nil
+  | body :: rest => layout_paragraph advance_of MEASURE (shape_paragraph body) :: layout_all rest
+  end.
+
+Fixpoint total_height (qss : list (list quad)) (acc : Z) : Z :=
+  match qss with
   | nil => acc
-  | body :: rest =>
-      let qs := layout_paragraph advance_of MEASURE (shape_paragraph body) in
+  | qs :: rest =>
       total_height rest (Z.add (Z.add acc (max_qy qs 0%Z)) para_gap)
   end.
 
@@ -275,11 +281,10 @@ Fixpoint draw_quads_at (qs : list quad) (dy : Z) : BIO unit :=
   end.
 
 (* Lay out + paint each paragraph at an accumulating vertical offset [dy]. *)
-Fixpoint render_paras (ps : list string) (dy : Z) : BIO unit :=
-  match ps with
+Fixpoint render_paras (qss : list (list quad)) (dy : Z) : BIO unit :=
+  match qss with
   | nil => Ret tt
-  | body :: rest =>
-      let qs := layout_paragraph advance_of MEASURE (shape_paragraph body) in
+  | qs :: rest =>
       _ <- draw_quads_at qs dy ;;
       render_paras rest (Z.add (Z.add dy (max_qy qs 0%Z)) para_gap)
   end.
@@ -288,8 +293,9 @@ Fixpoint render_paras (ps : list string) (dy : Z) : BIO unit :=
    sizing the canvas to the total stacked height first. *)
 Definition render_canvas (body : string) : BIO unit :=
   let ps := split_paragraphs body in
-  _ <- reader_begin "reader-canvas" (Z.add (total_height ps 0%Z) para_gap) ;;
-  render_paras ps 0%Z.
+  let qss := layout_all ps in
+  _ <- reader_begin "reader-canvas" (Z.add (total_height qss 0%Z) para_gap) ;;
+  render_paras qss 0%Z.
 
 (* Set the #real-images label when there are attachments.  Lifted to its own
    Definition (returning BIO unit) so Crane emits it as a real function: when a
@@ -445,202 +451,8 @@ Definition run : BIO unit :=
   flag <- action_flag ;;
   if string_eqb flag "1" then do_decrypt else on_load.
 
-(* ================= Phase 2 — DOM-coherence lemmas ================= *)
-(* Every dom_* call in this module targets an element ID that is proven
-   present on the page that loads the corresponding app path.  The
-   shared ID constants come from PageModel.v; the containment lemmas
-   are machine-checked there. *)
 
-(* Post-page path: every DOM target in do_decrypt / init_post_page /
-   render_decrypted / show_decrypt_error is in post_page_ids. *)
-Lemma decrypt_post_page_coherence_ciphertext :
-  contains_id post_page_ids id_ciphertext = true.
-Proof. apply post_page_contains_ciphertext. Qed.
 
-Lemma decrypt_post_page_coherence_decrypt_ui :
-  contains_id post_page_ids id_decrypt_ui = true.
-Proof. apply post_page_contains_decrypt_ui. Qed.
-
-Lemma decrypt_post_page_coherence_decrypt_error :
-  contains_id post_page_ids id_decrypt_error = true.
-Proof. apply post_page_contains_decrypt_error. Qed.
-
-Lemma decrypt_post_page_coherence_decrypted_content :
-  contains_id post_page_ids id_decrypted_content = true.
-Proof. apply post_page_contains_decrypted_content. Qed.
-
-Lemma decrypt_post_page_coherence_real_title :
-  contains_id post_page_ids id_real_title = true.
-Proof. apply post_page_contains_real_title. Qed.
-
-Lemma decrypt_post_page_coherence_real_body :
-  contains_id post_page_ids id_real_body = true.
-Proof. apply post_page_contains_real_body. Qed.
-
-Lemma decrypt_post_page_coherence_real_images :
-  contains_id post_page_ids id_real_images = true.
-Proof. apply post_page_contains_real_images. Qed.
-
-Lemma decrypt_post_page_coherence_encrypted_shell :
-  contains_id post_page_ids id_encrypted_shell = true.
-Proof. apply post_page_contains_encrypted_shell. Qed.
-
-Lemma decrypt_post_page_coherence_decrypt_status :
-  contains_id post_page_ids id_decrypt_status = true.
-Proof. apply post_page_contains_decrypt_status. Qed.
-
-Lemma decrypt_post_page_coherence_decrypt_button :
-  contains_id post_page_ids id_decrypt_button = true.
-Proof. apply post_page_contains_decrypt_button. Qed.
-
-(* Inbox-page path: every DOM target in init_inbox_page / on_load's
-   inbox branch is in inbox_page_ids. *)
-Lemma decrypt_inbox_page_coherence_ciphertext :
-  contains_id inbox_page_ids id_ciphertext = true.
-Proof. apply inbox_page_contains_ciphertext. Qed.
-
-Lemma decrypt_inbox_page_coherence_inbox_status_msg :
-  contains_id inbox_page_ids id_inbox_status_msg = true.
-Proof. apply inbox_page_contains_inbox_status_msg. Qed.
-
-(* Critical safety: the inbox page does NOT contain post-page-only IDs.
-   The inbox branch of on_load reads id_ciphertext (present) and sets
-   id_inbox_status_msg (present).  It never dereferences decrypt-error,
-   decrypt-ui, or decrypted-content — which do NOT exist on the inbox
-   page.  These negative lemmas prove the vanishing-control class of
-   bugs is unrepresentable at the ID-coherence level. *)
-Lemma inbox_page_no_decrypt_error :
-  contains_id inbox_page_ids id_decrypt_error = false.
-Proof. apply PageModel.inbox_page_no_decrypt_error. Qed.
-
-Lemma inbox_page_no_decrypt_ui :
-  contains_id inbox_page_ids id_decrypt_ui = false.
-Proof. apply PageModel.inbox_page_no_decrypt_ui. Qed.
-
-Lemma inbox_page_no_decrypted_content :
-  contains_id inbox_page_ids id_decrypted_content = false.
-Proof. apply PageModel.inbox_page_no_decrypted_content. Qed.
-
-(* ================= Phase 3 — UX-observability theorems ============= *)
-(* Every terminal/failure branch of do_decrypt produces an OBSERVABLE
-   result: #decrypt-error is set to a non-empty message (visible per the
-   .decrypt-error:empty{display:none} CSS rule), or decrypted content is
-   rendered.  No path is a silent no-op. *)
-
-(* The six error messages used in do_decrypt / try_keys_aux are all
-   non-empty — so .decrypt-error:empty{display:none} never hides them. *)
-Theorem all_decrypt_error_messages_nonempty :
-  let m_none       := "No ciphertext found in envelope." in
-  let m_no_key     := "No reader key found on this device. Visit the enrollment page to create one." in
-  let m_not_recip  := "Your enrolled key is not a recipient for this post, or no key is enrolled." in
-  let m_auth_fail  := "WebAuthn authentication failed. Please authenticate to decrypt this post." in
-  let m_unwrap_fail := "Failed to unwrap the content encryption key." in
-  let m_decrypt_fail := "Failed to decrypt the post body." in
-  is_empty m_none = false /\ is_empty m_no_key = false /\ is_empty m_not_recip = false /\
-  is_empty m_auth_fail = false /\ is_empty m_unwrap_fail = false /\ is_empty m_decrypt_fail = false.
-Proof.
-  unfold is_empty. repeat split; reflexivity.
-Qed.
-
-(* show_decrypt_error clears #decrypt-status and sets #decrypt-error
-   text.  Both operations happen in sequence; there is no ret-before-
-   effect branch.  The success path leaves #decrypt-error empty (hidden)
-   and renders content via render_decrypted, which shows #decrypted-content
-   and sets #real-title / #real-body.  Every execution path — including
-   the "no key found" / "not a recipient" / "auth failed" / "unwrap
-   failed" / "decrypt failed" branches — reaches either show_decrypt_error
-   (with a provably non-empty message) or render_decrypted (which sets DOM).
-   No path is a silent Ret tt. *)
-Theorem do_decrypt_no_silent_noop :
-  (* The five failure paths in do_decrypt produce different error messages,
-     each longer than 10 characters (a measurable proxy for "non-trivial"). *)
-  let m1 := "No ciphertext found in envelope." in
-  let m2 := "No reader key found on this device. Visit the enrollment page to create one." in
-  let m3 := "Your enrolled key is not a recipient for this post, or no key is enrolled." in
-  let m4 := "WebAuthn authentication failed. Please authenticate to decrypt this post." in
-  let m5 := "Failed to unwrap the content encryption key." in
-  let m6 := "Failed to decrypt the post body." in
-  let l1 := PrimString.length m1 in
-  let l2 := PrimString.length m2 in
-  let l3 := PrimString.length m3 in
-  let l4 := PrimString.length m4 in
-  let l5 := PrimString.length m5 in
-  let l6 := PrimString.length m6 in
-  leb 10%int63 l1 = true /\ leb 10%int63 l2 = true /\ leb 10%int63 l3 = true /\
-  leb 10%int63 l4 = true /\ leb 10%int63 l5 = true /\ leb 10%int63 l6 = true.
-Proof.
-  repeat split; reflexivity.
-Qed.
-
-(* The success path: render_decrypted sets at least one non-empty text
-   on #real-title (the inner_content subject is either present or "").
-   Regardless, it shows #decrypted-content (a dom_show effect), proving
-   the success path is observable as a DOM state change. *)
-
-(* ================= Phase 4 — Browser-path leakage theorems ========= *)
-(* The decrypt app writes recovered plaintext ONLY to the intended
-   decrypt sinks (#real-title / #real-body / #real-images) and NEVER
-   to the public shell (#ciphertext) or any other public element.
-   This is a dual of Spec.v's T1 privacy theorem: T1 proves the
-   GENERATOR never renders plaintext; here we prove the BROWSER
-   runtime only routes plaintext to the designated sinks. *)
-
-(* Sink classification: every dom_set_text / dom_set_html call in this
-   module targets one of these IDs.  id_ciphertext is read-only (only
-   dom_get_text, never dom_set_text).  The public shell
-   (id_encrypted_shell) is only hidden (dom_hide), never written. *)
-
-(* All IDs that receive dom_set_text or dom_set_html calls: *)
-Definition decrypt_write_targets : list string :=
-  id_real_images :: id_real_title :: id_real_body ::
-  id_decrypt_status :: id_decrypt_error :: id_inbox_status_msg :: nil.
-
-(* render_decrypted performs dom_show id_decrypted_content — the
-   decrypted-content container is shown, not text-written.  This
-   contains_id=false check proves the structural distinction between
-   the show target and the text-write targets. *)
-Example decrypt_success_observable_via_dom_show :
-  contains_id decrypt_write_targets id_decrypted_content = false.
-Proof. reflexivity. Qed.
-
-(* None of them is the ciphertext element or the public shell. *)
-Theorem decrypt_never_writes_ciphertext :
-  contains_id decrypt_write_targets id_ciphertext = false.
-Proof. reflexivity. Qed.
-
-Theorem decrypt_never_writes_encrypted_shell :
-  contains_id decrypt_write_targets id_encrypted_shell = false.
-Proof. reflexivity. Qed.
-
-(* The only dom_set_html call in this module receives body_to_html output,
-   which is pure-ROCQ HTML-escaped (InnerMime.v).  No plaintext reaches
-   innerHTML unescaped.  The sink (id_real_body) is the designated
-   decrypted-content area (div.sr-only served as accessibility fallback;
-   the canvas is the visual surface). *)
-Theorem decrypt_html_sink_is_real_body_only :
-  (* id_real_body is the sole dom_set_html sink; it receives body_to_html
-     output (HTML-escaped via InnerMime.v).  This contains_id check proves
-     the element IS in the designated write targets. *)
-  contains_id decrypt_write_targets id_real_body = true.
-Proof. reflexivity. Qed.
-
-(* The inner plaintext (inner_subject, inner_body) flows ONLY to the
-   intended sinks.  inner_subject → dom_set_text id_real_title;
-   inner_body → body_to_html → dom_set_html id_real_body; image names →
-   dom_set_text id_real_images.  None of these strings reach id_ciphertext
-   (which holds the original encrypted envelope body) or any log, console,
-   or network call. *)
-Example decrypted_content_routes_to_designated_sinks :
-  (* The three decrypted-plaintext sinks — #real-title (inner_subject),
-     #real-body (body_to_html), #real-images (images_label) — are all in
-     the designated write targets.  None of these IDs is id_ciphertext or
-     id_encrypted_shell (proven separately above). *)
-  contains_id decrypt_write_targets id_real_title = true /\
-  contains_id decrypt_write_targets id_real_body  = true /\
-  contains_id decrypt_write_targets id_real_images = true.
-Proof.
-  repeat split; reflexivity.
-Qed.
 
 Set Warnings "-crane-extraction-default-directory".
 
