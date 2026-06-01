@@ -204,26 +204,40 @@ Definition line_shrink  (i j : nat) (p : paragraph) : sp := shrink_upto j p - sh
    three [list sp]-valued scans stay flat PODs.  Each scan emits the running
    accumulator BEFORE consuming the next item, so the list has length
    [length p + 1] and position [k] holds the sum of the first [k] items. *)
-Fixpoint scan_width (acc : sp) (p : paragraph) : list sp :=
-  acc :: match p with
-         | [] => []
-         | it :: rest =>
-             scan_width (acc + match it with
-                               | IBox b => bx_width b | IGlue g => gl_width g
-                               | IPenalty _ => 0 end) rest
-         end.
-Fixpoint scan_stretch (acc : sp) (p : paragraph) : list sp :=
-  acc :: match p with
-         | [] => []
-         | it :: rest =>
-             scan_stretch (acc + match it with IGlue g => gl_stretch g | _ => 0 end) rest
-         end.
-Fixpoint scan_shrink (acc : sp) (p : paragraph) : list sp :=
-  acc :: match p with
-         | [] => []
-         | it :: rest =>
-             scan_shrink (acc + match it with IGlue g => gl_shrink g | _ => 0 end) rest
-         end.
+Fixpoint scan_width_tr (acc : sp) (p : paragraph) (out : list sp) : list sp :=
+  match p with
+  | [] => rev_append out [acc]
+  | it :: rest =>
+      let next_acc := acc + match it with
+                            | IBox b => bx_width b | IGlue g => gl_width g
+                            | IPenalty _ => 0 end in
+      scan_width_tr next_acc rest (acc :: out)
+  end.
+
+Definition scan_width (acc : sp) (p : paragraph) : list sp :=
+  scan_width_tr acc p [].
+
+Fixpoint scan_stretch_tr (acc : sp) (p : paragraph) (out : list sp) : list sp :=
+  match p with
+  | [] => rev_append out [acc]
+  | it :: rest =>
+      let next_acc := acc + match it with IGlue g => gl_stretch g | _ => 0 end in
+      scan_stretch_tr next_acc rest (acc :: out)
+  end.
+
+Definition scan_stretch (acc : sp) (p : paragraph) : list sp :=
+  scan_stretch_tr acc p [].
+
+Fixpoint scan_shrink_tr (acc : sp) (p : paragraph) (out : list sp) : list sp :=
+  match p with
+  | [] => rev_append out [acc]
+  | it :: rest =>
+      let next_acc := acc + match it with IGlue g => gl_shrink g | _ => 0 end in
+      scan_shrink_tr next_acc rest (acc :: out)
+  end.
+
+Definition scan_shrink (acc : sp) (p : paragraph) : list sp :=
+  scan_shrink_tr acc p [].
 
 (* The three tables for a paragraph, bundled (built once in [run_dp]). *)
 Record psums : Set := mkPsums { ps_w : list sp; ps_y : list sp; ps_z : list sp }.
@@ -268,6 +282,14 @@ Qed.
    provably the very integer [width_upto]/[stretch_upto]/[shrink_upto] would
    have recomputed -- so the DP, [seg_demerits], [breaking_demerits], T6 and
    T7 all see precisely the same numbers as before the optimisation. *)
+Lemma scan_width_tr_eq : forall p acc out,
+  scan_width_tr acc p out = rev_append out (scan_width acc p).
+Proof.
+  induction p as [| it p IH]; intros acc out; cbn [scan_width_tr scan_width].
+  - reflexivity.
+  - rewrite IH. reflexivity.
+Qed.
+
 Lemma scan_width_nth :
   forall p k acc, (k <= length p)%nat ->
     nth k (scan_width acc p) 0 = acc + total_width (firstn k p).
@@ -279,6 +301,14 @@ Proof.
   - rewrite IH by (apply le_S_n; exact Hk).
     rewrite total_width_cons. lia.
 Qed.
+Lemma scan_stretch_tr_eq : forall p acc out,
+  scan_stretch_tr acc p out = rev_append out (scan_stretch acc p).
+Proof.
+  induction p as [| it p IH]; intros acc out; cbn [scan_stretch_tr scan_stretch].
+  - reflexivity.
+  - rewrite IH. reflexivity.
+Qed.
+
 Lemma scan_stretch_nth :
   forall p k acc, (k <= length p)%nat ->
     nth k (scan_stretch acc p) 0 = acc + total_stretch (firstn k p).
@@ -290,6 +320,14 @@ Proof.
   - rewrite IH by (apply le_S_n; exact Hk).
     rewrite total_stretch_cons. lia.
 Qed.
+Lemma scan_shrink_tr_eq : forall p acc out,
+  scan_shrink_tr acc p out = rev_append out (scan_shrink acc p).
+Proof.
+  induction p as [| it p IH]; intros acc out; cbn [scan_shrink_tr scan_shrink].
+  - reflexivity.
+  - rewrite IH. reflexivity.
+Qed.
+
 Lemma scan_shrink_nth :
   forall p k acc, (k <= length p)%nat ->
     nth k (scan_shrink acc p) 0 = acc + total_shrink (firstn k p).
