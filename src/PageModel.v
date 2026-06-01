@@ -341,6 +341,7 @@ Definition serialize_inbox_page (p : inbox_page) : string :=
       "<ul class='posts'>" ::
       rows ::
       "</ul>" :: "</main>" ::
+      "<div id='ciphertext' style='display:none'></div>" ::
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
       "<p class='enroll-cta'><a class='enroll-link' href='enroll/'>Enroll a reader key to decrypt posts</a></p>" ::
       "<script type='module'>import D from './static/crane_decrypt.mjs?v=" :: ip_version p :: "';D().then(function(m){m.callMain([]);});</script>" :: nil) in
