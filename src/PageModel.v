@@ -74,21 +74,19 @@ Definition id_enroll_existing_info   := "enroll-existing-info".
 
 (* str_contains: does [haystack] contain [needle] as a substring?
    Defined early because the lemmas below depend on it. *)
-Fixpoint str_contains_aux (hay needle : string) (pos : int) (fuel_rem : nat) : bool :=
+Fixpoint str_contains_aux (hay needle : string) (lh ln pos : int) (fuel_rem : nat) : bool :=
   match fuel_rem with
   | O => false
   | S f' =>
-      let lh := PrimString.length hay in
-      let ln := PrimString.length needle in
       if ltb lh (add pos ln) then false
       else
         let slice := PrimString.sub hay pos ln in
         if string_eqb slice needle then true
-        else str_contains_aux hay needle (add pos 1%int63) f'
+        else str_contains_aux hay needle lh ln (add pos 1%int63) f'
   end.
 
 Definition str_contains (hay needle : string) : bool :=
-  str_contains_aux hay needle 0%int63 page_fuel.
+  str_contains_aux hay needle (PrimString.length hay) (PrimString.length needle) 0%int63 page_fuel.
 
 Definition post_page_ids : list string :=
   id_encrypted_shell :: id_ciphertext :: id_decrypt_ui ::
@@ -121,16 +119,12 @@ Definition prefix_eq (s pref : string) : bool :=
   let ls := PrimString.length s in
   if ltb ls lp then false
   else
-    (* Compare at most 3 characters — specifier prefixes are ./ ../ / *)
-    if andb (eqb (PrimString.get s 0%int63) (PrimString.get pref 0%int63)) true
-    then
-      if leb lp 1%int63 then true
-      else if eqb (PrimString.get s 1%int63) (PrimString.get pref 1%int63)
-      then
-        if leb lp 2%int63 then true
-        else eqb (PrimString.get s 2%int63) (PrimString.get pref 2%int63)
-      else false
-    else false.
+    let c0 := eqb (PrimString.get s 0%int63) (PrimString.get pref 0%int63) in
+    if leb lp 1%int63 then c0
+    else
+      let c1 := eqb (PrimString.get s 1%int63) (PrimString.get pref 1%int63) in
+      if leb lp 2%int63 then andb c0 c1
+      else andb c0 (andb c1 (eqb (PrimString.get s 2%int63) (PrimString.get pref 2%int63))).
 
 (* =================================================================== *)
 (* 3. ES module specifier validity predicate (using fast prefix_eq)    *)
@@ -396,25 +390,22 @@ Definition serialize_enroll_page (p : enroll_page) : string :=
 (* 8b. No element-id collisions: every ID appears at most once in each
        per-page ID list.  Proven computationally by a uniqueness scan. *)
 
-Fixpoint id_list_unique (seen : list string) (ids : list string) : bool :=
+Fixpoint id_list_unique (ids : list string) : bool :=
   match ids with
   | nil => true
   | hd :: tl =>
-      if contains_id seen hd then false
-      else id_list_unique (hd :: seen) tl
+      if contains_id tl hd then false
+      else id_list_unique tl
   end.
 
 Definition ids_unique (ids : list string) : bool :=
-  id_list_unique nil ids.
+  id_list_unique ids.
 
-Theorem post_page_ids_unique : ids_unique post_page_ids = true.
-Proof. reflexivity. Qed.
+Theorem post_page_ids_unique : ids_unique post_page_ids = true := eq_refl.
 
-Theorem inbox_page_ids_unique : ids_unique inbox_page_ids = true.
-Proof. reflexivity. Qed.
+Theorem inbox_page_ids_unique : ids_unique inbox_page_ids = true := eq_refl.
 
-Theorem enroll_page_ids_unique : ids_unique enroll_page_ids = true.
-Proof. reflexivity. Qed.
+Theorem enroll_page_ids_unique : ids_unique enroll_page_ids = true := eq_refl.
 
 (* =================================================================== *)
 (* 9. Computational examples (test fixtures)                           *)
