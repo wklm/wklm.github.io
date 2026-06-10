@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
   (file ../src/crypto_helpers.h)
   encrypt_main.cpp)
  (action (bash "\
-clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+clang++ -std=c++2b -O0 -fbracket-depth=1024 -fno-unroll-loops \
   -I ../src -I ../FormalBlog ../FormalBlog/encrypt_post.cpp encrypt_main.cpp \
   -lssl -lcrypto \
   -o encrypt_post.exe")))
@@ -57,7 +57,7 @@ clang++ -std=c++2b -O2 -fbracket-depth=1024 \
   (file ../src/crypto_helpers.h)
   decrypt_main.cpp)
  (action (bash "\
-clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+clang++ -std=c++2b -O0 -fbracket-depth=1024 -fno-unroll-loops \
   -I ../src -I ../FormalBlog ../FormalBlog/decrypt_post.cpp decrypt_main.cpp \
   -lssl -lcrypto \
   -o decrypt_post.exe")))

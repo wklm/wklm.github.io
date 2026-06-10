@@ -34,7 +34,7 @@ int main() {
  (targets blog_generator.exe)
  (deps Logic.vo main.cpp blog_helpers.h)
  (action (bash "\
-clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+clang++ -std=c++2b -O0 -fbracket-depth=1024 -fno-unroll-loops \
   -I . -I ../FormalBlog ../FormalBlog/blog.cpp main.cpp \
   -lssl -lcrypto \
   -o blog_generator.exe")))
@@ -67,7 +67,7 @@ int main() {
   (file proc_helpers.h)
   smtp_main.cpp)
  (action (bash "\
-clang++ -std=c++2b -O2 -fbracket-depth=1024 \
+clang++ -std=c++2b -O0 -fbracket-depth=1024 -fno-unroll-loops \
   -I . -I ../FormalBlog ../FormalBlog/smtp_listener.cpp smtp_main.cpp \
   -lssl -lcrypto -lpthread \
   -o smtp_server.exe")))

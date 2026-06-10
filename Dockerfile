@@ -144,14 +144,14 @@ RUN printf '#include "crane_decrypt.h"\nint main(){ run(); return 0; }\n' > decr
 # Link both modules.  EXPORTED_FUNCTIONS keeps _malloc/_free (the EM_ASM bodies
 # allocate the length-prefixed return buffers); EXPORTED_RUNTIME_METHODS exposes
 # callMain + UTF8ToString/HEAPU8 used by the shim.
-RUN em++ -std=c++2b -O2 --closure 0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
+RUN em++ -std=c++2b -O0 --closure 0 -fbracket-depth=1024 -fno-unroll-loops -DCRANE_BROWSER_BUILD -I . \
       crane_decrypt.cpp decrypt_main.cpp \
       -lembind -sASYNCIFY "-sASYNCIFY_IMPORTS=[emscripten_asm_const_int,emscripten_asm_const_ptr]" \
       -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
       -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=33554432 -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
       -sEXPORTED_RUNTIME_METHODS=callMain,UTF8ToString,stringToUTF8,HEAPU8,lengthBytesUTF8 \
       -o crane_decrypt.mjs && \
-    em++ -std=c++2b -O2 --closure 0 -fbracket-depth=1024 -DCRANE_BROWSER_BUILD -I . \
+    em++ -std=c++2b -O0 --closure 0 -fbracket-depth=1024 -fno-unroll-loops -DCRANE_BROWSER_BUILD -I . \
       crane_enroll.cpp enroll_main.cpp \
       -lembind -sASYNCIFY "-sASYNCIFY_IMPORTS=[emscripten_asm_const_int,emscripten_asm_const_ptr]" \
       -sMODULARIZE=1 -sEXPORT_ES6=1 -sINVOKE_RUN=0 \
