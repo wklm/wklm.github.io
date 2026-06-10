@@ -89,3 +89,7 @@ Crane Extract Inlined Constant base64_encode =>
   "base64_encode(%a0)" From "browser_helpers.h".
 Crane Extract Inlined Constant base64_decode =>
   "base64_decode(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant ecdsa_p256_sign =>
+  "ecdsa_p256_sign(%a0, %a1)" From "browser_helpers.h".
+Crane Extract Inlined Constant ecdsa_p256_verify =>
+  "ecdsa_p256_verify(%a0, %a1, %a2)" From "browser_helpers.h".

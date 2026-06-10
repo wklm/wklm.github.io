@@ -26,24 +26,29 @@ Open Scope pstring_scope.
 
 (* Concatenate the text/markdown + text/plain part bodies, in order.  (decrypt.ml
    appends each matching part's body to a running [text].) *)
-Fixpoint collect_text (parts : list string) : string :=
+(* AIDEV-NOTE: tail-recursive [acc] (was [cat pb (collect_text rest)] — non-tail,
+   one frame per MIME part; same stack-overflow class as body_to_html_aux). *)
+Fixpoint collect_text (parts : list string) (acc : string) : string :=
   match parts with
-  | [] => ""
+  | [] => acc
   | part :: rest =>
       let part' := trim_part_terminator part in
       let '(ph, pb) := split_headers_body2 part' in
       let phdrs := parse_headers ph in
       let pct := header_lookup "Content-Type" phdrs in
       if orb (starts_with pct "text/markdown") (starts_with pct "text/plain")
-      then cat pb (collect_text rest)
-      else collect_text rest
+      then collect_text rest (cat acc pb)
+      else collect_text rest acc
   end.
 
 (* Collect attachment filenames (application/octet-stream or image subtypes),
    in order.  decrypt.ml falls back to the literal name attachment when none. *)
-Fixpoint collect_image_names (parts : list string) : list string :=
+(* AIDEV-NOTE: tail-recursive [acc] + [rev_append] (was [name :: collect_image_names
+   rest] — non-tail).  rev_append (not List.rev) finalises in tail position so the
+   reverse itself cannot overflow either. *)
+Fixpoint collect_image_names (parts : list string) (acc : list string) : list string :=
   match parts with
-  | [] => []
+  | [] => rev_append acc []
   | part :: rest =>
       let part' := trim_part_terminator part in
       let '(ph, _pb) := split_headers_body2 part' in
@@ -54,8 +59,8 @@ Fixpoint collect_image_names (parts : list string) : list string :=
       then
         let fn := part_filename phdrs in
         let name := if is_empty fn then "attachment" else fn in
-        name :: collect_image_names rest
-      else collect_image_names rest
+        collect_image_names rest (name :: acc)
+      else collect_image_names rest acc
   end.
 
 (* The result of parsing the inner MIME: subject, concatenated text body, and
@@ -79,7 +84,7 @@ Definition extract_inner_text (inner_mime : string) : inner_content :=
     mkInner subject body []
   else
     let parts := split_parts (trim body) boundary in
-    mkInner subject (collect_text parts) (collect_image_names parts).
+    mkInner subject (collect_text parts "") (collect_image_names parts []).
 
 (* ---- Frontmatter stripping (port of strip_frontmatter) ------------- *)
 (* If [s] begins with "---\n" (or "---\r\n"), drop everything through the next
@@ -148,26 +153,41 @@ Definition escape_byte (c : int) : string :=
 (* Walk [s] from [pos], emitting escaped text; "\n\n" -> "</p><p>", a lone "\n"
    -> "<br>".  Top-level Fixpoint (params, single string return) to avoid
    std::any (no nested let fix, no tuple recursion). *)
-Fixpoint body_to_html_aux (s : string) (pos : int) (fuel : nat) : string :=
+(* AIDEV-NOTE: STACK-SAFETY TRAP (the "Maximum call stack size exceeded" crash).
+   [body_to_html] runs on EVERY decrypt (render_decrypted, DecryptApp.v:342 —
+   unconditionally; the max_canvas_body 4000-char guard only gates render_canvas).
+   The previous shape recursed once per body byte with the recursive call as an
+   ARGUMENT to [cat] (non-tail), so em++ -O2 could not TCO it and each byte cost
+   one Asyncify frame — capped only by mime_fuel=65536 — overflowing the 32 MB
+   WASM stack (the __emscripten_memcpy_js at the trace top is [cat]'s per-frame
+   std::string copy; binary-confirmed: func[119] self-recursing at 0x2783a).
+   ROCQ totality proved a normal form EXISTS, not that the native stack is
+   bounded — the fuel that proves termination is exactly the frame count that
+   overflowed.  Fix: tail-recursive [acc] (the call is now the whole RHS -> TCO
+   to a loop -> O(1) stack).  We accumulate with [cat acc piece] (append RIGHT),
+   so output order is preserved WITHOUT a finalising [rev]/[++] — important
+   because Coq's [List.rev]/[app] extract to NON-tail O(n^2) C++ and would just
+   relocate the overflow.  [PrimString.cat] is a primitive (O(1) stack). *)
+Fixpoint body_to_html_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
   let n := PrimString.length s in
   match fuel with
-  | O => ""
+  | O => acc
   | S f' =>
-      if leb n pos then ""
+      if leb n pos then acc
       else
         let c := PrimString.get s pos in
         if int_eqb c ch_newline then
           if andb (ltb (add pos 1%int63) n)
                   (int_eqb (PrimString.get s (add pos 1%int63)) ch_newline)
-          then cat "</p><p>" (body_to_html_aux s (add pos 2%int63) f')
-          else cat "<br>" (body_to_html_aux s (add pos 1%int63) f')
+          then body_to_html_aux s (add pos 2%int63) f' (cat acc "</p><p>")
+          else body_to_html_aux s (add pos 1%int63) f' (cat acc "<br>")
         else
-          cat (escape_byte c) (body_to_html_aux s (add pos 1%int63) f')
+          body_to_html_aux s (add pos 1%int63) f' (cat acc (escape_byte c))
   end.
 
 Definition body_to_html (s : string) : string :=
   let stripped := strip_frontmatter s in
-  cat "<p>" (cat (body_to_html_aux stripped 0%int63 mime_fuel) "</p>").
+  cat "<p>" (cat (body_to_html_aux stripped 0%int63 mime_fuel "") "</p>").
 
 (* ---- Attachment label ("Attachments: a, b, ...") ------------------- *)
 Definition images_label (names : list string) : string :=

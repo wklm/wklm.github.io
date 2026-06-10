@@ -197,6 +197,12 @@ Definition total_shrink  (p : paragraph) : sp :=
 (* Width of the empty paragraph is zero. *)
 Lemma total_width_nil : total_width [] = 0.
 Proof. reflexivity. Qed.
+(* AIDEV-NOTE: stretch/shrink companions (KnuthPlass scan_*_nth base cases need
+   them now that scan_* are reverse-accumulator wrappers — see KnuthPlass.v). *)
+Lemma total_stretch_nil : total_stretch [] = 0.
+Proof. reflexivity. Qed.
+Lemma total_shrink_nil : total_shrink [] = 0.
+Proof. reflexivity. Qed.
 
 (* A general fold accumulator lemma: folding [f] from a start [a] equals
    [a] plus folding from 0.  This is the standard "fold_left is additive"
@@ -224,14 +230,37 @@ Qed.
 
 Lemma total_width_app :
   forall p q, total_width (p ++ q) = total_width p + total_width q.
-Proof. apply fold_left_app_add. Qed.
+Proof.
+  (* AIDEV-NOTE: the bare [apply fold_left_app_add] introduced by 3d98bad does
+     NOT typecheck in Coq 9.0.0 — with the goal's two binders un-intro'd, [apply]
+     mis-aligns the lemma's [f : item -> sp] against the goal's [q : paragraph]
+     ("Unable to unify item -> sp with list item").  Because Boxes is foundational
+     this broke the whole-project build and blocked every rebuild/redeploy since
+     (hence the stale shipped WASM).  Fix: intro the binders and supply [f]
+     explicitly, so the proof is pure conversion (delta+beta), no HO unification. *)
+  intros p q.
+  exact (fold_left_app_add p q
+    (fun it => match it with
+               | IBox b => bx_width b
+               | IGlue g => gl_width g
+               | IPenalty _ => 0
+               end)).
+Qed.
 
 Lemma total_stretch_app :
   forall p q, total_stretch (p ++ q) = total_stretch p + total_stretch q.
-Proof. apply fold_left_app_add. Qed.
+Proof.
+  intros p q.
+  exact (fold_left_app_add p q
+    (fun it => match it with IGlue g => gl_stretch g | _ => 0 end)).
+Qed.
 
 Lemma total_shrink_app :
   forall p q, total_shrink (p ++ q) = total_shrink p + total_shrink q.
-Proof. apply fold_left_app_add. Qed.
+Proof.
+  intros p q.
+  exact (fold_left_app_add p q
+    (fun it => match it with IGlue g => gl_shrink g | _ => 0 end)).
+Qed.
 
 

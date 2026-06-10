@@ -94,6 +94,18 @@ Definition custom_kdf_sha256 (_salt ikm info : string) (_len : int) : string :=
   let prk := sha256 (cat zero32 ikm) in
   sha256 (cat prk (cat info byte01)).
 
+(* ======== ECDSA P-256 Digital Signatures =========================== *)
+
+(* ECDSA P-256 sign: sign a 32-byte message digest with a private key.
+   Returns a 64-byte raw signature (r || s, each 32 bytes zero-padded).
+   Returns "" on error. *)
+Axiom ecdsa_p256_sign : privkey -> string -> string.
+
+(* ECDSA P-256 verify: verify a 64-byte raw signature (r || s) against
+   a 32-byte message digest using a public key.
+   Returns true if valid, false otherwise. *)
+Axiom ecdsa_p256_verify : pubkey -> string -> string -> bool.
+
 (* ======== Base64 Encode/Decode ===================================== *)
 
 Axiom base64_encode : string -> string.
@@ -111,6 +123,7 @@ Axiom base64_decode : string -> string.
 (* Domain-separation info strings to prevent key reuse across contexts. *)
 Definition hpke_encrypt_info : string := "crane-blog-hpke-v1".
 Definition wrap_cek_info   : string := "crane-blog-wrap-v1".
+Definition sign_info       : string := "crane-blog-sign-v1".
 
 (* HPKE base-mode encrypt for a single recipient.
    Returns (encapsulated_ephemeral_pubkey, ciphertext_package).
@@ -212,6 +225,23 @@ Definition decrypt_body (cek : key_material) (enc_package : string) (slug : stri
 Definition key_id (pk : pubkey) : string :=
   sha256 pk.
 
+(* ======== Post Signing / Verification ============================== *)
+
+(* Sign a post's ciphertext package to prove authorship.
+   The signature covers SHA-256(sign_info || ct_package), binding the
+   signature to the specific ciphertext and preventing cross-context reuse.
+   Returns 64-byte raw ECDSA signature (r || s). *)
+Definition sign_post (sk : privkey) (ct_package : string) : string :=
+  let digest := sha256 (cat sign_info ct_package) in
+  ecdsa_p256_sign sk digest.
+
+(* Verify a post's authorship signature.
+   Returns true iff the signature is valid for the given ciphertext package
+   under the given public key. *)
+Definition verify_post (pk : pubkey) (ct_package sig : string) : bool :=
+  let digest := sha256 (cat sign_info ct_package) in
+  ecdsa_p256_verify pk digest sig.
+
 (* ======== Wrapped Key Map ========================================== *)
 
 (* A wrapped key entry in the .eml format: key_id + encapsulated key
@@ -244,6 +274,12 @@ Axiom aes_gcm_roundtrip : forall (k : key_material) (nonce : nonce) (pt aad : st
 (* Base64 round-trip: decode(encode(x)) = x. *)
 Axiom base64_roundtrip : forall (s : string),
   base64_decode (base64_encode s) = s.
+
+(* ECDSA sign/verify round-trip: verify(sign(msg)) = true for correct keypair. *)
+Axiom ecdsa_roundtrip : forall (sk : privkey) (msg : string),
+  let pk := ecdh_p256_public_key sk in
+  let sig := ecdsa_p256_sign sk msg in
+  ecdsa_p256_verify pk msg sig = true.
 
 (* ======== Crane C++ Extraction Directives ========================== *)
 
@@ -282,3 +318,7 @@ Crane Extract Inlined Constant base64_encode =>
   "base64_encode(%a0)" From "crypto_helpers.h".
 Crane Extract Inlined Constant base64_decode =>
   "base64_decode(%a0)" From "crypto_helpers.h".
+Crane Extract Inlined Constant ecdsa_p256_sign =>
+  "ecdsa_p256_sign(%a0, %a1)" From "crypto_helpers.h".
+Crane Extract Inlined Constant ecdsa_p256_verify =>
+  "ecdsa_p256_verify(%a0, %a1, %a2)" From "crypto_helpers.h".

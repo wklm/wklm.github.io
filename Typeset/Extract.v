@@ -41,8 +41,17 @@ Definition break_demo (measure_pt : nat) : nat :=
   let measure : sp := pt (Z.of_nat measure_pt) in
   List.length (break_at measure (shape_paragraph "the quick brown fox")).
 
+(* Pure WASM Canvas entry point: shapes the string, runs the Knuth-Plass layout,
+   and pushes the resulting quad buffer directly to the GPU via FFI. *)
+Definition render_text (s : string) (measure_pt : nat) : unit :=
+  let measure : sp := pt (Z.of_nat measure_pt) in
+  let p := shape_paragraph s in
+  let buf := layout_paragraph advance_of measure p in
+  draw_glyph_quads buf.
+
 (* draw_glyph_quads: realize as a no-op for the compile check (the real
-   WASM build supplies the EM_ASM/Embind GL upload). *)
+   WASM build supplies the EM_ASM GL upload via browser_helpers.h). *)
 Crane Extract Inlined Constant draw_glyph_quads => "((void)%a0, std::monostate{})".
 
-Crane Extraction "typeset_demo" typeset_demo break_demo.
+Set Crane Extraction Output Directory ".".
+Crane Extraction "typeset_demo" typeset_demo break_demo render_text.

@@ -201,11 +201,16 @@ Definition reply_of (t : sstate * string * bool) : string := let '(_, r, _) := t
 Lemma step_command_done_false : forall st line,
   done_of (step_command st line) = false.
 Proof.
+  (* AIDEV-NOTE: the old [match ?p with _ => _ end => destruct p] matched the
+     OUTER [let '(_,_,d) := ...] of done_of and destructed the result triple
+     abstractly, leaving an opaque [b = false].  Case-split only on the dispatch
+     CONDITIONS (verb if's + [ph st]); every leaf triple carries a literal
+     [false], so done_of reduces and reflexivity closes each branch. *)
   intros st line. unfold step_command, done_of.
-  repeat match goal with
-         | |- (if ?c then _ else _) = _ => destruct c
-         | |- match ?p with _ => _ end = _ => destruct p
-         end; reflexivity.
+  repeat (match goal with
+          | |- context[if ?c then _ else _] => destruct c
+          | |- context[match ph st with _ => _ end] => destruct (ph st)
+          end); reflexivity.
 Qed.
 
 (* (b)+(c) DATA completion happens only in the PData phase on the terminator
@@ -217,7 +222,12 @@ Proof.
   intros st line. unfold step_done, step.
   destruct (ph st).
   1,2,3,5: pose proof (step_command_done_false st line) as H; unfold done_of in H; destruct (step_command st line) as [[? ?] d]; congruence.
-  unfold step_data. destruct (is_data_terminator line); congruence.
+  (* AIDEV-NOTE: PData branch — [congruence] cannot prove the conjunction goal in
+     the terminator=true case (no contradiction there, unlike the command phases).
+     Intro the [done = true] hyp, then split/discriminate per terminator value. *)
+  unfold step_data, done_of. destruct (is_data_terminator line); intros Hd.
+  - split; reflexivity.
+  - discriminate Hd.
 Qed.
 
 Lemma data_done_reply_neutral : forall st line,

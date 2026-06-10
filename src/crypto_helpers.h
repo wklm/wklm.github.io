@@ -45,6 +45,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/ec.h>
+#include <openssl/ecdsa.h>
 #include <openssl/bn.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
@@ -280,6 +281,103 @@ aes_256_gcm_decrypt(std::string key, std::string nonce,
     EVP_CIPHER_CTX_free(ctx);
     if (ok != 1) return std::string();  // tag mismatch
     return pt;
+}
+
+// ---- 10. ECDSA P-256 sign -------------------------------------------------
+// sign(sk, digest32) -> 64-byte raw signature (r(32) || s(32)); "" on error.
+inline std::string ecdsa_p256_sign(std::string sk, std::string digest) {
+    using namespace crane_crypto_detail;
+    if (sk.size() != 32 || digest.size() != 32) return std::string();
+    EC_KEY* key = ec_key_from_scalar(sk, false);
+    if (!key) return std::string();
+    unsigned char der_sig[72];
+    unsigned int der_len = 0;
+    if (ECDSA_sign(0, reinterpret_cast<const unsigned char*>(digest.data()), 32,
+                   der_sig, &der_len, key) != 1) {
+        EC_KEY_free(key);
+        return std::string();
+    }
+    EC_KEY_free(key);
+    // Parse DER: 0x30 <len> 0x02 <r_len> <r_bytes> 0x02 <s_len> <s_bytes>
+    if (der_len < 8 || der_sig[0] != 0x30) return std::string();
+    unsigned int pos = 2;
+    if (der_sig[pos] != 0x02) return std::string();
+    pos++;
+    unsigned int r_len = der_sig[pos++];
+    if (pos + r_len >= der_len) return std::string();
+    const unsigned char* r_bytes = der_sig + pos;
+    pos += r_len;
+    if (der_sig[pos] != 0x02) return std::string();
+    pos++;
+    unsigned int s_len = der_sig[pos++];
+    if (pos + s_len > der_len) return std::string();
+    const unsigned char* s_bytes = der_sig + pos;
+    // Zero-pad r and s to 32 bytes each
+    std::string result(64, '\0');
+    // r: strip leading zeros if > 32, pad if < 32
+    if (r_len > 32) {
+        r_bytes += (r_len - 32);
+        r_len = 32;
+    }
+    std::memcpy(&result[32 - r_len], r_bytes, r_len);
+    // s: strip leading zeros if > 32, pad if < 32
+    if (s_len > 32) {
+        s_bytes += (s_len - 32);
+        s_len = 32;
+    }
+    std::memcpy(&result[64 - s_len], s_bytes, s_len);
+    return result;
+}
+
+// ---- 11. ECDSA P-256 verify -----------------------------------------------
+// verify(pk, digest32, sig64) -> true if valid, false otherwise.
+inline bool ecdsa_p256_verify(std::string pk, std::string digest, std::string sig) {
+    using namespace crane_crypto_detail;
+    if (pk.size() != 65 || digest.size() != 32 || sig.size() != 64) return false;
+    EC_KEY* key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    if (!key) return false;
+    const EC_GROUP* group = EC_KEY_get0_group(key);
+    EC_POINT* pub = ec_point_from_uncompressed(group, pk);
+    if (!pub || EC_KEY_set_public_key(key, pub) != 1) {
+        if (pub) EC_POINT_free(pub);
+        EC_KEY_free(key);
+        return false;
+    }
+    EC_POINT_free(pub);
+    // Build DER encoding from raw r(32) || s(32)
+    const unsigned char* r_bytes = reinterpret_cast<const unsigned char*>(sig.data());
+    const unsigned char* s_bytes = reinterpret_cast<const unsigned char*>(sig.data() + 32);
+    // Strip leading zeros from r
+    unsigned int r_len = 32;
+    while (r_len > 0 && r_bytes[0] == 0) { r_bytes++; r_len--; }
+    if (r_len == 0) { EC_KEY_free(key); return false; }
+    // Add leading zero if high bit set (to keep positive)
+    bool r_pad = (r_bytes[0] & 0x80) != 0;
+    // Strip leading zeros from s
+    unsigned int s_len = 32;
+    while (s_len > 0 && s_bytes[0] == 0) { s_bytes++; s_len--; }
+    if (s_len == 0) { EC_KEY_free(key); return false; }
+    bool s_pad = (s_bytes[0] & 0x80) != 0;
+    // Build DER
+    unsigned int total_len = 2 + (r_len + (r_pad ? 1 : 0)) + 2 + (s_len + (s_pad ? 1 : 0));
+    unsigned char der_sig[72];
+    unsigned int pos = 0;
+    der_sig[pos++] = 0x30;
+    der_sig[pos++] = total_len;
+    der_sig[pos++] = 0x02;
+    der_sig[pos++] = r_len + (r_pad ? 1 : 0);
+    if (r_pad) der_sig[pos++] = 0x00;
+    std::memcpy(der_sig + pos, r_bytes, r_len);
+    pos += r_len;
+    der_sig[pos++] = 0x02;
+    der_sig[pos++] = s_len + (s_pad ? 1 : 0);
+    if (s_pad) der_sig[pos++] = 0x00;
+    std::memcpy(der_sig + pos, s_bytes, s_len);
+    pos += s_len;
+    int result = ECDSA_verify(0, reinterpret_cast<const unsigned char*>(digest.data()), 32,
+                              der_sig, pos, key);
+    EC_KEY_free(key);
+    return result == 1;
 }
 
 // ---- 8/9. Base64 ----------------------------------------------------------

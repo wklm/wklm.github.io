@@ -7,12 +7,12 @@ the site is trying to be, how it should read, and how it should look.
 ## Premise
 
 `wklm.online` is a personal publication of technical essays
-distributed as PGP-encrypted email. The public site is a classic,
-restrained blog shell, but every post is still only a PGP/MIME
+distributed as HPKE-encrypted MIME envelopes. The public site is a classic,
+restrained blog shell, but every post is still only an HPKE/MIME
 ciphertext: a list of `Subject: ...` entries on the homepage and, on
-each post page, a `-----BEGIN PGP MESSAGE-----` block. The reader is
+each post page, a ciphertext block. The reader is
 not given a rendered essay. The reader is given ciphertext, and — if
-they hold one of the listed recipient keys — the means to decrypt it.
+they have enrolled an authorized keypair — the means to decrypt it.
 
 The point of this is not novelty. It is the editorial stance: the
 site does not solicit a passing audience. To read a piece you must
@@ -103,44 +103,45 @@ What currently holds:
   C++23 source.
 - That C++ source compiles under clang++ and runs, producing the
   `_site/` tree.
-- `scripts/test-roundtrip.sh` confirms end-to-end that the OCaml
+- `scripts/test-roundtrip.sh` confirms end-to-end that the native
   encrypt/decrypt tools round-trip a Markdown post and a binary
-  attachment byte-for-byte through `gpg`, that the resulting armored
-  body contains a PKESK packet, and that the public output contains the
-  armor and never an `<img>`, real subject line, or outer sender/date
+  attachment byte-for-byte, that the resulting encrypted
+  body is a valid HPKE envelope, and that the public output contains the
+  ciphertext and never an `<img>`, real subject line, or outer sender/date
   metadata.
 
 What is *not* verified today:
 
-- There are no theorems in the repository.
-- The OpenPGP encryption itself is **not** formally verified. It
-  is delegated to GnuPG, which is the same trust boundary any PGP
-  email client operates under. No verified end-to-end OpenPGP
-  implementation exists today in any language; building one on
-  top of verified primitives (e.g. HACL\*) would require
-  re-implementing RFC 4880 framing, which would defeat the goal
-  of replicating PGP-email behaviour bit-for-bit.
-- The OCaml glue in `tools/` — frontmatter parsing, MIME framing,
+- The theorems in the repository (privacy, HTML escaping, parse_eml
+  structure) verify the *public rendering* — that the public page
+  contains only the ciphertext body and fixed template strings. They
+  do not verify the *cryptography*.
+- **The encryption itself is not formally verified.** The HPKE protocol
+  composition is pure Rocq in `CryptoSpec.v`, but the underlying primitives
+  (ECDH P-256, AES-256-GCM, SHA-256, base64, CSPRNG) are stated as axioms
+  and cross an FFI boundary. The round-trip/AEAD properties are *stated as
+  axioms* in `CryptoSpec.v`. No verified ECDH/AES-GCM implementation exists
+  in Rocq/Coq today. Every trusted boundary is enumerated in `TRUSTED.md`.
+- The extracted C++ glue — frontmatter parsing, MIME framing,
   subprocess plumbing — is type-checked code, not proved code.
 
 Compile-time success is evidence that the system is type-consistent
 and terminating. Round-trip success is evidence that the framing
-matches what `gpg` expects. Neither is a correctness claim about
+matches what is expected. Neither is a correctness claim about
 the cryptography.
 
 ## Roadmap
 
 Verification work I consider worth doing, in rough order:
 
-1. A narrowly-scoped theorem about `render_eml_page`: parsed header
-   values are not rendered, the public subject is the literal
-   placeholder, and the body crosses into HTML only through
-   `html_escape`.
-2. A proof that `parse_eml` and the unparser used by the OCaml
+1. ~~A narrowly-scoped theorem about `render_eml_page`~~ — done. The
+   `privacy` theorem in `src/Spec.v` proves that `render_eml_page` only
+   reads `ep_body` and the public subject is the literal placeholder.
+2. A proof that `parse_eml` and the unparser used by the native
    tool agree on the boundary (headers / blank line / body) for
    the subset of messages we generate.
-3. A formalisation of the RFC 3156 envelope structure, against
-   which the OCaml emitter can be checked by extraction and round
+3. A formalisation of the HPKE envelope structure, against
+   which the C++ emitter can be checked by extraction and round
    trip.
 
 Content and tooling work:

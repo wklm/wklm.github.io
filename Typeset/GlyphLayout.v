@@ -208,7 +208,7 @@ Qed.
 Lemma rev_append_In {A} (l1 l2 : list A) (x : A) :
   In x (rev_append l1 l2) <-> In x l1 \/ In x l2.
 Proof.
-  rewrite rev_append_rev, in_app_iff, in_rev. reflexivity.
+  rewrite rev_append_rev, in_app_iff, <- in_rev. reflexivity.
 Qed.
 
 (* Laying out the empty paragraph yields the empty buffer. *)
@@ -240,9 +240,16 @@ Lemma place_glyphs_tr_baseline :
   forall adv gs x by_ out q,
     In q (place_glyphs_tr adv gs x by_ out) -> q_y q = by_ \/ In q out.
 Proof.
+  (* AIDEV-NOTE: place_glyphs_tr conses [mkQuad x by_ g] (q_y = by_); [intuition]
+     could not discharge the [q = mkQuad x by_ g] membership case (it needs to
+     compute q_y of the new quad).  Explicit split + reflexivity. *)
   induction gs as [| g gs IH]; intros x by_ out q Hin; simpl in Hin.
-  - intuition.
-  - apply IH in Hin. intuition.
+  - right; exact Hin.
+  - apply IH in Hin. destruct Hin as [Hy | Hin].
+    + left; exact Hy.
+    + simpl in Hin. destruct Hin as [Heq | Hin].
+      * left; subst q; reflexivity.
+      * right; exact Hin.
 Qed.
 
 (* Each quad a line produces sits on that line's baseline.  We state the
@@ -252,7 +259,8 @@ Lemma place_glyphs_baseline :
     In q (place_glyphs adv gs x by_) -> q_y q = by_.
 Proof.
   unfold place_glyphs. intros * Hin.
-  apply place_glyphs_tr_baseline in Hin. intuition.
+  apply place_glyphs_tr_baseline in Hin. simpl in Hin.
+  destruct Hin as [Hy | Hf]; [ exact Hy | destruct Hf ].
 Qed.
 
 (* ===================================================================== *)
@@ -262,10 +270,10 @@ Qed.
 (* The single GPU draw call.  This is the ONLY FFI in the whole typesetter
    (plan sec 2.3): a logic-free upload+draw of the integer quad buffer
    against the MSDF atlas.  We DECLARE it as an axiom with the intended
-   C++/WASM signature so the seam is explicit; the From-less EM_ASM /
-   Embind realization (built -O0 per the gotchas) is added during the WASM
-   integration step, NOT here.  Kept as a no-op-returning axiom so this
-   pure theory neither depends on nor pulls in any FFI header. *)
+   C++/WASM signature so the seam is explicit; the EM_ASM realization via
+   browser_helpers.h is added during the WASM integration step.
+   Kept as a no-op-returning axiom so this pure theory neither depends on
+   nor pulls in any FFI header. *)
 Axiom draw_glyph_quads : quad_buffer -> unit.
 
 (* AIDEV-NOTE: draw_glyph_quads is the C13 boundary.  In the WASM build it

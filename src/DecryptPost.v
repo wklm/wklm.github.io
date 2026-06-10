@@ -116,27 +116,18 @@ Fixpoint find_ct_b64 (parts : list string) : string :=
       else find_ct_b64 rest
   end.
 
-(* ---- CEK unwrap with AAD fallback ---------------------------------- *)
-(* unwrap_cek uses AAD = kid; on "" (tag mismatch) retry with AAD = "".
-   Mirrors decrypt_post.ml's backward-compat fallback. *)
-Definition unwrap_fallback (sk ek wrapped kid : string) : string :=
-  let r := unwrap_cek sk ek wrapped kid in
-  if is_empty r then unwrap_cek sk ek wrapped "" else r.
-
+(* ---- CEK unwrap (no fallback — AAD = kid only) --------------------- *)
 (* Try each wrap triple; return the first non-empty CEK ("" if none). *)
 Fixpoint try_unwrap (sk : string) (triples : list (string * string * string))
   : string :=
   match triples with
   | nil => ""
   | (kid, ek, wrapped) :: rest =>
-      let cek := unwrap_fallback sk ek wrapped kid in
+      let cek := unwrap_cek sk ek wrapped kid in
       if is_empty cek then try_unwrap sk rest else cek
   end.
 
-(* ---- body decrypt with AAD fallback -------------------------------- *)
-Definition decrypt_body_fallback (cek ct_package slug : string) : string :=
-  let r := decrypt_body cek ct_package slug in
-  if is_empty r then decrypt_body cek ct_package "" else r.
+(* ---- body decrypt (no fallback — AAD = slug only) ------------------ *)
 
 (* ---- writing the recovered attachments ----------------------------- *)
 (* Each attachment is (filename, raw-base64-body); decode (after stripping
@@ -151,7 +142,7 @@ Fixpoint write_attachments (atts : list (string * string)) : IO unit :=
 
 (* ---- the decrypt pipeline ------------------------------------------ *)
 
-Definition decrypt_one (eml_path sk : string) : IO unit :=
+Definition decrypt_one (eml_path sk trusted_sign_pk : string) : IO unit :=
   eml <- read eml_path ;;
   let '(hdrs_block, body) := split_headers_body2 eml in
   let hdrs := parse_headers hdrs_block in
@@ -161,31 +152,42 @@ Definition decrypt_one (eml_path sk : string) : IO unit :=
   let triples := parse_wraps (find_wraps parts) in
   let ct_b64 := find_ct_b64 parts in
   let ct_package := base64_decode (strip_ws ct_b64) in
-  let slug := slug_of_eml eml_path in
-  let cek := try_unwrap sk triples in
-  if is_empty cek then
-    _ <- eprint (concat_all
-      ("decrypt_post: none of the wrapped keys could be unwrapped" :: lf :: nil)) ;;
+  (* Signature verification *)
+  let sig_hex := header_lookup "Signature" hdrs in
+  let sig := hex_decode (trim sig_hex) in
+  let env_sign_key_hex := header_lookup "Signing-Key" hdrs in
+  let env_sign_pk := hex_decode (trim env_sign_key_hex) in
+  if is_empty sig then
+    _ <- eprint (concat_all ("decrypt_post: missing Signature header" :: lf :: nil)) ;;
+    exit_with 1%int63
+  else if negb (string_eqb (trim env_sign_key_hex) (hex_encode trusted_sign_pk)) then
+    _ <- eprint (concat_all ("decrypt_post: Signing-Key mismatch with trusted key" :: lf :: nil)) ;;
+    exit_with 1%int63
+  else if negb (verify_post trusted_sign_pk ct_package sig) then
+    _ <- eprint (concat_all ("decrypt_post: author signature verification failed" :: lf :: nil)) ;;
     exit_with 1%int63
   else
-    let inner_mime := decrypt_body_fallback cek ct_package slug in
-    if is_empty inner_mime then
-      _ <- eprint (concat_all ("decrypt_post: body decryption failed" :: lf :: nil)) ;;
+    let slug := slug_of_eml eml_path in
+    let cek := try_unwrap sk triples in
+    if is_empty cek then
+      _ <- eprint (concat_all
+        ("decrypt_post: none of the wrapped keys could be unwrapped" :: lf :: nil)) ;;
       exit_with 1%int63
     else
-      let inner_parts := split_parts inner_mime inner_boundary in
-      let md_part := inner_md inner_parts in
-      (* If the body is an inner multipart/mixed, use its text/markdown part;
-         otherwise the body IS the raw markdown (e.g. the AAD-fallback fixture,
-         whose ciphertext is plain text, not a MIME envelope) — write it
-         directly with one trailing newline. *)
-      let md := if is_empty md_part then normalize_md inner_mime else md_part in
-      let atts := inner_attachments inner_parts in
-      _ <- create_directory "posts" ;;
-      _ <- write_file (cat "posts/" (cat slug ".md")) md ;;
-      _ <- write_attachments atts ;;
-      print_endline (concat_all
-        ("Decrypted " :: eml_path :: " -> posts/" :: slug :: ".md" :: nil)).
+      let inner_mime := decrypt_body cek ct_package slug in
+      if is_empty inner_mime then
+        _ <- eprint (concat_all ("decrypt_post: body decryption failed" :: lf :: nil)) ;;
+        exit_with 1%int63
+      else
+        let inner_parts := split_parts inner_mime inner_boundary in
+        let md_part := inner_md inner_parts in
+        let md := if is_empty md_part then normalize_md inner_mime else md_part in
+        let atts := inner_attachments inner_parts in
+        _ <- create_directory "posts" ;;
+        _ <- write_file (cat "posts/" (cat slug ".md")) md ;;
+        _ <- write_attachments atts ;;
+        print_endline (concat_all
+          ("Decrypted " :: eml_path :: " -> posts/" :: slug :: ".md" :: nil)).
 
 (* ---- entry point --------------------------------------------------- *)
 
@@ -203,8 +205,14 @@ Definition run : IO unit :=
     then
       _ <- eprint (concat_all ("CRANE_BLOG_PRIVATE_KEY not set" :: lf :: nil)) ;;
       exit_with 1%int63
-    else decrypt_one path sk.
+    else
+      sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
+      let sign_kid := trim sign_kid0 in
+      sign_pub_hex <- read (cat "keys/" (cat sign_kid ".sign.pub")) ;;
+      let trusted_sign_pk := hex_decode (trim sign_pub_hex) in
+      decrypt_one path sk trusted_sign_pk.
 
 Set Warnings "-crane-extraction-default-directory".
 
+Set Crane Extraction Output Directory ".".
 Crane Extraction "decrypt_post" run.

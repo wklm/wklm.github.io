@@ -100,20 +100,22 @@ Definition fixed_date : string := "Thu, 01 Jan 1970 00:00:00 +0000".
    evaluates [random_bytes 32] exactly once (a nullary Definition would be
    inlined and re-evaluated, splitting body-CEK from wrap-CEK). *)
 Definition build_envelope
-  (cek pub_raw kid slug inner_mime : string) : string :=
+  (cek pub_raw kid slug inner_mime sign_sk sign_pub_hex : string) : string :=
   let ct_package := encrypt_body cek inner_mime slug in
   let '(ek, wrapped) := wrap_cek cek pub_raw kid in
+  let sig := sign_post sign_sk ct_package in
   build_outer_envelope
     (kid :: nil)
     ((kid, hex_encode ek, hex_encode wrapped) :: nil)
-    (wrap_base64 (base64_encode ct_package)).
+    (wrap_base64 (base64_encode ct_package))
+    (hex_encode sig) sign_pub_hex.
 
 (* Build the encrypted .eml from the post markdown + author identity.  Mirrors
    EncryptPost.encrypt_one's body assembly, but the markdown is in memory (no
    posts/<slug>.md read) and there are no image attachments (SMTP bodies are
    plain text — listener.py's _plain_body strips attachments). *)
 Definition build_eml
-  (cek pub_raw kid author slug title md_body : string) : string :=
+  (cek pub_raw kid author slug title md_body sign_sk sign_pub_hex : string) : string :=
   let recipients_str := cat "reader:" kid in
   let protected_headers :=
     ("From", author) ::
@@ -121,7 +123,7 @@ Definition build_eml
     ("Date", fixed_date) ::
     ("Subject", title) :: nil in
   let inner_mime := build_inner_mime protected_headers "post.md" md_body nil in
-  build_envelope cek pub_raw kid slug inner_mime.
+  build_envelope cek pub_raw kid slug inner_mime sign_sk sign_pub_hex.
 
 (* ===================================================================== *)
 (*  git via procE  (R4-guarded)                                          *)
@@ -227,19 +229,23 @@ Definition publish (sender : string) (allow : list string) (msg : string)
       let author := trim author0 in
       env_pk0 <- getenv "BLOG_PUBLIC_KEYS" ;;
       let env_pk := trim env_pk0 in
+      sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
+      let sign_kid := trim sign_kid0 in
+      sign_sk_hex <- getenv "CRANE_BLOG_SIGNING_KEY" ;;
+      let sign_sk := hex_decode (trim sign_sk_hex) in
+      sign_pub_hex <- read (cat "keys/" (cat sign_kid ".sign.pub")) ;;
+      let sign_pub_hex := trim sign_pub_hex in
       (* public-keys: prefer the email header, then the env default. *)
       let public_keys := if is_empty ing.(in_public_keys) then env_pk else ing.(in_public_keys) in
-      (* The slug ts fallback is derived from the subject; if the subject has no
-         slug-worthy chars we fall back to a fixed timestamp-shaped string.  We
-         do not have a clock effect, so the fallback is "post" (the only case
-         the acceptance test exercises uses a real subject). *)
-      let slug := slug_from_subject ing.(in_subject) "post" in
+      (* The slug is derived from the body content via SHA-256 hash, producing
+         an opaque identifier that does not leak the post subject. *)
+      let slug := slug_from_content ing.(in_body) in
       let title := ing.(in_subject) in
       let md := build_md author ing.(in_subject) ing.(in_body)
                          fixed_date public_keys kid slug in
       (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
          the pre-commit hook wrote posts/<slug>.md. *)
-      let eml := build_eml (random_bytes 32%int63) pub_raw kid author slug title md in
+      let eml := build_eml (random_bytes 32%int63) pub_raw kid author slug title md sign_sk sign_pub_hex in
       let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
       _ <- create_directory "posts-encrypted" ;;
       _ <- write_file eml_rel eml ;;
@@ -339,4 +345,5 @@ Definition run : IO unit :=
 
 Set Warnings "-crane-extraction-default-directory".
 
+Set Crane Extraction Output Directory ".".
 Crane Extraction "smtp_listener" run.

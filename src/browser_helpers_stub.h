@@ -39,6 +39,8 @@ inline std::string aes_256_gcm_decrypt(
         const std::string&, const std::string&) { return std::string(); }
 inline std::string base64_encode(const std::string&) { return std::string(); }
 inline std::string base64_decode(const std::string&) { return std::string(); }
+inline std::string ecdsa_p256_sign(const std::string&, const std::string&) { return std::string(64, '\0'); }
+inline bool ecdsa_p256_verify(const std::string&, const std::string&, const std::string&) { return false; }
 
 // ---- DOM ----
 inline std::string   dom_get_text(const std::string&) { return std::string(); }

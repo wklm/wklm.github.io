@@ -285,59 +285,110 @@ Qed.
 Lemma scan_width_tr_eq : forall p acc out,
   scan_width_tr acc p out = rev_append out (scan_width acc p).
 Proof.
-  induction p as [| it p IH]; intros acc out; cbn [scan_width_tr scan_width].
+  (* AIDEV-NOTE: scan_width acc p := scan_width_tr acc p [] (5cab40f tail-rec
+     refactor), so the cons case has scan_width_tr at out=(acc::out) on the LHS
+     AND at out=[acc] on the RHS.  A single [rewrite IH] left the RHS occurrence
+     un-rewritten and [reflexivity] failed — breaking the whole-project build.
+     Rewrite IH at BOTH occurrences; rev_append's cons step closes the rest. *)
+  induction p as [| it p IH]; intros acc out.
   - reflexivity.
-  - rewrite IH. reflexivity.
+  - cbn [scan_width_tr scan_width].
+    rewrite (IH _ (acc :: out)), (IH _ [acc]).
+    reflexivity.
+Qed.
+
+(* AIDEV-NOTE: 5cab40f made scan_width a reverse-accumulator wrapper
+   (scan_width acc p := scan_width_tr acc p []), so it no longer reduces to
+   [acc :: scan_width (acc+w) p] definitionally and the old cbn-based nth proof
+   broke (whole-project build failure).  This cons law re-establishes that step
+   via scan_width_tr_eq; the nth proof then proceeds structurally. *)
+Lemma scan_width_cons : forall it p acc,
+  scan_width acc (it :: p)
+  = acc :: scan_width (acc + match it with
+                            | IBox b => bx_width b | IGlue g => gl_width g
+                            | IPenalty _ => 0 end) p.
+Proof.
+  intros it p acc.
+  change (scan_width acc (it :: p)) with (scan_width_tr acc (it :: p) []).
+  cbn [scan_width_tr]. now rewrite (scan_width_tr_eq p _ [acc]).
 Qed.
 
 Lemma scan_width_nth :
   forall p k acc, (k <= length p)%nat ->
     nth k (scan_width acc p) 0 = acc + total_width (firstn k p).
 Proof.
-  induction p as [| it p IH]; intros [|k] acc Hk; cbn [scan_width firstn nth length] in *.
-  - now rewrite total_width_nil, Z.add_0_r.
-  - exfalso; inversion Hk.
-  - now rewrite total_width_nil, Z.add_0_r.
-  - rewrite IH by (apply le_S_n; exact Hk).
-    rewrite total_width_cons. lia.
+  induction p as [| it p IH]; intros [|k] acc Hk.
+  - change (scan_width acc []) with (@cons sp acc nil); cbn [nth firstn].
+    rewrite total_width_nil, Z.add_0_r. reflexivity.
+  - cbn [length] in Hk; lia.
+  - rewrite scan_width_cons; cbn [nth firstn].
+    rewrite total_width_nil, Z.add_0_r. reflexivity.
+  - rewrite scan_width_cons; cbn [nth firstn length] in *.
+    rewrite IH by lia. rewrite total_width_cons. lia.
 Qed.
 Lemma scan_stretch_tr_eq : forall p acc out,
   scan_stretch_tr acc p out = rev_append out (scan_stretch acc p).
 Proof.
-  induction p as [| it p IH]; intros acc out; cbn [scan_stretch_tr scan_stretch].
+  induction p as [| it p IH]; intros acc out.
   - reflexivity.
-  - rewrite IH. reflexivity.
+  - cbn [scan_stretch_tr scan_stretch].
+    rewrite (IH _ (acc :: out)), (IH _ [acc]).
+    reflexivity.
+Qed.
+
+Lemma scan_stretch_cons : forall it p acc,
+  scan_stretch acc (it :: p)
+  = acc :: scan_stretch (acc + match it with IGlue g => gl_stretch g | _ => 0 end) p.
+Proof.
+  intros it p acc.
+  change (scan_stretch acc (it :: p)) with (scan_stretch_tr acc (it :: p) []).
+  cbn [scan_stretch_tr]. now rewrite (scan_stretch_tr_eq p _ [acc]).
 Qed.
 
 Lemma scan_stretch_nth :
   forall p k acc, (k <= length p)%nat ->
     nth k (scan_stretch acc p) 0 = acc + total_stretch (firstn k p).
 Proof.
-  induction p as [| it p IH]; intros [|k] acc Hk; cbn [scan_stretch firstn nth length] in *.
-  - now rewrite Z.add_0_r.
-  - exfalso; inversion Hk.
-  - now rewrite Z.add_0_r.
-  - rewrite IH by (apply le_S_n; exact Hk).
-    rewrite total_stretch_cons. lia.
+  induction p as [| it p IH]; intros [|k] acc Hk.
+  - change (scan_stretch acc []) with (@cons sp acc nil); cbn [nth firstn].
+    rewrite total_stretch_nil, Z.add_0_r. reflexivity.
+  - cbn [length] in Hk; lia.
+  - rewrite scan_stretch_cons; cbn [nth firstn].
+    rewrite total_stretch_nil, Z.add_0_r. reflexivity.
+  - rewrite scan_stretch_cons; cbn [nth firstn length] in *.
+    rewrite IH by lia. rewrite total_stretch_cons. lia.
 Qed.
 Lemma scan_shrink_tr_eq : forall p acc out,
   scan_shrink_tr acc p out = rev_append out (scan_shrink acc p).
 Proof.
-  induction p as [| it p IH]; intros acc out; cbn [scan_shrink_tr scan_shrink].
+  induction p as [| it p IH]; intros acc out.
   - reflexivity.
-  - rewrite IH. reflexivity.
+  - cbn [scan_shrink_tr scan_shrink].
+    rewrite (IH _ (acc :: out)), (IH _ [acc]).
+    reflexivity.
+Qed.
+
+Lemma scan_shrink_cons : forall it p acc,
+  scan_shrink acc (it :: p)
+  = acc :: scan_shrink (acc + match it with IGlue g => gl_shrink g | _ => 0 end) p.
+Proof.
+  intros it p acc.
+  change (scan_shrink acc (it :: p)) with (scan_shrink_tr acc (it :: p) []).
+  cbn [scan_shrink_tr]. now rewrite (scan_shrink_tr_eq p _ [acc]).
 Qed.
 
 Lemma scan_shrink_nth :
   forall p k acc, (k <= length p)%nat ->
     nth k (scan_shrink acc p) 0 = acc + total_shrink (firstn k p).
 Proof.
-  induction p as [| it p IH]; intros [|k] acc Hk; cbn [scan_shrink firstn nth length] in *.
-  - now rewrite Z.add_0_r.
-  - exfalso; inversion Hk.
-  - now rewrite Z.add_0_r.
-  - rewrite IH by (apply le_S_n; exact Hk).
-    rewrite total_shrink_cons. lia.
+  induction p as [| it p IH]; intros [|k] acc Hk.
+  - change (scan_shrink acc []) with (@cons sp acc nil); cbn [nth firstn].
+    rewrite total_shrink_nil, Z.add_0_r. reflexivity.
+  - cbn [length] in Hk; lia.
+  - rewrite scan_shrink_cons; cbn [nth firstn].
+    rewrite total_shrink_nil, Z.add_0_r. reflexivity.
+  - rewrite scan_shrink_cons; cbn [nth firstn length] in *.
+    rewrite IH by lia. rewrite total_shrink_cons. lia.
 Qed.
 
 Lemma pw_at_correct : forall p k, (k <= length p)%nat -> pw_at (build_psums p) k = width_upto k p.
@@ -830,7 +881,7 @@ Proof.
       (forall a0 n0, In a0 l -> try_extend sp_ p a0 j wj yj zj forcedj penj flj = Some n0 ->
          nd_demerits res <= nd_demerits n0)
       /\ (forall m0, acc = Some m0 -> nd_demerits res <= nd_demerits m0)).
-  { induction l as [| x l IH]; intros acc Hpre res Hfold; simpl in Hfold.
+  { induction l as [| x l IH]; intros acc res Hfold; simpl in Hfold.
     - split.
       + intros a0 n0 [] _.
       + intros m0 Hacc. rewrite Hacc in Hfold. inversion Hfold; subst.

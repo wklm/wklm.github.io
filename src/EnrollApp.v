@@ -132,4 +132,5 @@ Definition run : BIO unit :=
 
 Set Warnings "-crane-extraction-default-directory".
 
+Set Crane Extraction Output Directory ".".
 Crane Extraction "crane_enroll" run.

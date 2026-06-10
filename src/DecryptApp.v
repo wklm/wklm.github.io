@@ -104,11 +104,13 @@ Fixpoint find_ct_b64 (parts : list string) : string :=
       else find_ct_b64 rest
   end.
 
-(* The parsed envelope: the Wraps triples (kid, ek_bytes, wrapped_bytes) and the
-   raw ciphertext package (nonce||ct||tag). *)
+(* The parsed envelope: the Wraps triples (kid, ek_bytes, wrapped_bytes), the
+   raw ciphertext package (nonce||ct||tag), and the authorship signature. *)
 Record parsed_envelope := mkEnv {
   env_triples : list (string * string * string);
-  env_ct_package : string
+  env_ct_package : string;
+  env_signature : string;
+  env_signing_key : string
 }.
 
 (* Boundary scan fallback.  render_eml_page (Logic.v) writes only the multipart
@@ -150,11 +152,12 @@ Definition parse_envelope (eml_body : string) : parsed_envelope :=
   let parts := split_parts src boundary in
   let triples := parse_wraps (find_wraps parts) in
   let ct_b64 := find_ct_b64 parts in
-  mkEnv triples (base64_decode (strip_ws ct_b64)).
+  let sig_hex := header_lookup "Signature" hdrs in
+  let sign_key_hex := header_lookup "Signing-Key" hdrs in
+  mkEnv triples (base64_decode (strip_ws ct_b64))
+        (hex_decode (trim sig_hex)) (hex_decode (trim sign_key_hex)).
 
 (* ================= Recipient / wrap selection ===================== *)
-(* Look up a kid's wrap triple in the envelope (matching DecryptPost's try
-   loop, but here keyed by the enrolled reader's kid). *)
 Fixpoint wrap_for_kid (kid : string) (triples : list (string * string * string))
   : option (string * string) :=
   match triples with
@@ -162,16 +165,6 @@ Fixpoint wrap_for_kid (kid : string) (triples : list (string * string * string))
   | (k, ek, w) :: rest =>
       if string_eqb k kid then Some (ek, w) else wrap_for_kid kid rest
   end.
-
-(* CEK unwrap with AAD fallback (AAD = kid, then ""). *)
-Definition unwrap_fallback (sk ek wrapped kid : string) : string :=
-  let r := unwrap_cek sk ek wrapped kid in
-  if is_empty r then unwrap_cek sk ek wrapped "" else r.
-
-(* Body decrypt with AAD fallback (AAD = slug, then ""). *)
-Definition decrypt_body_fallback (cek ct_package slug : string) : string :=
-  let r := decrypt_body cek ct_package slug in
-  if is_empty r then decrypt_body cek ct_package "" else r.
 
 (* ================= Passkey gate ==================================== *)
 (* Find the credentialId hex for [kid] in the passkeys store JSON (""=none). *)
@@ -191,12 +184,11 @@ Definition find_cred (json : string) (kid : string) : string :=
   find_cred_aux json 0%int63 (json_array_len json) kid 64%nat.
 
 (* If a passkey exists for [kid], require a successful WebAuthn assertion; return
-   true to proceed.  No passkey -> proceed (matches crane_bridge: the gate is
-   best-effort, only enforced when a credential is on file). *)
+   true to proceed.  No passkey -> REJECT (mandatory passkey requirement). *)
 Definition passkey_gate (kid : string) : BIO bool :=
   pk_json <- idb_get_all "passkeys" ;;
   let cred := find_cred pk_json kid in
-  if is_empty cred then Ret true
+  if is_empty cred then Ret false
   else
     (* UV / timeout posture from BrowserPolicy.v, not the shim. *)
     ok <- wa_get cred "crane-decrypt-challenge" uv_preferred wa_get_timeout ;;
@@ -385,16 +377,16 @@ Fixpoint try_keys_aux
             gated <- passkey_gate kid ;;
             if negb gated then
               _ <- show_decrypt_error
-                     "WebAuthn authentication failed. Please authenticate to decrypt this post." ;;
+                     "WebAuthn passkey required. Re-enroll with a passkey to decrypt." ;;
               Ret true
             else
-              let cek := unwrap_fallback priv_jwk ek wrapped kid in
+              let cek := unwrap_cek priv_jwk ek wrapped kid in
               if is_empty cek then
                 _ <- show_decrypt_error
                        "Failed to unwrap the content encryption key." ;;
                 Ret true
               else
-                let inner := decrypt_body_fallback cek (env_ct_package env) slug in
+                let inner := decrypt_body cek (env_ct_package env) slug in
                 if is_empty inner then
                   _ <- show_decrypt_error
                          "Failed to decrypt the post body." ;;
@@ -416,6 +408,10 @@ Definition do_decrypt : BIO unit :=
   let env := parse_envelope eml in
   if is_empty (env_ct_package env) then
     show_decrypt_error "No ciphertext found in envelope."
+  else if is_empty (env_signature env) then
+    show_decrypt_error "No author signature found in envelope."
+  else if negb (verify_post (env_signing_key env) (env_ct_package env) (env_signature env)) then
+    show_decrypt_error "Author signature verification failed."
   else
     keys_json <- idb_get_all "reader-keys" ;;
     let kn := json_array_len keys_json in
@@ -463,4 +459,5 @@ Definition run : BIO unit :=
 
 Set Warnings "-crane-extraction-default-directory".
 
+Set Crane Extraction Output Directory ".".
 Crane Extraction "crane_decrypt" run.

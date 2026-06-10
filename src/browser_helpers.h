@@ -330,6 +330,19 @@ inline std::string aes_256_gcm_decrypt(
     return crane_browser_detail::take_lp(p);
 }
 
+// ecdsa_p256_sign(sk, digest): stub — signing is server-side only.
+// The browser never signs; this exists so the extraction links.
+inline std::string ecdsa_p256_sign(const std::string& /*sk*/, const std::string& /*digest*/) {
+    return std::string();
+}
+
+// ecdsa_p256_verify(pk_raw65, digest32, sig_raw64) -> bool.
+// Stub implementation for WASM build - actual verification happens server-side.
+inline bool ecdsa_p256_verify(const std::string& /*pk*/, const std::string& /*digest*/,
+                               const std::string& /*sig*/) {
+    return false;  // Browser never verifies signatures
+}
+
 // base64_encode(bytes): btoa over a binary string -> ascii.
 inline std::string base64_encode(const std::string& in) {
     char* p = reinterpret_cast<char*>(EM_ASM_PTR({

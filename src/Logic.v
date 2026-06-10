@@ -596,6 +596,7 @@ Definition run : IO unit :=
   copy_static_files (filter (fun name => negb (is_empty name)) static_files).
 
 Set Warnings "-crane-extraction-default-directory".
+Set Crane Extraction Output Directory ".".
 
 (* Linear-time [concat_all] override — same rationale as the pre-encryption
    revision.  The Coq definition is kept for proof-level reasoning; only

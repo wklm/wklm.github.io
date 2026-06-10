@@ -128,29 +128,35 @@ Definition shape_fuel : nat := 65536.
    space or end of string.  [prev] is the previous code point for kerning
    (sentinel 0 = NUL at word start kerns with nothing).  Split from
    glyph-collection so neither recursive fn returns a tuple (std::any trap). *)
-Fixpoint word_width (s : string) (pos : int) (prev : int) (fuel : nat) : sp :=
+(* AIDEV-NOTE: tail-recursive [acc] (was [advance_of c + kern_of prev c + word_width
+   ...] — non-tail: the recursive call was the last summand, one frame per character
+   of a word, so a long no-space run overflowed the WASM stack).  Z addition is
+   associative/commutative so accumulating gives the same total. *)
+Fixpoint word_width (s : string) (pos : int) (prev : int) (fuel : nat) (acc : sp) : sp :=
   match fuel with
-  | O => 0
+  | O => acc
   | S f =>
-      if ileb (PrimString.length s) pos then 0
+      if ileb (PrimString.length s) pos then acc
       else
         let c := cp_at s pos in
-        if is_space_byte c then 0
+        if is_space_byte c then acc
         else
-          advance_of c + kern_of prev c +
           word_width s (iadd pos 1%int63) c f
+            (acc + advance_of c + kern_of prev c)
   end.
 
 (* Collect glyph ids of the word starting at [pos]. *)
-Fixpoint word_glyphs (s : string) (pos : int) (fuel : nat) : list glyph_id :=
+(* AIDEV-NOTE: tail-recursive [acc] + [rev_append] (was [c :: word_glyphs ...] —
+   non-tail, one frame per character of a word). *)
+Fixpoint word_glyphs (s : string) (pos : int) (fuel : nat) (acc : list glyph_id) : list glyph_id :=
   match fuel with
-  | O => []
+  | O => rev_append acc []
   | S f =>
-      if ileb (PrimString.length s) pos then []
+      if ileb (PrimString.length s) pos then rev_append acc []
       else
         let c := cp_at s pos in
-        if is_space_byte c then []
-        else c :: word_glyphs s (iadd pos 1%int63) f
+        if is_space_byte c then rev_append acc []
+        else word_glyphs s (iadd pos 1%int63) f (c :: acc)
   end.
 
 (* Advance [pos] to the end of the current word (first space or EOS). *)
@@ -177,27 +183,36 @@ Fixpoint skip_spaces (s : string) (pos : int) (fuel : nat) : int :=
      box(word) , glue , box(word) , glue , ... , box(lastword)
    Leading/trailing space runs are collapsed.  Each word is one rigid box;
    intra-word breakpoints are added later by Hyphenation.v. *)
-Fixpoint shape_aux (s : string) (pos : int) (fuel : nat) : paragraph :=
+(* AIDEV-NOTE: STACK-SAFETY.  Was [shape_aux] returning [IBox.. :: shape_aux ..]
+   (non-tail: one frame per word/glue, "up to 65536 frames" — the deep recursion
+   cited in eb1d2ac that the layout_all_tr fix only layered on top of).  Now
+   tail-recursive: [shape_rev] accumulates the node list in REVERSE (cons in tail
+   position), and [shape]/[shape_paragraph] finalise with a single tail-recursive
+   [rev_append].  Crucially this also fixes [shape_paragraph]'s former non-tail
+   [shape s ++ [..]] (Coq [app] recurses over the O(#words) left list): folding the
+   terminators into rev_append's tail makes the whole entry O(1)-stack — and the
+   produced paragraph is value-identical, so Knuth-Plass layout is unchanged. *)
+Fixpoint shape_rev (s : string) (pos : int) (fuel : nat) (acc : paragraph) : paragraph :=
   match fuel with
-  | O => []
+  | O => acc
   | S f =>
-      if ileb (PrimString.length s) pos then []
+      if ileb (PrimString.length s) pos then acc
       else if is_space_byte (cp_at s pos) then
         let pos' := skip_spaces s pos shape_fuel in
-        if ileb (PrimString.length s) pos' then []
-        else IGlue interword :: shape_aux s pos' f
+        if ileb (PrimString.length s) pos' then acc
+        else shape_rev s pos' f (IGlue interword :: acc)
       else
-        let w  := word_width s pos 0%int63 shape_fuel in
-        let gs := word_glyphs s pos shape_fuel in
+        let w  := word_width s pos 0%int63 shape_fuel 0 in
+        let gs := word_glyphs s pos shape_fuel [] in
         let pos' := skip_word s pos shape_fuel in
-        IBox (mkBox w gs) :: shape_aux s pos' f
+        shape_rev s pos' f (IBox (mkBox w gs) :: acc)
   end.
 
 (* Public entry: text -> Knuth-Plass node list (strips a leading space run
    so the paragraph starts with a box). *)
 Definition shape (s : string) : paragraph :=
   let p0 := skip_spaces s 0%int63 shape_fuel in
-  shape_aux s p0 shape_fuel.
+  rev_append (shape_rev s p0 shape_fuel []) [].
 
 (* The Knuth-Plass paragraph terminator: a large-stretch glue then a forced
    break, so the final line is set ragged and the breaker always has a
@@ -210,4 +225,6 @@ Definition shape (s : string) : paragraph :=
 Definition big_stretch : sp := 6553600000.
 
 Definition shape_paragraph (s : string) : paragraph :=
-  shape s ++ [ par_finish_glue big_stretch ; forced_break ].
+  let p0 := skip_spaces s 0%int63 shape_fuel in
+  rev_append (shape_rev s p0 shape_fuel [])
+             [ par_finish_glue big_stretch ; forced_break ].
