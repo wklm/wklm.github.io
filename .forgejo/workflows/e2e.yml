@@ -43,7 +43,7 @@ jobs:
           set -eu
           docker version
           node --version
-          npx --no-install playwright --version
+          npx playwright --version
 
       # The WASM artifacts come from the wasm stage (em++ links the Crane-extracted
       # browser C++).  Layer caching on the self-hosted runner keeps the heavy
