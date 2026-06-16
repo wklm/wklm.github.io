@@ -50,6 +50,7 @@ Inductive brE : Type -> Type :=
 | DomShow       : string -> brE unit
 | DomHide       : string -> brE unit
 | DomPathSlug   : brE string                      (* location.pathname last seg *)
+| RenderLatexCanvas : string -> Z -> Z -> brE Z
 (* sessionStorage *)
 | SsGet         : string -> brE string
 | SsSet         : string -> string -> brE unit
@@ -128,6 +129,8 @@ Definition reader_begin {E} `{brE -< E} (id : string) (h : Z) : itree E unit :=
   embed (ReaderBegin id h).
 Definition reader_glyph {E} `{brE -< E} (x y : Z) (cp : int) : itree E unit :=
   embed (ReaderGlyph x y cp).
+Definition render_latex_canvas {E} `{brE -< E} (latex : string) (x y : Z) : itree E Z :=
+  embed (RenderLatexCanvas latex x y).
 
 (* ---- The browser IO monad ------------------------------------------- *)
 

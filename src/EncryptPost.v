@@ -98,12 +98,10 @@ Definition build_envelope
   (cek pub_raw kid slug inner_mime sign_sk sign_pub_hex : string) : string :=
   let ct_package := encrypt_body cek inner_mime slug in
   let '(ek, wrapped) := wrap_cek cek pub_raw kid in
-  let sig := sign_post sign_sk ct_package in
   build_outer_envelope
     (kid :: nil)
     ((kid, hex_encode ek, hex_encode wrapped) :: nil)
-    (wrap_base64 (base64_encode ct_package))
-    (hex_encode sig) sign_pub_hex.
+    (wrap_base64 (base64_encode ct_package)).
 
 (* ---- the encrypt pipeline for one .md file ------------------------- *)
 
@@ -111,7 +109,8 @@ Definition encrypt_one (md_path : string) : IO unit :=
   raw <- read md_path ;;
   let kv := parse_frontmatter_kv raw in
   let md_basename := basename_of md_path in
-  let slug := slug_from_content raw in
+  let slug_meta := meta_lookup "slug" kv in
+  let slug := if is_empty slug_meta then strip_md md_basename else slug_meta in
   let title_meta := meta_lookup "title" kv in
   let title := if is_empty title_meta then "Untitled" else title_meta in
   kid <- getenv "CRANE_BLOG_AUTHOR_KEY_ID" ;;

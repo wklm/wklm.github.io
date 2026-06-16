@@ -253,20 +253,36 @@ Definition para_gap : Z := 786432%Z.
    Tail-recursive via accumulator + [rev] so Crane-extracted C++ can be
    tail-call-optimized by em++ -O2, keeping the WASM call stack shallow
    under Emscripten Asyncify instrumentation. *)
-Fixpoint layout_all_tr (ps : list string) (acc : list (list quad)) : list (list quad) :=
+Inductive ParaLayout : Type :=
+| PLText : list quad -> ParaLayout
+| PLLatex : string -> ParaLayout.
+
+Definition is_latex_para (p : string) : bool :=
+  let n := PrimString.length p in
+  if ltb n 2%int63 then false else
+  andb (int_eqb (PrimString.get p 0%int63) 36%int63)
+       (int_eqb (PrimString.get p 1%int63) 36%int63).
+
+Fixpoint layout_all_tr (ps : list string) (acc : list ParaLayout) : list ParaLayout :=
   match ps with
   | nil => rev acc
-  | body :: rest => layout_all_tr rest (layout_paragraph advance_of MEASURE (shape_paragraph body) :: acc)
+  | body :: rest =>
+      if is_latex_para body then
+        layout_all_tr rest (PLLatex body :: acc)
+      else
+        layout_all_tr rest (PLText (layout_paragraph advance_of MEASURE (shape_paragraph body)) :: acc)
   end.
 
-Definition layout_all (ps : list string) : list (list quad) :=
+Definition layout_all (ps : list string) : list ParaLayout :=
   layout_all_tr ps nil.
 
-Fixpoint total_height (qss : list (list quad)) (acc : Z) : Z :=
+Fixpoint total_height (qss : list ParaLayout) (acc : Z) : Z :=
   match qss with
   | nil => acc
-  | qs :: rest =>
+  | PLText qs :: rest =>
       total_height rest (Z.add (Z.add acc (max_qy qs 0%Z)) para_gap)
+  | PLLatex _ :: rest =>
+      total_height rest (Z.add (Z.add acc 3276800%Z) para_gap)
   end.
 
 (* Sequence one [reader_glyph] per quad, offsetting every baseline by [dy] (sp).
@@ -280,12 +296,15 @@ Fixpoint draw_quads_at (qs : list quad) (dy : Z) : BIO unit :=
   end.
 
 (* Lay out + paint each paragraph at an accumulating vertical offset [dy]. *)
-Fixpoint render_paras (qss : list (list quad)) (dy : Z) : BIO unit :=
+Fixpoint render_paras (qss : list ParaLayout) (dy : Z) : BIO unit :=
   match qss with
   | nil => Ret tt
-  | qs :: rest =>
+  | PLText qs :: rest =>
       _ <- draw_quads_at qs dy ;;
       render_paras rest (Z.add (Z.add dy (max_qy qs 0%Z)) para_gap)
+  | PLLatex latex :: rest =>
+      used_h <- render_latex_canvas latex 0%Z dy ;;
+      render_paras rest (Z.add (Z.add dy used_h) para_gap)
   end.
 
 (* Shape + lay out [body] paragraph-by-paragraph and paint onto #reader-canvas,

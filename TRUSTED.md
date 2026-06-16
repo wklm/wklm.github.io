@@ -319,6 +319,13 @@ C2/C3 decrypt path; `static/` holds only the `crane_decrypt`/`crane_enroll`
 artifacts and no glyph/MSDF assets). Accordingly, C11–C13 are documented for
 completeness but are **not active trusted boundaries today**.
 
+## C15 — Browser LaTeX rendering (ratex-wasm)
+
+- **ROCQ side.** None — dynamically loaded.
+- **Realized by.** `static/ratex.mjs` and `static/ratex.wasm` (from `ratex-wasm` npm package), loaded dynamically via `EM_ASM` in `browser_helpers.h`.
+- **Thin-shim justification.** (1) Pure delegation to the `ratex-wasm` library for LaTeX rendering. (2) No domain branching. (3) N/A. (4) Swappable.
+- **Trusted-not-proven.** The `ratex-wasm` library's correctness and XSS safety.
+
 ## C11 — Glyph metric / kern / ligature tables
 
 - **Status: PLANNED data (already present, pure ROCQ — not an FFI shim).**

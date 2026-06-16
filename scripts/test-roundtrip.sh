@@ -127,6 +127,15 @@ export CRANE_BLOG_AUTHOR_KEY_ID="$key_id"
 export CRANE_BLOG_AUTHOR_EMAIL="test@crane.blog"
 export CRANE_BLOG_PRIVATE_KEY="$priv_hex"
 
+# Generate signing keypair for tests
+openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/sign.pem"
+sign_pub_hex=$(openssl ec -in "$scratch/sign.pem" -pubout -outform DER 2>/dev/null | xxd -p -c 256)
+sign_priv_hex=$(openssl ec -in "$scratch/sign.pem" -outform DER 2>/dev/null | xxd -p -c 256 | tail -c 65)
+sign_key_id=$(printf '%s' "$sign_pub_hex" | xxd -r -p | shasum -a 256 | cut -c 1-12)
+printf '%s' "$sign_pub_hex" > "keys/$sign_key_id.sign.pub"
+export CRANE_BLOG_SIGNING_KEY_ID="$sign_key_id"
+export CRANE_BLOG_SIGNING_KEY="$sign_priv_hex"
+
 # ---- Build the tools (Crane -> C++23 -> clang++) ----
 if ! command -v dune >/dev/null 2>&1; then
     echo "dune not on PATH; run 'eval \$(opam env)' first" >&2
@@ -155,6 +164,11 @@ orig_img_sha="$(shasum -a 256 posts/fixture.bin | cut -d ' ' -f 1)"
 # ---- Encrypt ----
 "$enc" posts/fixture.md
 test -f posts-encrypted/fixture.eml
+
+if [[ -f posts/proof.md ]]; then
+    "$enc" posts/proof.md
+    test -f posts-encrypted/convergence-proof.eml
+fi
 
 # ---- Validate envelope ----
 grep -q 'multipart/hpke+wrapped' posts-encrypted/fixture.eml \

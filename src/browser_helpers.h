@@ -463,6 +463,14 @@ inline std::monostate reader_begin(const std::string& id, double height_sp) {
     EM_ASM({
         var c = document.getElementById(UTF8ToString($0));
         if (!c) return;
+        if (!window.__ratex_loaded) {
+            window.__ratex_loaded = true;
+            import('./ratex.mjs').then(m => {
+                if (window.RatexCore && window.RatexCore.init) {
+                    window.RatexCore.init();
+                }
+            }).catch(console.error);
+        }
         var cx = c.getContext('2d');
         if (!cx) return;
         var dpr = window.devicePixelRatio || 1;
@@ -502,6 +510,32 @@ inline std::monostate reader_glyph(double x_sp, double y_sp, int cp) {
         r.cx.fillText(String.fromCodePoint($2), x, y);
     }, x_sp, y_sp, cp);
     return std::monostate{};
+}
+
+inline int64_t render_latex_canvas(const std::string& latex, int64_t x_sp, int64_t y_sp) {
+    return EM_ASM_INT({
+        var r = Module.__rdr;
+        if (!r || !r.cx || !window.RatexCore) return 0;
+        var PXPT = 96 / 72;
+        var x = ($1 / 65536) * PXPT;
+        var y = ($2 / 65536) * PXPT;
+        
+        try {
+            var dl_json = window.RatexCore.renderLatex(UTF8ToString($0), null);
+            var dl = JSON.parse(dl_json);
+            
+            r.cx.save();
+            r.cx.translate(x, y);
+            window.RatexCore.renderToCanvas(dl, r.cx.canvas, { fontSize: 24, padding: 0 });
+            r.cx.restore();
+            
+            // Return approximate height used in sp (e.g. 50pt = 50 * 65536)
+            return Math.round(50 * 65536);
+        } catch (e) {
+            console.error("LaTeX render error:", e);
+            return 0;
+        }
+    }, latex.c_str(), x_sp, y_sp);
 }
 
 // location.pathname's last non-empty path segment (the post slug).

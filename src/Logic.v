@@ -411,7 +411,8 @@ Definition enroll_dir_output_path (output_dir : string) : string :=
    instead of a mail-client imitation. *)
 Definition stylesheet_core : string :=
   concat_all (
-    ":root{--paper:#fafafa;--ink:#141414;--muted:#6b6b6b;--rule:#d9d9d9;--accent:#141414}" ::
+    "@import url(""https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"");" ::
+    ":root{--paper:#fff;--ink:#111;--muted:#555;--accent:#005cc5}" ::
     "@media (prefers-color-scheme: dark){:root{--paper:#141414;--ink:#e8e8e8;--muted:#9a9a9a;--rule:#2e2e2e;--accent:#e8e8e8}}" ::
     "*,*::before,*::after{box-sizing:border-box}" ::
     "html{-webkit-text-size-adjust:100%;hanging-punctuation:first last}" ::
