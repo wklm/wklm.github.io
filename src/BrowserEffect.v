@@ -151,6 +151,7 @@ Crane Extract Inductive brE => ""
     "dom_show(%a0)"
     "dom_hide(%a0)"
     "dom_path_slug(std::monostate{})"
+    "render_latex_canvas(%a0, (int64_t)%a1, (int64_t)%a2)"
     "ss_get(%a0)"
     "ss_set(%a0, %a1)"
     "ss_remove(%a0)"
@@ -164,6 +165,9 @@ Crane Extract Inductive brE => ""
     "reader_begin(%a0, (double)%a1)"
     "reader_glyph((double)%a0, (double)%a1, (int)%a2)" ]
   From "browser_helpers.h".
+
+Crane Extract Inlined Constant render_latex_canvas =>
+  "render_latex_canvas(%a0, (int64_t)%a1, (int64_t)%a2)" From "browser_helpers.h".
 
 Crane Extract Inlined Constant dom_get_text =>
   "dom_get_text(%a0)" From "browser_helpers.h".
