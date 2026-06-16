@@ -1,0 +1,49 @@
+{
+  "name": "ratex-wasm",
+  "version": "0.1.11",
+  "description": "RaTeX browser integration: WASM + Canvas 2D web-render",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/erweixin/RaTeX.git"
+  },
+  "homepage": "https://github.com/erweixin/RaTeX/tree/main/platforms/web#readme",
+  "keywords": [
+    "latex",
+    "math",
+    "wasm",
+    "katex",
+    "render"
+  ],
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./fonts.css": "./fonts.css",
+    "./ratex-formula": {
+      "import": "./dist/ratex-formula.js",
+      "types": "./dist/ratex-formula.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "npm run copy-fonts && npm run build:wasm && npm run build:ts",
+    "build:ts": "tsc -p tsconfig.build.json",
+    "build:wasm": "wasm-pack build ../../crates/ratex-wasm --target web --out-dir ../../platforms/web/pkg && node -e \"try{require('fs').unlinkSync('pkg/.gitignore')}catch(e){}\"",
+    "prepack": "node -e \"const fs=require('fs');try{fs.unlinkSync('pkg/.gitignore')}catch(e){};for(const p of ['pkg/ratex_wasm.js','pkg/ratex_wasm_bg.wasm']){if(!fs.existsSync(p)){console.error('prepack: missing '+p+'. Run npm run build before pack/publish.');process.exit(1)}}\"",
+    "copy-fonts": "node -e \"const fs=require('fs');const path=require('path');const src=path.join(process.cwd(),'node_modules/katex/dist/fonts');const dest=path.join(process.cwd(),'fonts');if(!fs.existsSync(src)){console.error('Run npm install first (katex is a devDependency)');process.exit(1);}fs.mkdirSync(dest,{recursive:true});fs.readdirSync(src).forEach(f=>fs.copyFileSync(path.join(src,f),path.join(dest,f)));console.log('Fonts copied to fonts/');\"",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "katex": "0.16.9",
+    "typescript": "~5.3.0"
+  },
+  "files": [
+    "dist",
+    "fonts",
+    "fonts.css",
+    "pkg",
+    "src"
+  ]
+}

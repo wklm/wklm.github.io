@@ -287,6 +287,8 @@ Definition serialize_page_shell (depth page_title body_class
     "<title>" :: cat page_title
       (if string_eqb page_title "wklm.online" then "" else " — wklm.online") ::
     "</title>" ::
+    "<link rel='stylesheet' href='" :: depth :: "static/ratex-wasm/fonts.css' />" ::
+    "<script type='module' src='" :: depth :: "static/ratex-wasm/dist/ratex-formula.js'></script>" ::
     "<link rel='stylesheet' href='" :: rel_stylesheet_v depth version :: "'>" ::
     "</head><body class='" :: body_class :: "'>" ::
     "<a class='skip-link' href='#main'>skip to text</a>" ::
