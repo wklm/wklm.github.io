@@ -185,7 +185,7 @@ jobs:
             echo 'Generated site contains <img> tags' >&2
             exit 1
           fi
-          unapproved=$(grep -R '<script' _site | grep -v 'crane_decrypt.mjs\|crane_enroll.mjs' || true)
+          unapproved=$(grep -R '<script' _site | grep -v 'crane_decrypt.mjs\|crane_enroll.mjs\|ratex-formula.js' || true)
           if [[ -n "$unapproved" ]]; then
             echo 'Generated site contains unapproved <script> tags:' >&2
             echo "$unapproved" >&2
