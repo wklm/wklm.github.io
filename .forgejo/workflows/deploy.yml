@@ -34,14 +34,13 @@ jobs:
           if ls posts/*.md >/dev/null 2>&1; then echo 'Plaintext posts/*.md present — refusing.'; exit 1; fi
           for eml in posts-encrypted/*.eml; do
             [ -e "$eml" ] || continue
-            clean="$(tr -d '\r' < "$eml")"
-            if ! printf '%s\n' "$clean" | grep -qx 'Subject: \.\.\.'; then
+            if ! tr -d '\r' < "$eml" | grep -qx 'Subject: \.\.\.'; then
               echo "$eml: outer Subject not placeholder. File head:"
-              head -n 5 "$eml" | xxd
+              head -n 5 "$eml"
               exit 1
             fi
-            printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
-            if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+            tr -d '\r' < "$eml" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
+            if tr -d '\r' < "$eml" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
           done
 
       - name: Build generator image
