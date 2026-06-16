@@ -119,12 +119,6 @@ Definition encrypt_one (md_path : string) : IO unit :=
   let pub_raw := hex_decode (trim pub_hex) in
   email <- getenv "CRANE_BLOG_AUTHOR_EMAIL" ;;
   let email := trim email in
-  sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
-  let sign_kid := trim sign_kid0 in
-  sign_sk_hex <- getenv "CRANE_BLOG_SIGNING_KEY" ;;
-  let sign_sk := hex_decode (trim sign_sk_hex) in
-  sign_pub_hex <- read (cat "keys/" (cat sign_kid ".sign.pub")) ;;
-  let sign_pub_hex := trim sign_pub_hex in
   let image_rels := collect_image_refs raw in
   images <- read_images image_rels ;;
   let recipients_str := cat "reader:" kid in
@@ -134,7 +128,7 @@ Definition encrypt_one (md_path : string) : IO unit :=
     ("Date", fixed_date) ::
     ("Subject", title) :: nil in
   let inner_mime := build_inner_mime protected_headers md_basename raw images in
-  let envelope := build_envelope (random_bytes 32%int63) pub_raw kid slug inner_mime sign_sk sign_pub_hex in
+  let envelope := build_envelope (random_bytes 32%int63) pub_raw kid slug inner_mime in
   _ <- create_directory "posts-encrypted" ;;
   _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
   eprint (concat_all
