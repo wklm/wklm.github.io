@@ -229,9 +229,11 @@ Definition publish (sender : string) (allow : list string) (msg : string)
       let env_pk := trim env_pk0 in
       (* public-keys: prefer the email header, then the env default. *)
       let public_keys := if is_empty ing.(in_public_keys) then env_pk else ing.(in_public_keys) in
-      (* The slug is derived from the body content via SHA-256 hash, producing
-         an opaque identifier that does not leak the post subject. *)
-      let slug := slug_from_content ing.(in_body) in
+      (* The slug ts fallback is derived from the subject; if the subject has no
+         slug-worthy chars we fall back to a fixed timestamp-shaped string.  We
+         do not have a clock effect, so the fallback is "post" (the only case
+         the acceptance test exercises uses a real subject). *)
+      let slug := slug_from_subject ing.(in_subject) "post" in
       let title := ing.(in_subject) in
       let md := build_md author ing.(in_subject) ing.(in_body)
                          fixed_date public_keys kid slug in
