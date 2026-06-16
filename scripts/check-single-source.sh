@@ -22,7 +22,6 @@ while IFS= read -r f; do
     .githooks/*|.vscode/*|.devcontainer/*) ;;               # hook / editor / devcontainer config
     tests/e2e/*.ts|tests/e2e/*.mjs|playwright.config.ts) ;; # Playwright e2e harness (TS/MJS required)
     static/*.mjs|static/*.wasm) ;;                          # WASM build artifacts (Crane-extracted, em++-linked)
-    static/ratex-wasm/*) ;;                                 # RaTeX WASM library for KaTeX rendering
     *)
       [ "$rc" = 0 ] && echo "R8 single-source contract violation — non-.v file(s) outside the allowlist:" >&2
       echo "  $f" >&2
