@@ -95,7 +95,7 @@ Fixpoint read_images (rels : list string) : IO (list (string * string)) :=
    call site — a nullary Definition (like generate_cek) would be inlined and
    re-evaluated, encrypting the body under a different CEK than the wrap. *)
 Definition build_envelope
-  (cek pub_raw kid slug inner_mime sign_sk sign_pub_hex : string) : string :=
+  (cek pub_raw kid slug inner_mime : string) : string :=
   let ct_package := encrypt_body cek inner_mime slug in
   let '(ek, wrapped) := wrap_cek cek pub_raw kid in
   build_outer_envelope
