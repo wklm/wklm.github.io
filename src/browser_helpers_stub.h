@@ -53,6 +53,7 @@ inline std::string   dom_path_slug(std::monostate) { return std::string(); }
 // ---- Verified-Reader canvas (Wave 1) ----
 inline std::monostate reader_begin(const std::string&, double) { return {}; }
 inline std::monostate reader_glyph(double, double, int) { return {}; }
+inline int64_t render_latex_canvas(const std::string&, int64_t, int64_t) { return 0; }
 
 // ---- sessionStorage ----
 inline std::string   ss_get(const std::string&) { return std::string(); }
