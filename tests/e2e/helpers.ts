@@ -171,12 +171,107 @@ export async function generateForeignRecipient(): Promise<{
 }
 
 /**
+ * Resolve the author ECDSA P-256 signing keypair for the fixture envelope.
+ *
+ * encrypt_post REQUIRES CRANE_BLOG_SIGNING_KEY_ID + CRANE_BLOG_SIGNING_KEY and
+ * reads the public half back from keys/<kid>.sign.pub in the worktree; the
+ * browser then verifies the envelope's Signature against the Signing-Key header
+ * via WebCrypto.  Strategy (hermetic by default):
+ *
+ *  1. If both CRANE_BLOG_SIGNING_KEY_ID and CRANE_BLOG_SIGNING_KEY are set in
+ *     the environment (e.g. a real deployment key is exported on the host),
+ *     reuse that key: write keys/<kid>.sign.pub ONLY when it does not already
+ *     exist (an existing .sign.pub is never overwritten), deriving the 65-byte
+ *     uncompressed public key from the private scalar via openssl if needed.
+ *  2. Otherwise generate an ephemeral P-256 keypair at test time with openssl,
+ *     using the same extraction pipeline as scripts/test-roundtrip.sh
+ *     (65-byte uncompressed pub hex, 32-byte scalar, key_id = sha256(pub)[:12]),
+ *     and write keys/<kid>.sign.pub with NO trailing newline.  Existing
+ *     .sign.pub files are left untouched.
+ *
+ * keys/ is gitignored, so no key material is ever committed.  Returns the key
+ * id (for the env) + the private scalar hex.
+ */
+function resolveSigningKey(keysDir: string): { signKid: string; signPrivHex: string } {
+  const envKid = process.env.CRANE_BLOG_SIGNING_KEY_ID;
+  const envPriv = process.env.CRANE_BLOG_SIGNING_KEY;
+  if (envKid && envPriv) {
+    if (!/^[0-9a-f]{12}$/.test(envKid.trim())) {
+      throw new Error(`CRANE_BLOG_SIGNING_KEY_ID must be 12 hex chars, got '${envKid}'`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(envPriv.trim())) {
+      throw new Error(`CRANE_BLOG_SIGNING_KEY must be a 32-byte hex scalar, got ${envPriv.trim().length} hex chars`);
+    }
+    const signKid = envKid.trim();
+    const signPrivHex = envPriv.trim();
+    const pubPath = join(keysDir, `${signKid}.sign.pub`);
+    if (!existsSync(pubPath)) {
+      // Reuse the env-designated key, but its public half is missing from the
+      // worktree — rebuild the 65-byte uncompressed point from the scalar
+      // (SEC1 EC PRIVATE KEY DER: 0x30 0x77 0x02 0x01 0x01 0x04 0x20 <scalar>
+      // a0 0a 06 08 2a 86 48 ce 3d 03 01 07), never overwriting if it exists.
+      const pubHex = execFileSync('bash', ['-c', [
+        'set -euo pipefail',
+        'scratch="$(mktemp -d)"',
+        'trap \'rm -rf "$scratch"\' EXIT',
+        'printf \'%s\' "$1" | xxd -r -p > "$scratch/scalar.bin"',
+        'printf \'\x30\x77\x02\x01\x01\x04\x20\' > "$scratch/prefix.bin"',
+        'printf \'\xa0\x0a\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07\' > "$scratch/suffix.bin"',
+        'cat "$scratch/prefix.bin" "$scratch/scalar.bin" "$scratch/suffix.bin" > "$scratch/key.der"',
+        'openssl ec -inform DER -in "$scratch/key.der" -pubout -conv_form uncompressed 2>/dev/null |',
+        '  openssl pkey -pubin -outform DER 2>/dev/null |',
+        '  tail -c 65 | xxd -p -c 999 | tr -d \'\n\'',
+      ].join('\n'), 'bash', signPrivHex], { encoding: 'utf8' }).trim();
+      if (!/^04[0-9a-f]{128}$/.test(pubHex)) {
+        throw new Error(`could not derive public key for signing key ${signKid} (got ${pubHex.length} hex chars)`);
+      }
+      writeFileSync(pubPath, pubHex); // no trailing newline
+    }
+    return { signKid, signPrivHex };
+  }
+
+  // Hermetic default: ephemeral P-256 keypair, generated at test time with the
+  // exact extraction pipeline of scripts/generate-signing-key.sh.  An existing
+  // keys/<kid>.sign.pub is never overwritten — a fresh key simply gets a fresh
+  // (sha256-derived) id.  The private scalar lives only in process memory and
+  // is passed straight into the encrypt_post container.
+  const script = [
+    'set -euo pipefail',
+    'scratch="$(mktemp -d)"',
+    'trap \'rm -rf "$scratch"\' EXIT',
+    'openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/sign.pem" 2>/dev/null',
+    'pub_hex=$(openssl ec -in "$scratch/sign.pem" -pubout -conv_form uncompressed 2>/dev/null |',
+    '  openssl pkey -pubin -outform DER 2>/dev/null |',
+    '  tail -c 65 | xxd -p -c 999 | tr -d \'\n\')',
+    'priv_hex=$(openssl ec -in "$scratch/sign.pem" -text -noout 2>/dev/null |',
+    '  awk \'/priv:/{f=1;next}/pub:/{f=0}f\' | tr -d \' :\n\')',
+    'if [ ${#priv_hex} -eq 66 ]; then priv_hex=${priv_hex#00}; fi',
+    'if [ ${#priv_hex} -ne 64 ] || [ ${#pub_hex} -ne 130 ]; then',
+    '  echo "signing key extraction failed (priv_len=${#priv_hex} want 64, pub_len=${#pub_hex} want 130)" >&2',
+    '  exit 1',
+    'fi',
+    'key_id=$(printf \'%s\' "$pub_hex" | xxd -r -p | shasum -a 256 | cut -c 1-12)',
+    'printf \'%s %s %s\' "$key_id" "$pub_hex" "$priv_hex"',
+  ].join('\n');
+  const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
+  const [signKid, pubHex, signPrivHex] = out.split(/\s+/);
+  if (!/^[0-9a-f]{12}$/.test(signKid) || !/^04[0-9a-f]{128}$/.test(pubHex) || !/^[0-9a-f]{64}$/.test(signPrivHex)) {
+    throw new Error(`ephemeral signing key generation produced invalid output: '${out}'`);
+  }
+  writeFileSync(join(keysDir, `${signKid}.sign.pub`), pubHex); // no trailing newline
+  return { signKid, signPrivHex };
+}
+
+/**
  * Encrypt a fixture markdown post to a single recipient (the just-enrolled
  * reader) using the Crane-extracted encrypt_post inside the builder image.
- * Writes keys/<kid>.pub (uncompressed hex) + posts/<slug>.md, runs encrypt_post
- * with CRANE_BLOG_AUTHOR_KEY_ID=<kid>, and produces posts-encrypted/<slug>.eml.
- * Returns the eml path (relative to repoRoot).  Runs as the host uid so the
- * bind-mounted outputs stay host-owned.
+ * Writes keys/<kid>.pub (uncompressed hex) + posts/<slug>.md, resolves (or
+ * generates) an ephemeral author ECDSA signing keypair, writes
+ * keys/<signKid>.sign.pub, runs encrypt_post with CRANE_BLOG_AUTHOR_KEY_ID=<kid>
+ * + CRANE_BLOG_SIGNING_KEY_ID/CRANE_BLOG_SIGNING_KEY, and produces
+ * posts-encrypted/<slug>.eml with a verifiable Signature/Signing-Key header
+ * pair.  Returns the eml path (relative to repoRoot).  Runs as the host uid so
+ * the bind-mounted outputs stay host-owned.
  */
 export function encryptFixturePost(args: {
   kid: string;
@@ -193,6 +288,10 @@ export function encryptFixturePost(args: {
   writeFileSync(join(keysDir, `${kid}.pub`), uncompressedPubHex);
   writeFileSync(join(postsDir, `${slug}.md`), markdown);
 
+  // The fixture envelope must be signed: encrypt_post fails without the signing
+  // env, and the browser decrypt gate rejects an unsigned envelope.
+  const { signKid, signPrivHex } = resolveSigningKey(keysDir);
+
   const uid = process.getuid?.() ?? 1000;
   const gid = process.getgid?.() ?? 1000;
 
@@ -208,6 +307,8 @@ export function encryptFixturePost(args: {
       '-w', '/site',
       '-e', `CRANE_BLOG_AUTHOR_KEY_ID=${kid}`,
       '-e', 'CRANE_BLOG_AUTHOR_EMAIL=e2e@wklm.online',
+      '-e', `CRANE_BLOG_SIGNING_KEY_ID=${signKid}`,
+      '-e', `CRANE_BLOG_SIGNING_KEY=${signPrivHex}`,
       '--entrypoint', '/usr/local/bin/encrypt_post',
       GEN_IMAGE,
       `posts/${slug}.md`,
