@@ -1,5 +1,13 @@
 # wklm.online — Editorial & Design Brief
 
+> **Implementation status (fresh-start, ECDSA-signed system):** this brief is
+> the editorial intent document. Shipped reality diverges in two places — the
+> reader feature ships browser WASM+JS modules (`crane_decrypt` /
+> `crane_enroll` with their `.mjs` loaders, so the "No JavaScript" line below
+> no longer holds) and every envelope is additionally signed by the author
+> with ECDSA P-256 (`Signature:` / `Signing-Key:` headers). Encryption remains
+> HPKE as intended. See `README.md` for the shipped system.
+
 This document describes the *intent* of the site at `wklm.online`. The
 companion `README.md` covers the build. Here I am concerned with what
 the site is trying to be, how it should read, and how it should look.
@@ -62,7 +70,10 @@ and source artifacts shown without apology. Concretely:
 - Each post page has a classic article shell with the fixed heading
   `Subject: ...`, followed by `<pre class='eml-body'>` containing the
   multipart-encrypted body verbatim after HTML escaping.
-- No JavaScript. No webfonts. No images on any rendered page — every
+- No JavaScript beyond the two WASM reader modules (`crane_decrypt` /
+  `crane_enroll` and their `.mjs` loaders — the decrypt-for-recipients
+  feature; the shell itself carries no script). No webfonts. No images on
+  any rendered page — every
   image in a post is encrypted as a MIME attachment inside the
   ciphertext, never exposed.
 
@@ -106,9 +117,10 @@ What currently holds:
 - `scripts/test-roundtrip.sh` confirms end-to-end that the native
   encrypt/decrypt tools round-trip a Markdown post and a binary
   attachment byte-for-byte, that the resulting encrypted
-  body is a valid HPKE envelope, and that the public output contains the
-  ciphertext and never an `<img>`, real subject line, or outer sender/date
-  metadata.
+  body is a valid HPKE envelope carrying the author's ECDSA signature
+  (and that a tampered signature is rejected), and that the public output
+  contains the ciphertext and never an `<img>`, real subject line, or
+  outer sender/date metadata.
 
 What is *not* verified today:
 
@@ -118,10 +130,13 @@ What is *not* verified today:
   do not verify the *cryptography*.
 - **The encryption itself is not formally verified.** The HPKE protocol
   composition is pure Rocq in `CryptoSpec.v`, but the underlying primitives
-  (ECDH P-256, AES-256-GCM, SHA-256, base64, CSPRNG) are stated as axioms
-  and cross an FFI boundary. The round-trip/AEAD properties are *stated as
-  axioms* in `CryptoSpec.v`. No verified ECDH/AES-GCM implementation exists
-  in Rocq/Coq today. Every trusted boundary is enumerated in `TRUSTED.md`.
+  (ECDH P-256, AES-256-GCM, SHA-256, ECDSA P-256 sign/verify, base64,
+  CSPRNG) are stated as axioms
+  and cross an FFI boundary. The round-trip/AEAD properties (including
+  `ecdsa_roundtrip`) are *stated as
+  axioms* in `CryptoSpec.v`. No verified ECDH/AES-GCM/ECDSA implementation
+  exists in Rocq/Coq today. Every trusted boundary is enumerated in
+  `TRUSTED.md`.
 - The extracted C++ glue — frontmatter parsing, MIME framing,
   subprocess plumbing — is type-checked code, not proved code.
 

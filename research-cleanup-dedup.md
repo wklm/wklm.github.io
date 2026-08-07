@@ -1,5 +1,8 @@
 # crane_blog — Consolidated Cleanup / Dedup Plan
 
+> **STATUS:** historical audit report — findings partially superseded by
+> subsequent commits (see `git log`); kept for provenance.
+
 **Scope:** what to DELETE or MERGE (removal/dedup-focused). Complementary to
 `research-simplification-opportunities.md` (proof-automation / stdlib-reuse). All
 claims grep-verified against `src/*.v`, `Typeset/*.v`, `src/dune`, `Typeset/dune`,

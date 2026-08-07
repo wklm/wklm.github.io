@@ -1,5 +1,8 @@
 # Crane_blog ROCQ Proof/Def Simplification Opportunities
 
+> **STATUS:** historical audit report — findings partially superseded by
+> subsequent commits (see `git log`); kept for provenance.
+
 > Harvested from the `wf_d385f5cf-4f6` "20 logicians hunting simplifications" workflow transcripts.
 > Find phase: 20 expert-logician agents (14 file-coverage + 6 thematic) — all 20 emitted structured candidates.
 > Verify phase: 118 adversarial reviewers were dispatched but **91 hit a session limit** and produced no verdict;

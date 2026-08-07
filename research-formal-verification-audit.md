@@ -1,5 +1,8 @@
 # Formal-Verification Audit — crane_blog
 
+> **STATUS:** historical audit report — findings partially superseded by
+> subsequent commits (see `git log`); kept for provenance.
+
 **Scope:** Line-by-line, first-principles audit of every ROCQ (`.v`) source file and the
 C++ TCB shims of crane_blog (a ROCQ/Rocq 9.0 formally-verified static blog generator +
 client-side encrypted-post reader: posts encrypted at rest, WebAuthn enroll, in-browser

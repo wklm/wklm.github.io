@@ -1,5 +1,8 @@
 # Crane decrypt WASM stack overflow — root-cause & prevention
 
+> **STATUS:** historical audit report — findings partially superseded by
+> subsequent commits (see `git log`); kept for provenance.
+
 > Consolidated from the expert-team workflow `wf_dd975a22-0df` (Recon → Pinpoint →
 > Analyze → Verify). **Provenance note:** the Recon (6 agents), Pinpoint (3),
 > formal-methods panel (3), tail-fix (1) and recursion-audit (23) phases completed

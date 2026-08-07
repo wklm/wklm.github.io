@@ -10,8 +10,9 @@ exact bytes produced, all control flow, and every accept/reject decision
 live in a `.v` file. The only non-`.v` artifacts are thin FFI shim
 C headers, build configuration, and an end-to-end test harness — every
 trusted boundary is catalogued in [`TRUSTED.md`](TRUSTED.md). Posts are
-encrypted with HPKE (ECDH P-256 + AES-256-GCM) before commit and
-rendered as encrypted MIME envelopes. Deployed at
+encrypted with HPKE (ECDH P-256 + AES-256-GCM) and signed with the author's
+ECDSA P-256 key before commit, then rendered as encrypted MIME envelopes.
+Deployed at
 <https://wklm.online>.
 
 ## What the site is
@@ -20,7 +21,9 @@ Every post on the site is a HPKE-encrypted MIME envelope rendered
 inside a classic, restrained blog shell. The homepage lists opaque
 entries whose visible title is always `Subject: ...`; each link points
 to a page whose public text is the same placeholder and a ciphertext
-block. A reader who has enrolled a P-256 keypair in the browser can
+block. Every envelope carries an ECDSA P-256 author signature,
+which both the native tool and the browser verify before any key is
+unwrapped. A reader who has enrolled a P-256 keypair in the browser can
 decrypt posts in-page via Web Crypto API. An unenrolled reader sees
 only opaque ciphertext.
 
@@ -29,18 +32,24 @@ only opaque ciphertext.
 Plaintext lives on the author's working tree under `posts/` and is
 **gitignored**. A pre-commit hook converts every staged
 `posts/*.md` into `posts-encrypted/<slug>.eml`, stages the `.eml`,
-and unstages the plaintext. Only ciphertext is tracked.
+and unstages the plaintext. Only ciphertext is tracked, and only
+**signed** ciphertext: the hook rejects any staged `.eml` that lacks
+the `Signature:` / `Signing-Key:` headers.
 
 ```text
 posts/                working-tree only; never committed
 posts-encrypted/      the only thing the remote ever sees
 ```
 
-Each `.eml` is a HPKE MIME envelope: a `multipart/hpke+wrapped`
-container with `application/wrapped-keys` (per-recipient CEK wraps)
+Each `.eml` is a HPKE MIME envelope: a `multipart/hpke+wrapped` container
+with `application/wrapped-keys` (per-recipient CEK wraps)
 and `application/aes-gcm` (AES-256-GCM ciphertext) parts. The inner
 payload is a `multipart/mixed` containing the original Markdown and
-every inline image as a base64 attachment.
+every inline image as a base64 attachment. Two outer headers
+authenticate the envelope: `Signature:` (128 hex chars — the raw 64-byte
+ECDSA P-256 signature over `SHA-256("crane-blog-sign-v1" ‖ ciphertext)`) and
+`Signing-Key:` (130 hex chars — the 65-byte uncompressed SEC1 signing public
+key), alongside `Public-Keys:` (recipient key IDs).
 
 ### Frontmatter keys
 
@@ -52,7 +61,33 @@ every inline image as a base64 attachment.
 All other keys are left for the author's own reference inside the
 encrypted body — they are never leaked, because the body is never
 rendered. The outer envelope carries only `Subject: ...` plus the
-MIME headers needed for HPKE envelope framing.
+MIME headers needed for HPKE envelope framing and the signing headers.
+
+### Signing
+
+Every envelope must be signed by the author. One-time setup:
+
+```bash
+# One-time per clone
+scripts/generate-signing-key.sh
+# -> writes keys/<kid>.sign.pub (gitignored) and prints the private
+#    scalar once; export it in every shell that runs encrypt_post:
+export CRANE_BLOG_SIGNING_KEY_ID=<kid>
+export CRANE_BLOG_SIGNING_KEY=<private-scalar-hex>
+```
+
+`keys/` is gitignored — the public half is never committed; the private
+half exists only in the author's environment and in fuji's secrets (the
+smtp container receives the same two env vars via `compose.yml`).
+`encrypt_post` / `smtp_server` sign with these env vars; `decrypt_post`
+resolves the trust anchor from `CRANE_BLOG_SIGNING_KEY_ID` +
+`keys/<kid>.sign.pub`; the browser verifies against the envelope's own
+`Signing-Key` header.
+
+The pre-signing-era posts (unsigned envelopes) were removed from
+`posts-encrypted/` when signing landed; the site is published from
+`posts-encrypted/` only, and the pre-commit hook plus both deploy
+workflows reject unsigned envelopes.
 
 ### Image references
 
@@ -78,7 +113,9 @@ Auth:   none
 The hostname `fuji` is an SSH alias on this Mac, not normal macOS DNS, so
 Mail.app must use the Tailscale IP unless MagicDNS is enabled system-wide.
 Write a normal plaintext email. The fuji container encrypts the body in
-memory with the checked-in public key, wraps it in an HPKE envelope with
+memory with the checked-in public key, signs the envelope with the author
+ECDSA key (env `CRANE_BLOG_SIGNING_KEY_ID` / `CRANE_BLOG_SIGNING_KEY`,
+injected from fuji secrets), wraps it in an HPKE envelope with
 only `Subject: ...` visible, writes only `posts-encrypted/*.eml`, and pushes
 the commit.
 
@@ -105,11 +142,15 @@ git add posts/my-slug.md
 git commit -m "new: my slug"
 # -> staged file becomes posts-encrypted/my-slug.eml
 # -> posts/my-slug.md stays on disk, untracked
+# (the hook runs encrypt_post, so CRANE_BLOG_SIGNING_KEY_ID and
+#  CRANE_BLOG_SIGNING_KEY must be exported in this shell)
 
 # To edit an existing post:
 ./_build/default/tools/decrypt_post.exe posts-encrypted/my-slug.eml
 # -> decrypted markdown + images land in posts/
-# You need your P-256 private key in CRANE_BLOG_PRIVATE_KEY env var.
+# You need your P-256 private key in CRANE_BLOG_PRIVATE_KEY env var,
+# plus CRANE_BLOG_SIGNING_KEY_ID (decrypt_post verifies the envelope's
+# signature against keys/<kid>.sign.pub).
 ```
 
 ## Pipeline
@@ -120,22 +161,31 @@ git commit -m "new: my slug"
    state machine (`src/Smtp.v`), ingests the inbound MIME (`src/MimeIngest.v`)
    and assembles the markdown + frontmatter (`src/PostBuild.v`), encrypts the
    body **in process** (HPKE, via `CryptoSpec.v` + `MimeBuild.v` — no
-   subprocess), writes `posts-encrypted/*.eml`, then commits and pushes. The
-   socket layer is realized by `src/net_helpers.h` (boundary C5) and git/
-   subprocess calls by `src/proc_helpers.h` (C6). No private key lives on
-   fuji. Built native to `smtp_server.exe` by `smtp/Dockerfile`
+   subprocess), signs the ciphertext package with the author ECDSA key
+   (`CRANE_BLOG_SIGNING_KEY_ID` / `CRANE_BLOG_SIGNING_KEY`), writes
+   `posts-encrypted/*.eml`, then commits and pushes. The socket layer is
+   realized by `src/net_helpers.h` (boundary C5) and git/
+   subprocess calls by `src/proc_helpers.h` (C6). No recipient/reader private
+   key lives on fuji; the only key material there is the author's ECDSA
+   signing key, injected as environment from fuji secrets and never written
+   to disk. Built native to `smtp_server.exe` by `smtp/Dockerfile`
    (`FROM crane-blog:builder`).
 2. `src/EncryptPost.v` (Rocq → C++23 → native `tools/encrypt_post.exe`).
    Parses the frontmatter, resolves recipients, builds a `multipart/mixed`
    inner MIME tree, generates a random 32-byte CEK, encrypts the body with
    AES-256-GCM, wraps the CEK for each recipient via HPKE base mode (ECDH
-   P-256 + `custom_kdf_sha256`), and writes the `multipart/hpke+wrapped`
-   envelope to `posts-encrypted/<slug>.eml`. The HPKE protocol layer
+   P-256 + `custom_kdf_sha256`), signs the raw ciphertext package with the
+   author ECDSA key (`sign_post`; env `CRANE_BLOG_SIGNING_KEY_ID` /
+   `CRANE_BLOG_SIGNING_KEY`), and writes the `multipart/hpke+wrapped`
+   envelope with `Signature:` / `Signing-Key:` headers to
+   `posts-encrypted/<slug>.eml`. The HPKE protocol layer
    (`src/CryptoSpec.v`) and MIME construction (`src/MimeBuild.v`) are pure
-   Rocq; only the nine cryptographic primitives cross the FFI, realized
+   Rocq; only the eleven cryptographic primitives cross the FFI, realized
    natively by OpenSSL EVP in `src/crypto_helpers.h` (boundary C1).
 3. `.githooks/pre-commit` calls `_build/default/tools/encrypt_post.exe
-   --stage` for every staged `posts/*.md`.
+   --stage` for every staged `posts/*.md` — and **rejects** any staged
+   `.eml` that lacks the `Signature:` (128 hex) / `Signing-Key:` (130 hex)
+   / `Public-Keys:` headers.
 4. `src/Logic.v` (Rocq → C++23 → native `blog_generator.exe`) reads
    `./posts-encrypted/*.eml`, splits headers from body at the first
    blank line, and renders each file as a page whose `<pre>` holds
@@ -144,21 +194,34 @@ git commit -m "new: my slug"
    strings into HTML, and emits the `<script type="module">` bootstrap that
    loads the WASM decrypt/enroll modules.
 5. `src/DecryptPost.v` (Rocq → C++23 → native `tools/decrypt_post.exe`) is
-   the local inverse: parses the HPKE envelope, unwraps the CEK using the
-   local private key, decrypts the body with AES-256-GCM, and writes the
-   inner MIME parts back to `posts/`. It reuses the same pure-Rocq
-   `CryptoSpec.v` + `MimeBuild.v`.
+   the local inverse: **verifies the ECDSA signature first** — it loads the
+   trust anchor from `CRANE_BLOG_SIGNING_KEY_ID` + `keys/<kid>.sign.pub`
+   and refuses a missing `Signature` header, a `Signing-Key` mismatch, or a
+   failed `verify_post` — then parses the HPKE envelope, unwraps the CEK
+   using the local private key, decrypts the body with AES-256-GCM, and
+   writes the inner MIME parts back to `posts/`. It reuses the same
+   pure-Rocq `CryptoSpec.v` + `MimeBuild.v`.
 6. `src/DecryptApp.v` and `src/EnrollApp.v` (Rocq → C++23 → WASM)
    provide browser-side post decryption and reader enrollment.
    Each is `run : BIO unit` over the `brE` browser effect algebra in
    `src/BrowserEffect.v` (DOM, sessionStorage, IndexedDB, WebAuthn, CSPRNG),
    reusing the **same** pure-Rocq `CryptoSpec.v` HPKE protocol plus
-   `src/InnerMime.v` for rendering. In the browser the nine crypto
+   `src/InnerMime.v` for rendering — and rejecting envelopes whose ECDSA
+   signature does not verify against the envelope's own `Signing-Key`
+   header before decrypting. In the browser the eleven crypto
    primitives are re-pointed (`src/BrowserCrypto.v`) to `crypto.subtle` /
    `getRandomValues`, realized by `EM_ASM` glue in `src/browser_helpers.h`
    (boundaries C2/C3). The Dockerfile `wasm` stage Crane-extracts these and
    links them with `em++` (emsdk 3.1.61, `-O2 -sASYNCIFY`) into
    `static/crane_decrypt.{mjs,wasm}` and `static/crane_enroll.{mjs,wasm}`.
+7. `tests/e2e/roundtrip.spec.ts` (Playwright, on the fuji self-hosted
+   runner) is the browser acceptance gate: **7 test rows** — in-browser
+   enroll via a CDP virtual WebAuthn authenticator (3 authenticator
+   profiles), enroll-fails-visibly, inbox NO-KEY/HAS-KEY coherence, and
+   decrypt-failure visibility — against a signed fixture envelope served
+   over HTTPS. `scripts/check-tail-position.sh` (wired into the e2e and
+   both deploy workflows) gates the freshly extracted C++ against
+   non-tail self-recursion, the WASM stack-overflow class.
 
 ## Verification claims
 
@@ -167,21 +230,31 @@ git commit -m "new: my slug"
   Rocq/coqc installations.
 - Crane extracts the Rocq definitions to C++23 and clang accepts
   the result.
-- `scripts/test-roundtrip.sh` runs end to end with an ephemeral
-  ECDH P-256 keypair: it generates a test key with openssl, encrypts a
-  fixture via `encrypt_post`, decrypts via `decrypt_post`, confirms
-  byte-for-byte round-trip, builds the Rocq/Crane generator in Docker,
+- `scripts/test-roundtrip.sh` runs end to end with ephemeral keypairs:
+  it generates an ECDH P-256 keypair **and an author ECDSA signing
+  keypair** with openssl, encrypts a fixture via `encrypt_post`, asserts
+  the signed envelope headers (`Signature:` / `Signing-Key:`), decrypts
+  via `decrypt_post`, confirms byte-for-byte round-trip, rejects a
+  tampered `Signature` header, builds the Rocq/Crane generator in Docker,
   and confirms the rendered HTML contains no leaks.
 - **The encryption itself is not formally verified.** The HPKE protocol
   composition (wrap/unwrap CEK, body encrypt/decrypt, `custom_kdf_sha256`,
-  P-256 point compression) is pure Rocq in `CryptoSpec.v`, but the nine
-  underlying primitives (ECDH P-256, AES-256-GCM, SHA-256, base64, CSPRNG)
+  P-256 point compression) is pure Rocq in `CryptoSpec.v`, but the eleven
+  underlying primitives (ECDH P-256, AES-256-GCM, SHA-256, ECDSA P-256
+  sign/verify, base64, CSPRNG)
   are stated as axioms and cross an FFI boundary: natively to OpenSSL EVP
   (`crypto_helpers.h`, C1) and in the browser to `crypto.subtle` /
   `getRandomValues` (`browser_helpers.h`, C2). The round-trip/AEAD
-  properties are *stated as axioms* in `CryptoSpec.v`. No verified
-  ECDH/AES-GCM implementation exists in Rocq/Coq today. Every trusted
-  boundary (C1–C13) is enumerated in [`TRUSTED.md`](TRUSTED.md).
+  properties — including `ecdsa_roundtrip` — are *stated as axioms* in
+  `CryptoSpec.v`. No verified
+  ECDH/AES-GCM/ECDSA implementation exists in Rocq/Coq today. Every trusted
+  boundary (C1–C15) is enumerated in [`TRUSTED.md`](TRUSTED.md).
+- The e2e gate (`tests/e2e/`, Playwright + CDP virtual WebAuthn
+  authenticator, 7 rows) runs on the fuji self-hosted runner against the
+  shipped WASM apps; the tail-position gate (`scripts/check-tail-position.sh`)
+  runs in CI on the freshly extracted C++. No Python is involved anywhere
+  in the pipeline (the legacy host-installed python SMTP listener was
+  decommissioned — see `scripts/setup_fuji.sh`).
 
 ## Build
 
