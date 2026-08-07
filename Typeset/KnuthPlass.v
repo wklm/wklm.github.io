@@ -413,10 +413,6 @@ Proof. intros p k Hk. unfold pz_at, build_psums, shrink_upto, take_prefix; cbn [
    We return the list of legal interior breakpoints together with the
    penalty value and flagged-ness at each (for forced/penalty handling). *)
 
-(* nth item, default to a forbidden penalty (no break) when out of range. *)
-Definition item_at (p : paragraph) (k : nat) : item :=
-  nth k p forbidden_break.
-
 (* Is there a legal break *after* item index k (i.e. at position k+1)? *)
 Definition legal_after (p : paragraph) (k : nat) : bool :=
   match nth k p forbidden_break with

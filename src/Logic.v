@@ -255,9 +255,6 @@ Record EncryptedPost : Type := mkEncryptedPost {
   ep_body : string
 }.
 
-Definition empty_ep : EncryptedPost :=
-  mkEncryptedPost "" "" "".
-
 Definition public_subject : string := "Subject: ...".
 
 (* Truncated SHA-256 fingerprint of the full envelope ([ep_body] — public

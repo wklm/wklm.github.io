@@ -13,3 +13,15 @@
  (package crane_blog)
  (theories Stdlib Crane ITree ExtLib Paco)
  (plugins rocq-crane.plugin))
+
+; @proofs alias — Typeset is a sibling theory with no inbound dependents that
+; force every module to build: dune's coq.theory compiles .vo files lazily per
+; module, so Tests.v (the typesetter test suite: TeX-parity, T6 optimality and
+; monotonicity fixtures) was never built by any target.  Depending on the .vo
+; TARGETS makes [dune build @proofs] machine-check every Typeset module,
+; including Tests.vo.  (Extract.vo runs the typeset_demo Crane extraction as a
+; build side-effect; output lands in _build/default/Typeset.)
+(rule
+ (alias proofs)
+ (deps (glob_files *.vo))
+ (action (progn)))

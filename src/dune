@@ -12,11 +12,14 @@
 
 ; @proofs alias — compiles ALL .v source files in the theory, so every theorem
 ; (T1, T5, T6, T7, and the new Phase 1–4 theorems) is machine-checked in CI on
-; every push.  Depending on the .v sources forces dune to compile each one to
-; .vo via the coq.theory rules.  Run as [dune build @proofs] in CI.
+; every push.  Depending on the .v SOURCES would NOT force compilation: that
+; glob expands against the source tree and the coq.theory per-module .vo rules
+; stay lazy — WF6 proved Spec.v (the privacy theorem) and Decrypt.v were never
+; built by @proofs.  Depending on the .vo TARGETS instead forces dune to build
+; every module of the theory.  Run as [dune build @proofs] in CI.
 (rule
  (alias proofs)
- (deps (glob_files *.v))
+ (deps (glob_files *.vo))
  (action (progn)))
 
 (rule

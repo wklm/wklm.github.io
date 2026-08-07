@@ -38,11 +38,6 @@ Notation scanner_fuel := 2000000%nat.
 Notation mime_fuel    := 65536%nat.
 Notation lookup_fuel  := 2048%nat.
 
-(* Sentinel returned when fuel is exhausted.  Empty string "" is a
-   valid result for empty plaintext/headers; this sentinel ensures
-   callers can distinguish exhaustion from legitimate empty output. *)
-Definition fuel_exhausted : string := "__FUEL_EXHAUSTED__".
-
 (* ---- Basic primitives ---------------------------------------------- *)
 
 Definition int_eqb (a b : int) : bool := eqb a b.
