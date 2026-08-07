@@ -57,12 +57,17 @@ fi
 echo "staging: rendering _site ..."
 rm -rf _site
 mkdir -p _site
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
-  -v "$PWD/static:/site/static:ro" \
-  -v "$PWD/_site:/site/_site" \
-  "$gen_image"
+# DinD-safe: the self-hosted runner mounts only docker.sock, so -v bind mounts
+# resolve against the HOST daemon and $PWD/... is an empty dir.  Use docker cp
+# instead (works identically on a plain host with a local daemon).
+cid="$(docker create "$gen_image")"
+trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+docker cp posts-encrypted "$cid":/site/posts-encrypted
+docker cp static "$cid":/site/static
+docker start -a "$cid"
+docker cp "$cid":/site/_site ./_site
+docker rm -f "$cid" >/dev/null 2>&1 || true
+trap - EXIT
 
 # ---- 3. Sanity: artifacts + script tags landed in _site -------------------
 for f in crane_decrypt.mjs crane_decrypt.wasm crane_enroll.mjs crane_enroll.wasm; do
