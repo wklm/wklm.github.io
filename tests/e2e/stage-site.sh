@@ -65,7 +65,9 @@ trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 docker cp posts-encrypted "$cid":/site/posts-encrypted
 docker cp static "$cid":/site/static
 docker start -a "$cid"
-docker cp "$cid":/site/_site ./_site
+# Trailing /. copies CONTENTS into the existing _site dir
+# (a bare path would nest as _site/_site).
+docker cp "$cid":/site/_site/. ./_site/
 docker rm -f "$cid" >/dev/null 2>&1 || true
 trap - EXIT
 
