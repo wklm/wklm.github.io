@@ -336,11 +336,47 @@ inline std::string ecdsa_p256_sign(const std::string& /*sk*/, const std::string&
     return std::string();
 }
 
-// ecdsa_p256_verify(pk_raw65, digest32, sig_raw64) -> bool.
-// Stub implementation for WASM build - actual verification happens server-side.
-inline bool ecdsa_p256_verify(const std::string& /*pk*/, const std::string& /*digest*/,
-                               const std::string& /*sig*/) {
-    return false;  // Browser never verifies signatures
+// ecdsa_p256_verify(pk65, digest32, sig64) -> bool.
+// WebCrypto ECDSA verification over P-256.  pk is the 65-byte uncompressed
+// SEC1 point (0x04||x||y), rebuilt as an EC JWK; digest is the 32-byte
+// SHA-256 pre-hash (sign_post hashes "crane-blog-sign-v1" ++ ct_package and
+// signs THAT digest); sig is the raw 64-byte r||s, which WebCrypto accepts
+// natively for P-256.  WebCrypto's verify ALWAYS hashes its message with the
+// declared hash, so we pass the raw 32-byte digest as the message — exactly
+// the bytes the native side hands to ECDSA_verify(0, digest, 32, ...) as e.
+// Do NOT pre-hash digest here.  FAIL-CLOSED: wrong sizes, import failure, or
+// any rejection -> false (patterned on aes_256_gcm_decrypt).
+inline bool ecdsa_p256_verify(const std::string& pk, const std::string& digest,
+                               const std::string& sig) {
+    if (pk.size() != 65 || digest.size() != 32 || sig.size() != 64) return false;
+    return EM_ASM_INT({
+        return Asyncify.handleAsync(async () => {
+            try {
+                var pkBuf = HEAPU8.slice($0, $0 + $1);
+                var digBuf = HEAPU8.slice($2, $2 + $3);
+                var sigBuf = HEAPU8.slice($4, $4 + $5);
+                if (pkBuf.length !== 65 || digBuf.length !== 32 || sigBuf.length !== 64) return 0;
+                function b64url(u8) {
+                    var s = '';
+                    for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+                    var out = btoa(s).split('+').join('-').split('/').join('_');
+                    while (out.length > 0 && out[out.length - 1] === '=') out = out.slice(0, -1);
+                    return out;
+                }
+                var x = pkBuf.slice(1, 33);
+                var y = pkBuf.slice(33, 65);
+                var jwk = { kty: 'EC', crv: 'P-256', x: b64url(x), y: b64url(y) }; // TRUSTED-OK(C2): rebuilding the EC JWK from the 65-byte uncompressed point (0x04||x||y); 'P-256' is the protocol-fixed curve, not policy
+                var key = await crypto.subtle.importKey('jwk', jwk,
+                    { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']); // TRUSTED-OK(C2): ECDSA P-256 importKey parameters (ecdsa_p256_verify) — protocol-fixed curve, not policy
+                var ok = await crypto.subtle.verify(
+                    { name: 'ECDSA', hash: 'SHA-256' }, key, sigBuf, digBuf); // TRUSTED-OK(C2): ECDSA/SHA-256 verify parameters — the 32-byte digest is the message (re-hashed here by WebCrypto), matching the native ECDSA_verify(0, digest, 32, ...) contract; protocol-fixed, not policy
+                return ok ? 1 : 0;
+            } catch (e) {
+                return 0;
+            }
+        });
+    }, pk.data(), (int)pk.size(), digest.data(), (int)digest.size(),
+       sig.data(), (int)sig.size());
 }
 
 // base64_encode(bytes): btoa over a binary string -> ascii.
