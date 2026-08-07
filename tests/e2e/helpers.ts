@@ -242,7 +242,7 @@ function resolveSigningKey(keysDir: string): { signKid: string; signPrivHex: str
     'openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/sign.pem" 2>/dev/null',
     'pub_hex=$(openssl ec -in "$scratch/sign.pem" -pubout -conv_form uncompressed 2>/dev/null |',
     '  openssl pkey -pubin -outform DER 2>/dev/null |',
-    '  tail -c 65 | xxd -p -c 999 | tr -d \'\n\')',
+    '  tail -c 65 | od -An -tx1 -v | tr -d \' \n\')',
     'priv_hex=$(openssl ec -in "$scratch/sign.pem" -text -noout 2>/dev/null |',
     '  awk \'/priv:/{f=1;next}/pub:/{f=0}f\' | tr -d \' :\n\')',
     'if [ ${#priv_hex} -eq 66 ]; then priv_hex=${priv_hex#00}; fi',
@@ -250,7 +250,7 @@ function resolveSigningKey(keysDir: string): { signKid: string; signPrivHex: str
     '  echo "signing key extraction failed (priv_len=${#priv_hex} want 64, pub_len=${#pub_hex} want 130)" >&2',
     '  exit 1',
     'fi',
-    'key_id=$(printf \'%s\' "$pub_hex" | xxd -r -p | shasum -a 256 | cut -c 1-12)',
+    'key_id=$(printf \'%s\' "$pub_hex" | od -An -tx1 -v | tr -d \' \n\' | shasum -a 256 | cut -c 1-12)',
     'printf \'%s %s %s\' "$key_id" "$pub_hex" "$priv_hex"',
   ].join('\n');
   const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
