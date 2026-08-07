@@ -85,8 +85,9 @@ jobs:
 
       - name: Install Playwright Chromium
         # DinD job containers are ephemeral and don't see the host's browser
-        # cache; download the pinned Chromium into the job container.
-        run: npx --no-install playwright install chromium
+        # cache; download the pinned Chromium AND its system libraries into the
+        # job container (running as root, so --with-deps can apt-get them).
+        run: npx --no-install playwright install --with-deps chromium
 
       - name: Stage servable _site (extract WASM + render)
         # The image is already built above; skip the in-script rebuild.
