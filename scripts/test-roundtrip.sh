@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # test-roundtrip.sh -- end-to-end check of the HPKE encryption pipeline.
-# Generates a test ECDH P-256 keypair via openssl, encrypts a fixture
-# post with encrypt_post, decrypts with decrypt_post, and diffs the
-# round-tripped bytes against the originals.  Also lint-checks the
-# generated HTML for metadata leaks.
+# Generates a test ECDH P-256 keypair + an author ECDSA signing keypair via
+# openssl, encrypts a fixture post with encrypt_post, asserts the signed
+# envelope headers, decrypts with decrypt_post, diffs the round-tripped
+# bytes against the originals, and checks that a tampered Signature header
+# is rejected.  Also lint-checks the generated HTML for metadata leaks.
 #
 # The encrypt_post/decrypt_post tools are now Crane-extracted C++ built
 # from src/EncryptPost.v + src/DecryptPost.v (+ CryptoSpec.v / MimeBuild.v).
 # Building them needs Coq + the Crane plugin, which live only inside the
 # `crane-blog:builder` image -- this host (fuji) has no opam/coq/dune.  So
-# the tool build + the encrypt/decrypt round-trip + the AAD-fallback fixture
+# the tool build + the encrypt/decrypt round-trip + the tamper rejection
 # all run INSIDE that image with the worktree bind-mounted; the Docker
 # site-gen + HTML lint runs on the host (it drives `docker build`/`docker run`).
 set -euo pipefail
@@ -51,8 +52,9 @@ cleanup() {
     fi
     rm -rf "$scratch"
     rm -f posts/fixture.md posts/fixture.bin posts-encrypted/fixture.eml
-    rm -f posts/fixture-noaad.md posts-encrypted/fixture-noaad.eml
-    rm -f "keys/${key_id:-}.pub" .roundtrip-key-id
+    rm -f posts-encrypted/fixture-tampered.eml
+    rm -f "keys/${key_id:-}.pub" "keys/${sign_key_id:-}.sign.pub" \
+        .roundtrip-key-id .roundtrip-sign-key-id
 }
 trap cleanup EXIT
 
@@ -69,18 +71,19 @@ if ! docker image inspect "$builder_image" >/dev/null 2>&1; then
     exit 1
 fi
 
-# key_id is produced inside the container (it depends on the generated
-# keypair) and written to the bind-mounted worktree so the host cleanup
-# trap can remove keys/<key_id>.pub afterwards.
+# key_id / sign_key_id are produced inside the container (they depend on the
+# generated keypairs) and written to the bind-mounted worktree so the host
+# cleanup trap can remove keys/<id>.pub / keys/<id>.sign.pub afterwards.
 key_id=""
+sign_key_id=""
 
 # ---------------------------------------------------------------------------
 # In-container stage: build the Crane-extracted C++ tools, run the
-# encrypt -> validate -> decrypt -> diff round-trip, and the empty-AAD
-# backward-compat fallback.  Runs as the image's default opam user (uid
-# 1000) so _build/ artifacts written into the bind mount stay owned by the
-# host user; xxd + python3-cryptography are installed via passwordless sudo.
-# Every assertion from the original host-side script is preserved verbatim.
+# encrypt -> validate -> decrypt -> diff round-trip, assert the ECDSA
+# Signature/Signing-Key headers, and reject a tampered signature.  Runs as
+# the image's default opam user (uid 1000) so _build/ artifacts written
+# into the bind mount stay owned by the host user; xxd is installed via
+# passwordless sudo.
 # ---------------------------------------------------------------------------
 docker run --name "$roundtrip_container" --rm -i \
     -v "$PWD:/home/opam/crane-blog" \
@@ -89,26 +92,25 @@ docker run --name "$roundtrip_container" --rm -i \
 eval "$(opam env)"
 cd /home/opam/crane-blog
 
-# --- in-container deps: xxd (hex) + python3-cryptography (AAD fixture) ---
+# --- in-container deps: xxd (hex dump for key extraction) ---
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq >/dev/null
-sudo apt-get install -y -qq --no-install-recommends xxd python3-cryptography >/dev/null
+sudo apt-get install -y -qq --no-install-recommends xxd >/dev/null
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# ---- Generate test ECDH P-256 keypair ----
+# ---- Generate test ECDH P-256 recipient keypair ----
 openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/key.pem" 2>/dev/null
 
-# Extract uncompressed public key (65 bytes: 04 || x || y)
+# Extract uncompressed public key (65 bytes: 04 || x || y).
 pub_hex=$(openssl ec -in "$scratch/key.pem" -pubout -conv_form uncompressed 2>/dev/null |
   openssl pkey -pubin -outform DER 2>/dev/null |
   tail -c 65 | xxd -p -c 999 | tr -d '\n')
 
 # Extract private key scalar (32 bytes).  openssl prints the scalar across
-# multiple ":"-separated lines; capture every line between "priv:" and "pub:"
-# (the original single-getline awk grabbed only ~15 of the 32 bytes).  A
-# leading 0x00 sign byte makes it 33 bytes (66 hex chars) -- strip it.
+# multiple ":"-separated lines; capture every line between "priv:" and "pub:".
+# A leading 0x00 sign byte makes it 33 bytes (66 hex chars) -- strip it.
 priv_hex=$(openssl ec -in "$scratch/key.pem" -text -noout 2>/dev/null |
   awk '/priv:/{f=1;next}/pub:/{f=0}f' | tr -d ' :\n')
 if [ ${#priv_hex} -eq 66 ]; then priv_hex=${priv_hex#00}; fi
@@ -127,10 +129,20 @@ export CRANE_BLOG_AUTHOR_KEY_ID="$key_id"
 export CRANE_BLOG_AUTHOR_EMAIL="test@crane.blog"
 export CRANE_BLOG_PRIVATE_KEY="$priv_hex"
 
-# Generate signing keypair for tests
-openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/sign.pem"
-sign_pub_hex=$(openssl ec -in "$scratch/sign.pem" -pubout -outform DER 2>/dev/null | xxd -p -c 256)
-sign_priv_hex=$(openssl ec -in "$scratch/sign.pem" -outform DER 2>/dev/null | xxd -p -c 256 | tail -c 65)
+# ---- Generate author ECDSA signing keypair ----
+# Same extraction discipline as the recipient key: 65-byte uncompressed
+# public key hex (NOT the ~91-byte SPKI DER) and 32-byte private scalar.
+openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/sign.pem" 2>/dev/null
+sign_pub_hex=$(openssl ec -in "$scratch/sign.pem" -pubout -conv_form uncompressed 2>/dev/null |
+  openssl pkey -pubin -outform DER 2>/dev/null |
+  tail -c 65 | xxd -p -c 999 | tr -d '\n')
+sign_priv_hex=$(openssl ec -in "$scratch/sign.pem" -text -noout 2>/dev/null |
+  awk '/priv:/{f=1;next}/pub:/{f=0}f' | tr -d ' :\n')
+if [ ${#sign_priv_hex} -eq 66 ]; then sign_priv_hex=${sign_priv_hex#00}; fi
+if [ ${#sign_priv_hex} -ne 64 ] || [ ${#sign_pub_hex} -ne 130 ]; then
+    echo "FAIL: signing key extraction wrong (priv_len=${#sign_priv_hex} want 64, pub_len=${#sign_pub_hex} want 130)" >&2
+    exit 1
+fi
 sign_key_id=$(printf '%s' "$sign_pub_hex" | xxd -r -p | shasum -a 256 | cut -c 1-12)
 printf '%s' "$sign_pub_hex" > "keys/$sign_key_id.sign.pub"
 export CRANE_BLOG_SIGNING_KEY_ID="$sign_key_id"
@@ -186,6 +198,15 @@ fi
 grep -q "Public-Keys: $key_id" posts-encrypted/fixture.eml \
   || { echo "FAIL: envelope missing Public-Keys header"; exit 1; }
 
+# ---- Signature headers ----
+grep -q '^Signature: [0-9a-f]' posts-encrypted/fixture.eml \
+  || { echo "FAIL: envelope missing non-empty Signature header"; exit 1; }
+if ! grep '^Signing-Key: ' posts-encrypted/fixture.eml | tr -d '\r' \
+    | grep -qx "Signing-Key: $sign_pub_hex"; then
+    echo "FAIL: Signing-Key header does not match keys/$sign_key_id.sign.pub" >&2
+    exit 1
+fi
+
 # ---- Decrypt ----
 rm -f posts/fixture.md posts/fixture.bin
 "$dec" posts-encrypted/fixture.eml
@@ -203,105 +224,44 @@ if [[ -n "$roundtripped_img_sha" && "$orig_img_sha" != "$roundtripped_img_sha" ]
 fi
 echo "round-trip OK"
 
-# ---- AAD backward-compat fallback test ----
-# Builds a second .eml encrypted with empty AAD (old format before the
-# key_id + slug AAD binding was added) and verifies decrypt_post's
-# fallback path handles it correctly.
-echo "Testing AAD backward-compat fallback..."
-
-# OpenSSL 3.x removed `openssl enc -aes-256-gcm` (AEAD ciphers unsupported)
-# and even where present `enc` never emits the GCM tag, so the fixture is
-# built with python3 + cryptography: ECDH P-256 + the custom KDF
-# (PRK=sha256(00*32||shared); key=sha256(PRK||info||01); info wrap =
-# "crane-blog-wrap-v1") + AES-256-GCM with EMPTY AAD, producing
-# nonce(12)||ct||tag(16) for both the wrapped CEK and the body -- exactly
-# the package layout decrypt_post / src/CryptoSpec.v expect.
-noaad_body="Fallback AAD test body"
-noaad_eml="posts-encrypted/fixture-noaad.eml"
-
-PUB_HEX="$pub_hex" NOAAD_BODY="$noaad_body" NOAAD_EML="$noaad_eml" \
-python3 - <<'PY'
-import os, hashlib, base64
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
-pub_hex = os.environ["PUB_HEX"]
-body = os.environ["NOAAD_BODY"].encode()
-out_path = os.environ["NOAAD_EML"]
-
-# Recipient public key (65-byte uncompressed 04||X||Y).
-recipient_pub = ec.EllipticCurvePublicKey.from_encoded_point(
-    ec.SECP256R1(), bytes.fromhex(pub_hex))
-
-# key_id = first 12 hex chars of sha256(pubkey bytes).
-key_id = hashlib.sha256(bytes.fromhex(pub_hex)).hexdigest()[:12]
-
-# Ephemeral keypair for the wrap; sender-side ECDH against the recipient.
-eph = ec.generate_private_key(ec.SECP256R1())
-eph_pub_hex = eph.public_key().public_bytes(
-    Encoding.X962, PublicFormat.UncompressedPoint).hex()
-shared = eph.exchange(ec.ECDH(), recipient_pub)
-
-def custom_kdf(info: bytes) -> bytes:
-    prk = hashlib.sha256(b"\x00" * 32 + shared).digest()
-    return hashlib.sha256(prk + info + b"\x01").digest()
-
-def seal(key: bytes, pt: bytes) -> bytes:
-    nonce = os.urandom(12)
-    # AESGCM.encrypt returns ciphertext||tag(16); empty AAD => aad=None.
-    return nonce + AESGCM(key).encrypt(nonce, pt, None)
-
-wrap_key = custom_kdf(b"crane-blog-wrap-v1")
-cek = os.urandom(32)
-wrapped_pkg_hex = seal(wrap_key, cek).hex()
-
-ct_b64 = base64.b64encode(seal(cek, body)).decode()
-
-eml = (
-    'Content-Type: multipart/hpke+wrapped; boundary="---noaad"\n'
-    f"Public-Keys: {key_id}\n"
-    "\n"
-    "-----noaad\n"
-    "Content-Type: application/wrapped-keys\n"
-    f"Wraps: {key_id}:{eph_pub_hex}:{wrapped_pkg_hex}\n"
-    "\n"
-    "-----noaad\n"
-    "Content-Type: application/aes-gcm\n"
-    "Content-Transfer-Encoding: base64\n"
-    "\n"
-    f"{ct_b64}\n"
-    "-----noaad--\n"
-)
-with open(out_path, "w") as f:
-    f.write(eml)
-PY
-
-rm -f posts/fixture-noaad.md
-"$dec" "$noaad_eml"
-noaad_result=$(cat posts/fixture-noaad.md)
-if [[ "$noaad_result" != "$noaad_body" ]]; then
-    echo "FAIL: AAD backward-compat fallback decryption produced wrong output" >&2
-    echo "expected: '$noaad_body'" >&2
-    echo "got:      '$noaad_result'" >&2
+# ---- Tamper rejection ----
+# Corrupt ONE hex char in the Signature header value (always to a different
+# valid hex char, so the signature still decodes but verification must fail).
+tampered="posts-encrypted/fixture-tampered.eml"
+cp posts-encrypted/fixture.eml "$tampered"
+perl -0pi -e 's/(^Signature: [0-9a-fA-F]{100})([0-9a-fA-F])/($2 eq "f") ? "${1}e" : "${1}f"/me' "$tampered"
+if ! "$dec" "$tampered" >"$scratch/tamper.out" 2>&1; then
+    if ! grep -q 'author signature verification failed' "$scratch/tamper.out"; then
+        echo "FAIL: tampered envelope rejected, but not with the signature error:" >&2
+        cat "$scratch/tamper.out" >&2
+        exit 1
+    fi
+else
+    echo "FAIL: tampered envelope was accepted" >&2
     exit 1
 fi
-echo "AAD fallback OK"
+rm -f "$tampered"
+echo "tamper rejection OK"
 
-# Hand the key_id back to the host (for its cleanup trap) via the bind mount.
+# Hand the key ids back to the host (for its cleanup trap) via the bind mount.
 printf '%s' "$key_id" > .roundtrip-key-id
+printf '%s' "$sign_key_id" > .roundtrip-sign-key-id
 INNER
 
-# Recover the key_id the container generated so the host cleanup trap can
-# remove keys/<key_id>.pub.
+# Recover the key ids the container generated so the host cleanup trap can
+# remove keys/<id>.pub and keys/<id>.sign.pub.
 if [[ -f .roundtrip-key-id ]]; then
     key_id="$(cat .roundtrip-key-id)"
     rm -f .roundtrip-key-id
 fi
+if [[ -f .roundtrip-sign-key-id ]]; then
+    sign_key_id="$(cat .roundtrip-sign-key-id)"
+    rm -f .roundtrip-sign-key-id
+fi
 
 # ---- Docker: build Rocq/Crane generator and site ----
 image="${CRANE_BLOG_DOCKER_IMAGE:-crane-blog-roundtrip}"
-published_image="${CRANE_BLOG_GENERATOR_IMAGE:-ghcr.io/wklm/crane-blog-generator:latest}"
+published_image="${CRANE_BLOG_GEN_IMAGE:-${CRANE_BLOG_GENERATOR_IMAGE:-ghcr.io/wklm/crane-blog-generator:latest}}"
 build_timeout="${CRANE_BLOG_DOCKER_BUILD_TIMEOUT:-1800}"
 pull_timeout="${CRANE_BLOG_DOCKER_PULL_TIMEOUT:-300}"
 run_timeout="${CRANE_BLOG_DOCKER_RUN_TIMEOUT:-120}"

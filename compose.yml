@@ -23,6 +23,9 @@ services:
       BLOG_REPO_PATH: "/repo"
       BLOG_BRANCH: "main"
       CRANE_BLOG_AUTHOR_KEY_ID: ""
+      # Author ECDSA signing key (CRANE_BLOG_SIGNING_KEY_ID / CRANE_BLOG_SIGNING_KEY), provided via fuji secrets; see scripts/generate-signing-key.sh
+      CRANE_BLOG_SIGNING_KEY_ID: ""
+      CRANE_BLOG_SIGNING_KEY: ""
       BLOG_PUBLIC_KEYS: ""
       ENCRYPT_POST_BIN: "/usr/local/bin/encrypt_post"
       # Comma-separated allowlist of MAIL FROM addresses. Empty = accept any.
