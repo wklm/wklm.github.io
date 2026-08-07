@@ -3,6 +3,15 @@
 # change. Post-only commits pull the existing runtime image and mount the new
 # posts-encrypted/ tree, so publishing a new encrypted post avoids the slow
 # Rocq/opam build path.
+#
+# NOTE (WF9 reconciliation): this workflow is the GitHub Pages mirror of
+# .forgejo/workflows/deploy.yml (the primary, self-hosted deploy).  Both
+# enforce the same policy set: source presence/tripwire, single-source
+# contract, shim thinness, ciphertext-only + signed-envelope policy,
+# generated-site lint, and the WF9 tail-position stack gate on the freshly
+# extracted C++.  The GitHub-side differences are purely mechanical (GHCR
+# image push, Pages artifact upload).  Keep the policy steps in sync with
+# the Forgejo workflows.
 
 name: Deploy Verified Blog
 
@@ -126,7 +135,7 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Check public ciphertext policy
+      - name: Check public ciphertext policy (incl. signed-envelope requirement)
         shell: bash
         run: |
           set -euo pipefail
@@ -148,11 +157,34 @@ jobs:
               echo "$eml is not a recognized encrypted envelope format (HPKE or PGP/MIME)" >&2
               exit 1
             fi
+            if ! grep -qE '^Signature: [0-9a-f]{128}$' <<<"$clean"; then
+              echo "$eml is missing the 64-byte hex Signature header (128 hex chars) -- signed envelopes only" >&2
+              exit 1
+            fi
+            if ! grep -qE '^Signing-Key: [0-9a-f]{130}$' <<<"$clean"; then
+              echo "$eml is missing the 65-byte uncompressed hex Signing-Key header (130 hex chars) -- signed envelopes only" >&2
+              exit 1
+            fi
             if grep -Eq '^(From|To|Date): ' <<<"$clean"; then
               echo "$eml exposes sender, recipient, or date metadata" >&2
               exit 1
             fi
           done
+
+      # WF9 tail-position stack gate.  The extracted C++ lives in the builder
+      # stage; on generator commits the layers are already in the runner's
+      # gha cache from the generator-image job, so this build is mostly a
+      # cache hit (on post-only commits it re-warms from the same cache).
+      - name: Tail-position stack gate on extracted C++ (WF9)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --target builder -t crane-blog:builder .
+          rm -rf /tmp/formalblog-cpp && mkdir -p /tmp/formalblog-cpp
+          docker run --rm crane-blog:builder bash -c \
+            'cd /home/opam/crane-blog/_build/default/FormalBlog && tar -cf - *.cpp' \
+            | tar -xf - -C /tmp/formalblog-cpp
+          bash scripts/check-tail-position.sh /tmp/formalblog-cpp
 
       - name: Log in to GHCR
         uses: docker/login-action@v3

@@ -1,8 +1,11 @@
 # Forgejo Actions deploy → wklm.online (served by git-pages via cloudflared).
 # Publish mechanism adopted from the proven forgejo/main workflow (git-pages
 # HTTP PUT of a tar with the Host header), hardened with the source-integrity,
-# ciphertext-only, and generated-site policy checks. Runs on the self-hosted
-# runner's docker executor; uses the host Docker daemon (cached layers).
+# ciphertext-only, signed-envelope, and generated-site policy checks, plus the
+# WF9 tail-position stack gate on the freshly extracted C++. Runs on the
+# self-hosted runner's docker executor; uses the host Docker daemon (cached
+# layers).  Policy set is mirrored in .github/workflows/deploy.yml (GH Pages)
+# and .forgejo/workflows/e2e.yml (Facet A WASM gate).
 name: Deploy Verified Blog (wklm.online)
 
 on:
@@ -28,23 +31,40 @@ jobs:
       - name: Shim thinness (no ceremony/protocol policy literals; async fails closed)
         run: bash scripts/check-shim-thinness.sh
 
-      - name: Public ciphertext policy
+      - name: Public ciphertext policy (incl. signed-envelope requirement)
         run: |
           set -eu
           if ls posts/*.md >/dev/null 2>&1; then echo 'Plaintext posts/*.md present — refusing.'; exit 1; fi
           for eml in posts-encrypted/*.eml; do
             [ -e "$eml" ] || continue
-            if ! tr -d '\r' < "$eml" | grep -qx 'Subject: \.\.\.'; then
+            clean="$(tr -d '\r' < "$eml")"
+            if ! printf '%s\n' "$clean" | grep -qx 'Subject: \.\.\.'; then
               echo "$eml: outer Subject not placeholder. File head:"
               head -n 5 "$eml"
               exit 1
             fi
-            tr -d '\r' < "$eml" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
-            if tr -d '\r' < "$eml" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+            printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
+            printf '%s\n' "$clean" | grep -qE '^Signature: [0-9a-f]{128}$' \
+              || { echo "$eml: missing 64-byte hex Signature header (128 hex chars) — signed envelopes only"; exit 1; }
+            printf '%s\n' "$clean" | grep -qE '^Signing-Key: [0-9a-f]{130}$' \
+              || { echo "$eml: missing 65-byte uncompressed hex Signing-Key header (130 hex chars) — signed envelopes only"; exit 1; }
+            if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
           done
 
-      - name: Build generator image
-        run: docker build -t crane-blog .
+      - name: Build generator image (+ builder stage for the tail-position gate)
+        run: |
+          set -eu
+          docker build -t crane-blog .
+          docker build --target builder -t crane-blog:builder .
+
+      - name: Tail-position stack gate on extracted C++ (WF9)
+        run: |
+          set -eu
+          rm -rf /tmp/formalblog-cpp && mkdir -p /tmp/formalblog-cpp
+          docker run --rm crane-blog:builder bash -c \
+            'cd /home/opam/crane-blog/_build/default/FormalBlog && tar -cf - *.cpp' \
+            | tar -xf - -C /tmp/formalblog-cpp
+          bash scripts/check-tail-position.sh /tmp/formalblog-cpp
 
       - name: Generate site
         run: |

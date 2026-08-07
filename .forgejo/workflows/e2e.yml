@@ -51,6 +51,35 @@ jobs:
       - name: Build WASM image (crane_{decrypt,enroll}.{mjs,wasm})
         run: docker build --target wasm -t "$CRANE_BLOG_WASM_IMAGE" .
 
+      # The wasm stage depends on the builder stage, so this is a cache hit;
+      # it tags the stage so the WF9 tail-position gate can extract the
+      # freshly extracted C++ (same policy set as the deploy workflow).
+      - name: Tag builder stage (for the tail-position gate)
+        run: docker build --target builder -t crane-blog:builder .
+
+      - name: Tail-position stack gate on extracted C++ (WF9)
+        run: |
+          set -eu
+          rm -rf /tmp/formalblog-cpp && mkdir -p /tmp/formalblog-cpp
+          docker run --rm crane-blog:builder bash -c \
+            'cd /home/opam/crane-blog/_build/default/FormalBlog && tar -cf - *.cpp' \
+            | tar -xf - -C /tmp/formalblog-cpp
+          bash scripts/check-tail-position.sh /tmp/formalblog-cpp
+
+      - name: Public ciphertext policy (incl. signed-envelope requirement)
+        run: |
+          set -eu
+          if ls posts/*.md >/dev/null 2>&1; then echo 'Plaintext posts/*.md present — refusing.'; exit 1; fi
+          for eml in posts-encrypted/*.eml; do
+            [ -e "$eml" ] || continue
+            clean="$(tr -d '\r' < "$eml")"
+            printf '%s\n' "$clean" | grep -qx 'Subject: \.\.\.' || { echo "$eml: outer Subject not placeholder"; exit 1; }
+            printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
+            printf '%s\n' "$clean" | grep -qE '^Signature: [0-9a-f]{128}$' || { echo "$eml: missing 64-byte hex Signature"; exit 1; }
+            printf '%s\n' "$clean" | grep -qE '^Signing-Key: [0-9a-f]{130}$' || { echo "$eml: missing 65-byte uncompressed hex Signing-Key"; exit 1; }
+            if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+          done
+
       - name: Build runtime generator image
         run: docker build --target runtime -t "$CRANE_BLOG_GEN_IMAGE" .
 

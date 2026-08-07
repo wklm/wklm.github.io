@@ -98,6 +98,14 @@ if [[ ${#emls[@]} -gt 0 ]]; then
             echo "pre-commit: refusing $eml; expected HPKE multipart/hpke+wrapped envelope" >&2
             exit 1
         fi
+        if ! git show ":$eml" | tr -d '\r' | grep -qE '^Signature: [0-9a-f]{128}$'; then
+            echo "pre-commit: refusing $eml; missing 64-byte hex Signature header (128 hex chars) -- signed envelopes only" >&2
+            exit 1
+        fi
+        if ! git show ":$eml" | tr -d '\r' | grep -qE '^Signing-Key: [0-9a-f]{130}$'; then
+            echo "pre-commit: refusing $eml; missing 65-byte uncompressed hex Signing-Key header (130 hex chars) -- signed envelopes only" >&2
+            exit 1
+        fi
         if ! git show ":$eml" | tr -d '\r' | grep -q 'Public-Keys: '; then
             echo "pre-commit: refusing $eml; missing Public-Keys header" >&2
             exit 1
