@@ -285,14 +285,25 @@ aes_256_gcm_decrypt(std::string key, std::string nonce,
 
 // ---- 10. ECDSA P-256 sign -------------------------------------------------
 // sign(sk, digest32) -> 64-byte raw signature (r(32) || s(32)); "" on error.
+//
+// Contract: the 32-byte `digest` argument is the MESSAGE, not e. It is hashed
+// with SHA-256 here before signing, so e = SHA-256(digest) on both the native
+// and browser sides: WebCrypto's ECDSA (hash: 'SHA-256') hashes the message it
+// is given (crypto.subtle.sign({name:'ECDSA', hash:'SHA-256'}, key, digest))
+// and this realization does the same. Never sign a digest that was not
+// produced by sign_post — the FFI treats that 32-byte pre-hash as the message
+// that ECDSA's own hashing step consumes.
 inline std::string ecdsa_p256_sign(std::string sk, std::string digest) {
     using namespace crane_crypto_detail;
     if (sk.size() != 32 || digest.size() != 32) return std::string();
+    // e = SHA-256(digest): WebCrypto hashes the message input, so we must too
+    // (otherwise native signatures would fail WebCrypto verification).
+    std::string d2 = sha256(digest);
     EC_KEY* key = ec_key_from_scalar(sk, false);
     if (!key) return std::string();
     unsigned char der_sig[72];
     unsigned int der_len = 0;
-    if (ECDSA_sign(0, reinterpret_cast<const unsigned char*>(digest.data()), 32,
+    if (ECDSA_sign(0, reinterpret_cast<const unsigned char*>(d2.data()), 32,
                    der_sig, &der_len, key) != 1) {
         EC_KEY_free(key);
         return std::string();
@@ -331,9 +342,18 @@ inline std::string ecdsa_p256_sign(std::string sk, std::string digest) {
 
 // ---- 11. ECDSA P-256 verify -----------------------------------------------
 // verify(pk, digest32, sig64) -> true if valid, false otherwise.
+//
+// Contract (mirror of ecdsa_p256_sign): the 32-byte `digest` argument is the
+// MESSAGE, not e. It is hashed with SHA-256 here before verification, so
+// e = SHA-256(digest) on both the native and browser sides — WebCrypto's
+// ECDSA verify hashes the message it is given, and this realization does the
+// same. Never verify a digest that was not produced by sign_post.
 inline bool ecdsa_p256_verify(std::string pk, std::string digest, std::string sig) {
     using namespace crane_crypto_detail;
     if (pk.size() != 65 || digest.size() != 32 || sig.size() != 64) return false;
+    // e = SHA-256(digest): WebCrypto hashes the message input, so we must too
+    // (otherwise browser verification of native signatures would fail).
+    std::string d2 = sha256(digest);
     EC_KEY* key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (!key) return false;
     const EC_GROUP* group = EC_KEY_get0_group(key);
@@ -374,7 +394,7 @@ inline bool ecdsa_p256_verify(std::string pk, std::string digest, std::string si
     if (s_pad) der_sig[pos++] = 0x00;
     std::memcpy(der_sig + pos, s_bytes, s_len);
     pos += s_len;
-    int result = ECDSA_verify(0, reinterpret_cast<const unsigned char*>(digest.data()), 32,
+    int result = ECDSA_verify(0, reinterpret_cast<const unsigned char*>(d2.data()), 32,
                               der_sig, pos, key);
     EC_KEY_free(key);
     return result == 1;
