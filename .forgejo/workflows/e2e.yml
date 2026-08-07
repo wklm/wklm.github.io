@@ -27,9 +27,6 @@ jobs:
       # Image names the staging script / helpers expect.
       CRANE_BLOG_WASM_IMAGE: crane-blog:wasm-merged
       CRANE_BLOG_GEN_IMAGE: crane-blog-gen
-      # Playwright's bundled Chromium is already installed on the runner; never
-      # try to download it in CI.
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +82,11 @@ jobs:
 
       - name: Install e2e deps (Playwright test runner)
         run: npm ci || npm install
+
+      - name: Install Playwright Chromium
+        # DinD job containers are ephemeral and don't see the host's browser
+        # cache; download the pinned Chromium into the job container.
+        run: npx --no-install playwright install chromium
 
       - name: Stage servable _site (extract WASM + render)
         # The image is already built above; skip the in-script rebuild.
