@@ -67,14 +67,21 @@ jobs:
           bash scripts/check-tail-position.sh /tmp/formalblog-cpp
 
       - name: Generate site
+        # DinD-safe: the self-hosted runner mounts only docker.sock, so -v
+        # bind mounts resolve against the HOST daemon and $PWD/... is an empty
+        # dir.  Use docker cp instead: create, copy inputs in, start (runs the
+        # runtime CMD = generator), copy _site back out.
         run: |
           set -eu
           rm -rf _site && mkdir -p _site
-          docker run --rm \
-            -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
-            -v "$PWD/static:/site/static:ro" \
-            -v "$PWD/_site:/site/_site" \
-            crane-blog
+          cid="$(docker create crane-blog)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp posts-encrypted "$cid":/site/posts-encrypted
+          docker cp static "$cid":/site/static
+          docker start -a "$cid"
+          docker cp "$cid":/site/_site ./_site
+          docker rm -f "$cid" >/dev/null 2>&1 || true
+          trap - EXIT
 
       - name: Generated-site policy lint
         run: |
@@ -86,11 +93,16 @@ jobs:
           grep -R 'Subject: \.\.\.' _site >/dev/null || { echo 'Placeholder subject missing'; exit 1; }
 
       - name: Publish to git-pages for wklm.online
+        # DinD-safe: git-pages listens on the scripts_default network, not the
+        # runner's bridge — publish from a throwaway curl container attached to
+        # that network, streaming the tar on stdin (no bind mount needed).
         run: |
           set -eu
           cd _site && tar cf ../site.tar . && cd ..
-          curl -f -X PUT http://git-pages:3000/ \
-            -H "Host: wklm.online" \
-            -H "Content-Type: application/x-tar" \
-            --data-binary @site.tar
+          cat site.tar | docker run --rm -i \
+            --network scripts_default \
+            curlimages/curl -s -f -X PUT http://git-pages:3000/ \
+              -H "Host: wklm.online" \
+              -H "Content-Type: application/x-tar" \
+              --data-binary @-
           echo "Deployed $(wc -c < site.tar) bytes to wklm.online"
