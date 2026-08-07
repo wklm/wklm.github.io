@@ -365,14 +365,14 @@ export function reRenderSite(): void {
     execFileSync('docker', ['cp', join(repoRoot, 'posts-encrypted'), `${cid}:/site/posts-encrypted`], { stdio: 'ignore' });
     execFileSync('docker', ['cp', join(repoRoot, 'static'), `${cid}:/site/static`], { stdio: 'ignore' });
     execFileSync('docker', ['start', '-a', cid], { stdio: 'inherit' });
-    // rsync from a SIBLING temp dir (a source inside the destination is
-    // refused; a plain `mv dir` onto an existing dir silently MERGES and keeps
-    // stale files — either way a second re-render would serve a previous
-    // test's envelope; --delete mirrors the new tree exactly)
+    // Copy from a SIBLING temp dir.  (A plain `mv dir` onto an existing dir
+    // silently MERGES and keeps stale files, so a second re-render would serve
+    // a previous test's envelope; rsync is not in the DinD job image, so wipe
+    // the destination and cp -a instead — cp is universally present.)
     const tmpSite = join(repoRoot, '.e2e-tmp-site');
     rmSync(tmpSite, { recursive: true, force: true });
     execFileSync('docker', ['cp', `${cid}:/site/_site`, tmpSite], { stdio: 'ignore' });
-    execFileSync('rsync', ['-a', '--delete', `${tmpSite}/`, `${siteDir}/`], { stdio: 'ignore' });
+    execFileSync('bash', ['-c', `rm -rf ${siteDir}/* ${siteDir}/.[!.]* ${siteDir}/..?* 2>/dev/null || true; cp -a ${tmpSite}/. ${siteDir}/`], { stdio: 'ignore' });
     rmSync(tmpSite, { recursive: true, force: true });
   } finally {
     execFileSync('docker', ['rm', '-f', cid], { stdio: 'ignore' });
