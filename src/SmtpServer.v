@@ -15,7 +15,8 @@
      allowlist check (BLOG_ALLOW_FROM; empty=accept) -> MimeIngest.ingest
      (Subject / body / X-Crane-Public-Keys) -> reject 550 if body empty ->
      PostBuild.build_md -> ENCRYPT in-process (CryptoSpec + MimeBuild, exactly
-     as EncryptPost.v's build_envelope) -> write posts-encrypted/<slug>.eml ->
+     as EncryptPost.v's build_envelope, incl. ECDSA signing of the raw
+     ciphertext package) -> write posts-encrypted/<slug>.eml ->
      git via procE (fetch + R4-guarded reset --hard + add + commit + push).
 
    R4 safeguard: before the [git reset --hard], a procE/dirE precondition
@@ -98,22 +99,29 @@ Definition fixed_date : string := "Thu, 01 Jan 1970 00:00:00 +0000".
 (* Build the full outer envelope from a single materialized CEK — identical in
    shape to EncryptPost.build_envelope.  [cek] is a parameter so Crane
    evaluates [random_bytes 32] exactly once (a nullary Definition would be
-   inlined and re-evaluated, splitting body-CEK from wrap-CEK). *)
+   inlined and re-evaluated, splitting body-CEK from wrap-CEK).  [sign_sk] is
+   the raw 32-byte ECDSA signing key and [sign_pk_hex] the hex 65-byte
+   uncompressed signing public key: the RAW ciphertext package (nonce||ct||tag)
+   is signed, exactly as DecryptPost/DecryptApp verify it. *)
 Definition build_envelope
-  (cek pub_raw kid slug inner_mime : string) : string :=
+  (cek pub_raw kid slug inner_mime sign_sk sign_pk_hex : string) : string :=
   let ct_package := encrypt_body cek inner_mime slug in
+  let sig_raw := sign_post sign_sk ct_package in
   let '(ek, wrapped) := wrap_cek cek pub_raw kid in
   build_outer_envelope
     (kid :: nil)
     ((kid, hex_encode ek, hex_encode wrapped) :: nil)
-    (wrap_base64 (base64_encode ct_package)).
+    (wrap_base64 (base64_encode ct_package))
+    (hex_encode sig_raw)
+    sign_pk_hex.
 
 (* Build the encrypted .eml from the post markdown + author identity.  Mirrors
    EncryptPost.encrypt_one's body assembly, but the markdown is in memory (no
    posts/<slug>.md read) and there are no image attachments (SMTP bodies are
-   plain text — listener.py's _plain_body strips attachments). *)
+   plain text — listener.py's _plain_body strips attachments).  [sign_sk] /
+   [sign_pk_hex] are threaded into build_envelope unchanged. *)
 Definition build_eml
-  (cek pub_raw kid author slug title md_body : string) : string :=
+  (cek pub_raw kid author slug title md_body sign_sk sign_pk_hex : string) : string :=
   let recipients_str := cat "reader:" kid in
   let protected_headers :=
     ("From", author) ::
@@ -121,7 +129,7 @@ Definition build_eml
     ("Date", fixed_date) ::
     ("Subject", title) :: nil in
   let inner_mime := build_inner_mime protected_headers "post.md" md_body nil in
-  build_envelope cek pub_raw kid slug inner_mime.
+  build_envelope cek pub_raw kid slug inner_mime sign_sk sign_pk_hex.
 
 (* ===================================================================== *)
 (*  git via procE  (R4-guarded)                                          *)
@@ -158,6 +166,9 @@ Definition repo_guard_ok (cwd repo_base : string) (gitdir_packed : string) : boo
 (* Resolve the author public key (65-byte uncompressed, hex on disk) from
    keys/<kid>.pub. *)
 Definition pubkey_path (kid : string) : string := cat "keys/" (cat kid ".pub").
+
+(* Resolve the author signing public key from keys/<kid>.sign.pub. *)
+Definition sign_pubkey_path (kid : string) : string := cat "keys/" (cat kid ".sign.pub").
 
 (* The status reply strings (final DATA replies), mirroring listener.py. *)
 Definition reply_ok            : string := reply r250 "OK".
@@ -225,27 +236,39 @@ Definition publish (sender : string) (allow : list string) (msg : string)
       let pub_raw := hex_decode (trim pub_hex) in
       author0 <- getenv "CRANE_BLOG_AUTHOR_EMAIL" ;;
       let author := trim author0 in
-      env_pk0 <- getenv "BLOG_PUBLIC_KEYS" ;;
-      let env_pk := trim env_pk0 in
-      (* public-keys: prefer the email header, then the env default. *)
-      let public_keys := if is_empty ing.(in_public_keys) then env_pk else ing.(in_public_keys) in
-      (* The slug ts fallback is derived from the subject; if the subject has no
-         slug-worthy chars we fall back to a fixed timestamp-shaped string.  We
-         do not have a clock effect, so the fallback is "post" (the only case
-         the acceptance test exercises uses a real subject). *)
-      let slug := slug_from_subject ing.(in_subject) "post" in
-      let title := ing.(in_subject) in
-      let md := build_md author ing.(in_subject) ing.(in_body)
-                         fixed_date public_keys kid slug in
-      (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
-         the pre-commit hook wrote posts/<slug>.md. *)
-      let eml := build_eml (random_bytes 32%int63) pub_raw kid author slug title md in
-      let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
-      _ <- create_directory "posts-encrypted" ;;
-      _ <- write_file eml_rel eml ;;
-      _ <- eprint (concat_all
-        ("smtp: encrypted -> " :: eml_rel :: lf :: nil)) ;;
-      publish_git branch slug eml_rel.
+      sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
+      let sign_kid := trim sign_kid0 in
+      sign_hex <- getenv "CRANE_BLOG_SIGNING_KEY" ;;
+      let sign_sk := hex_decode (trim sign_hex) in
+      if is_empty sign_sk
+      then
+        _ <- eprint (concat_all ("CRANE_BLOG_SIGNING_KEY not set" :: lf :: nil)) ;;
+        _ <- exit_with 1%int63 ;;
+        Ret reply_proc_failed   (* dead: tool_exit never returns *)
+      else
+        sign_pub_hex <- read (sign_pubkey_path sign_kid) ;;
+        let sign_pk_hex := trim sign_pub_hex in
+        env_pk0 <- getenv "BLOG_PUBLIC_KEYS" ;;
+        let env_pk := trim env_pk0 in
+        (* public-keys: prefer the email header, then the env default. *)
+        let public_keys := if is_empty ing.(in_public_keys) then env_pk else ing.(in_public_keys) in
+        (* The slug ts fallback is derived from the subject; if the subject has no
+           slug-worthy chars we fall back to a fixed timestamp-shaped string.  We
+           do not have a clock effect, so the fallback is "post" (the only case
+           the acceptance test exercises uses a real subject). *)
+        let slug := slug_from_subject ing.(in_subject) "post" in
+        let title := ing.(in_subject) in
+        let md := build_md author ing.(in_subject) ing.(in_body)
+                           fixed_date public_keys kid slug in
+        (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
+           the pre-commit hook wrote posts/<slug>.md. *)
+        let eml := build_eml (random_bytes 32%int63) pub_raw kid author slug title md sign_sk sign_pk_hex in
+        let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
+        _ <- create_directory "posts-encrypted" ;;
+        _ <- write_file eml_rel eml ;;
+        _ <- eprint (concat_all
+          ("smtp: encrypted -> " :: eml_rel :: lf :: nil)) ;;
+        publish_git branch slug eml_rel.
 
 (* ===================================================================== *)
 (*  Per-connection SMTP fold                                             *)

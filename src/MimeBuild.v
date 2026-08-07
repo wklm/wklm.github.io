@@ -334,14 +334,26 @@ Fixpoint join_wraps (es : list (string * string * string)) : string :=
 (* The fixed informational line and Subject placeholder. *)
 Definition outer_subject : string := "Subject: ...".
 
+(* Build the outer multipart/hpke+wrapped envelope.  [kids] are the recipient
+   key IDs (Public-Keys), [wrapped_entries] the per-recipient (kid, ek, wrap)
+   triples (Wraps), and [ct_package_b64_wrapped] the wrapped-base64 of the
+   raw nonce||ct||tag ciphertext package.  [signature_hex] is the hex ECDSA
+   signature (raw 64-byte r||s) over SHA-256(sign_info || ct_package) and
+   [signing_key_hex] the hex 65-byte uncompressed author signing public key;
+   they are emitted as the Signature / Signing-Key headers right after
+   Public-Keys.  Everything else (header order, boundary, part layout) is
+   byte-identical regardless of the signature params. *)
 Definition build_outer_envelope
   (kids : list string)
   (wrapped_entries : list (string * string * string))
-  (ct_package_b64_wrapped : string) : string :=
+  (ct_package_b64_wrapped : string)
+  (signature_hex signing_key_hex : string) : string :=
   concat_all (
     outer_subject :: crlf ::
     "MIME-Version: 1.0" :: crlf ::
     "Public-Keys: " :: join_comma kids :: crlf ::
+    "Signature: " :: signature_hex :: crlf ::
+    "Signing-Key: " :: signing_key_hex :: crlf ::
     "Content-Type: multipart/hpke+wrapped; boundary=" :: quote_wrap outer_boundary :: crlf ::
     crlf ::
     "This is an HPKE encrypted message for Crane Blog readers." :: crlf ::

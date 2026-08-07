@@ -10,8 +10,9 @@
       - build the inner multipart/mixed (protected From/To/Date/Subject headers
         + raw markdown + base64 attachments);
       - CEK-encrypt the inner MIME (AAD = slug), HPKE-wrap the CEK per recipient
-        (AAD = kid), and emit the outer multipart/hpke+wrapped envelope to
-        posts-encrypted/<slug>.eml;
+        (AAD = kid), ECDSA-sign the raw ciphertext package (CRANE_BLOG_SIGNING_KEY
+        + keys/<kid>.sign.pub) and emit the outer multipart/hpke+wrapped envelope
+        (Signature / Signing-Key headers) to posts-encrypted/<slug>.eml;
       - print an "encrypted ... -> ..." status line to stderr.
 
     Paths are CWD-relative; scripts/test-roundtrip.sh runs the tool from the
@@ -93,15 +94,21 @@ Fixpoint read_images (rels : list string) : IO (list (string * string)) :=
 (* Build the full outer envelope from a *single* materialized CEK.  cek is a
    function parameter so Crane evaluates [random_bytes 32] exactly once at the
    call site — a nullary Definition (like generate_cek) would be inlined and
-   re-evaluated, encrypting the body under a different CEK than the wrap. *)
+   re-evaluated, encrypting the body under a different CEK than the wrap.
+   [sign_sk] is the raw 32-byte ECDSA signing key and [sign_pk_hex] the hex
+   65-byte uncompressed signing public key: the RAW ciphertext package
+   (nonce||ct||tag) is signed, exactly as DecryptPost/DecryptApp verify it. *)
 Definition build_envelope
-  (cek pub_raw kid slug inner_mime : string) : string :=
+  (cek pub_raw kid slug inner_mime sign_sk sign_pk_hex : string) : string :=
   let ct_package := encrypt_body cek inner_mime slug in
+  let sig_raw := sign_post sign_sk ct_package in
   let '(ek, wrapped) := wrap_cek cek pub_raw kid in
   build_outer_envelope
     (kid :: nil)
     ((kid, hex_encode ek, hex_encode wrapped) :: nil)
-    (wrap_base64 (base64_encode ct_package)).
+    (wrap_base64 (base64_encode ct_package))
+    (hex_encode sig_raw)
+    sign_pk_hex.
 
 (* ---- the encrypt pipeline for one .md file ------------------------- *)
 
@@ -119,20 +126,31 @@ Definition encrypt_one (md_path : string) : IO unit :=
   let pub_raw := hex_decode (trim pub_hex) in
   email <- getenv "CRANE_BLOG_AUTHOR_EMAIL" ;;
   let email := trim email in
-  let image_rels := collect_image_refs raw in
-  images <- read_images image_rels ;;
-  let recipients_str := cat "reader:" kid in
-  let protected_headers :=
-    ("From", email) ::
-    ("To", recipients_str) ::
-    ("Date", fixed_date) ::
-    ("Subject", title) :: nil in
-  let inner_mime := build_inner_mime protected_headers md_basename raw images in
-  let envelope := build_envelope (random_bytes 32%int63) pub_raw kid slug inner_mime in
-  _ <- create_directory "posts-encrypted" ;;
-  _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
-  eprint (concat_all
-    ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil)).
+  sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
+  let sign_kid := trim sign_kid0 in
+  sign_hex <- getenv "CRANE_BLOG_SIGNING_KEY" ;;
+  let sign_sk := hex_decode (trim sign_hex) in
+  if is_empty sign_sk
+  then
+    _ <- eprint (concat_all ("CRANE_BLOG_SIGNING_KEY not set" :: lf :: nil)) ;;
+    exit_with 1%int63
+  else
+    sign_pub_hex <- read (cat "keys/" (cat sign_kid ".sign.pub")) ;;
+    let sign_pk_hex := trim sign_pub_hex in
+    let image_rels := collect_image_refs raw in
+    images <- read_images image_rels ;;
+    let recipients_str := cat "reader:" kid in
+    let protected_headers :=
+      ("From", email) ::
+      ("To", recipients_str) ::
+      ("Date", fixed_date) ::
+      ("Subject", title) :: nil in
+    let inner_mime := build_inner_mime protected_headers md_basename raw images in
+    let envelope := build_envelope (random_bytes 32%int63) pub_raw kid slug inner_mime sign_sk sign_pk_hex in
+    _ <- create_directory "posts-encrypted" ;;
+    _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
+    eprint (concat_all
+      ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil)).
 
 (* ---- entry point --------------------------------------------------- *)
 
