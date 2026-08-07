@@ -95,24 +95,18 @@ Fixpoint wrap_base64_aux (s : string) (pos : int) (fuel : nat) : string :=
 Definition wrap_base64 (s : string) : string :=
   wrap_base64_aux s 0%int63 mime_fuel.
 
-(* Find next whitespace character *)
-Fixpoint find_ws (s : string) (pos : int) (fuel : nat) : int :=
-  match fuel with
-  | O => pos
-  | S f' =>
-      let n := PrimString.length s in
-      if leb n pos then n
-      else
-        let c := PrimString.get s pos in
-        if orb (int_eqb c ch_newline)
-               (orb (int_eqb c ch_cr)
-                    (orb (int_eqb c ch_space) (int_eqb c ch_tab)))
-        then pos
-        else find_ws s (add pos 1%int63) f'
-  end.
+(* 4-way whitespace test shared by the scanners below. *)
+Definition is_ws_char (c : int) : bool :=
+  orb (int_eqb c ch_newline)
+      (orb (int_eqb c ch_cr)
+           (orb (int_eqb c ch_space) (int_eqb c ch_tab))).
 
-(* Find next non-whitespace character *)
-Fixpoint find_non_ws (s : string) (pos : int) (fuel : nat) : int :=
+(* Scan for the next whitespace character ([stop_on_ws] = true) or the next
+   non-whitespace character (false); returns [n] (or [pos] on fuel exhaustion).
+   One scanner parameterized on the stop predicate replaces the former
+   near-identical [find_ws] / [find_non_ws] pair.  Uses an explicit Bool.eqb to
+   avoid ambiguity with the List import. *)
+Fixpoint scan_ws (s : string) (pos : int) (stop_on_ws : bool) (fuel : nat) : int :=
   match fuel with
   | O => pos
   | S f' =>
@@ -120,11 +114,8 @@ Fixpoint find_non_ws (s : string) (pos : int) (fuel : nat) : int :=
       if leb n pos then n
       else
         let c := PrimString.get s pos in
-        if orb (int_eqb c ch_newline)
-               (orb (int_eqb c ch_cr)
-                    (orb (int_eqb c ch_space) (int_eqb c ch_tab)))
-        then find_non_ws s (add pos 1%int63) f'
-        else pos
+        if Stdlib.Bool.Bool.eqb (is_ws_char c) stop_on_ws then pos
+        else scan_ws s (add pos 1%int63) stop_on_ws f'
   end.
 
 Fixpoint strip_ws_aux (s : string) (pos : int) (fuel : nat) (acc : list string) : list string :=
@@ -134,10 +125,10 @@ Fixpoint strip_ws_aux (s : string) (pos : int) (fuel : nat) (acc : list string) 
       let n := PrimString.length s in
       if leb n pos then rev acc
       else
-        let start_pos := find_non_ws s pos f' in
+        let start_pos := scan_ws s pos false f' in
         if leb n start_pos then rev acc
         else
-          let end_pos := find_ws s start_pos f' in
+          let end_pos := scan_ws s start_pos true f' in
           let chunk := PrimString.sub s start_pos (sub end_pos start_pos) in
           strip_ws_aux s end_pos f' (chunk :: acc)
   end.
@@ -172,26 +163,14 @@ Fixpoint collect_meta (lines : list string) : list (string * string) :=
         end
   end.
 
-(* Drop the leading '---' line, returning the remaining lines. *)
-Definition drop_open_dashes (lines : list string) : list string :=
-  match lines with
-  | [] => []
-  | first :: rest => if is_dashes first then rest else lines
-  end.
-
 Definition parse_frontmatter_kv (raw : string) : list (string * string) :=
   let lines := split_lines raw in
   match lines with
   | [] => []
-  | first :: _ =>
-      if is_dashes first then collect_meta (drop_open_dashes lines)
+  | first :: rest =>
+      if is_dashes first then collect_meta rest
       else []
   end.
-
-(* Case-insensitive-ish meta lookup uses exact key match (frontmatter keys are
-   lowercase by convention); reuse header_lookup over the kv list. *)
-Definition meta_lookup (key : string) (kv : list (string * string)) : string :=
-  header_lookup key kv.
 
 (* ---- Image reference collection ------------------------------------ *)
 (* Collect every ![alt](path) URL in [body], skipping http(s):// and leading

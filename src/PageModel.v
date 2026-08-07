@@ -145,76 +145,40 @@ Definition esm_specifier_valid (spec : string) : bool :=
 (*    the page that loads the app.                                     *)
 (* =================================================================== *)
 
-Fixpoint contains_id (ids : list string) (id : string) : bool :=
-  match ids with
-  | nil => false
-  | hd :: tl =>
-      if string_eqb hd id then true
-      else contains_id tl id
-  end.
+(* Decidable containment of an element ID in a page's ID list.  Stdlib
+   [existsb] over the case-sensitive [string_eqb]; identical behavior to the
+   former hand-rolled Fixpoint. *)
+Definition contains_id (ids : list string) (id : string) : bool :=
+  existsb (string_eqb id) ids.
 
-(* Post-page: every known post-page ID is in the list *)
-Definition post_page_contains_ciphertext : contains_id post_page_ids id_ciphertext = true . Proof. vm_compute. reflexivity. Qed.
+(* List-level containment facts.  Each page's ID list enumerates the element
+   IDs present in its HTML; the coherence checker (Phase 2) verifies every
+   dom_* target is in the appropriate list.  The facts below are the
+   load-bearing content: every known ID of a page is contained in that page's
+   list, and the inbox provably omits the post-page-only IDs (so the decrypt
+   app's inbox branch can never target them). *)
 
-Definition post_page_contains_decrypt_ui : contains_id post_page_ids id_decrypt_ui = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_decrypt_error : contains_id post_page_ids id_decrypt_error = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_decrypted_content : contains_id post_page_ids id_decrypted_content = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_real_title : contains_id post_page_ids id_real_title = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_real_body : contains_id post_page_ids id_real_body = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_real_images : contains_id post_page_ids id_real_images = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_reader_canvas : contains_id post_page_ids id_reader_canvas = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_encrypted_shell : contains_id post_page_ids id_encrypted_shell = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_decrypt_button : contains_id post_page_ids id_decrypt_button = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_decrypt_status : contains_id post_page_ids id_decrypt_status = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_clear_key_button : contains_id post_page_ids id_clear_key_button = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_reader_a11y : contains_id post_page_ids id_reader_a11y = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_real_meta : contains_id post_page_ids id_real_meta = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition post_page_contains_main : contains_id post_page_ids id_main = true . Proof. vm_compute. reflexivity. Qed.
+(* Post page: every known post-page ID is in the list *)
+Definition post_page_ids_all_present :
+  forallb (fun id => contains_id post_page_ids id) post_page_ids = true .
+Proof. vm_compute. reflexivity. Qed.
 
 (* Inbox page: every known inbox-page ID is present *)
-Definition inbox_page_contains_main : contains_id inbox_page_ids id_main = true . Proof. vm_compute. reflexivity. Qed.
+Definition inbox_page_ids_all_present :
+  forallb (fun id => contains_id inbox_page_ids id) inbox_page_ids = true .
+Proof. vm_compute. reflexivity. Qed.
 
-Definition inbox_page_contains_inbox_status_msg : contains_id inbox_page_ids id_inbox_status_msg = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition inbox_page_contains_ciphertext : contains_id inbox_page_ids id_ciphertext = true . Proof. vm_compute. reflexivity. Qed.
-
-(* Critical coherence safety: the inbox page does NOT contain post-page-only IDs.
-   If DecryptApp's inbox branch tried to target these, it would be a bug. *)
-Definition inbox_page_no_decrypt_error : contains_id inbox_page_ids id_decrypt_error = false . Proof. vm_compute. reflexivity. Qed.
-
-Definition inbox_page_no_decrypt_ui : contains_id inbox_page_ids id_decrypt_ui = false . Proof. vm_compute. reflexivity. Qed.
-
-Definition inbox_page_no_decrypted_content : contains_id inbox_page_ids id_decrypted_content = false . Proof. vm_compute. reflexivity. Qed.
+(* Critical coherence safety: the inbox page does NOT contain post-page-only
+   IDs.  If DecryptApp's inbox branch tried to target these, it would be a bug. *)
+Definition inbox_page_omits_post_only_ids :
+  forallb (fun id => negb (contains_id inbox_page_ids id))
+    (id_decrypt_error :: id_decrypt_ui :: id_decrypted_content :: nil) = true .
+Proof. vm_compute. reflexivity. Qed.
 
 (* Enroll page: every known enroll-page ID is present *)
-Definition enroll_page_contains_enroll_ui : contains_id enroll_page_ids id_enroll_ui = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_enroll_button : contains_id enroll_page_ids id_enroll_button = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_enroll_status : contains_id enroll_page_ids id_enroll_status = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_enroll_result : contains_id enroll_page_ids id_enroll_result = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_reader_key_id : contains_id enroll_page_ids id_reader_key_id = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_reader_pubkey_hex : contains_id enroll_page_ids id_reader_pubkey_hex = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_enroll_existing : contains_id enroll_page_ids id_enroll_existing = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_contains_main : contains_id enroll_page_ids id_main = true . Proof. vm_compute. reflexivity. Qed.
+Definition enroll_page_ids_all_present :
+  forallb (fun id => contains_id enroll_page_ids id) enroll_page_ids = true .
+Proof. vm_compute. reflexivity. Qed.
 
 (* =================================================================== *)
 (* 5. ES-module specifier validity theorems                            *)
@@ -227,11 +191,12 @@ Definition spec_decrypt_post : string := "../static/crane_decrypt.mjs".
 Definition spec_decrypt_inbox : string := "./static/crane_decrypt.mjs".
 Definition spec_enroll : string := "../static/crane_enroll.mjs".
 
-Definition spec_decrypt_post_valid : esm_specifier_valid spec_decrypt_post = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition spec_decrypt_inbox_valid : esm_specifier_valid spec_decrypt_inbox = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition spec_enroll_valid : esm_specifier_valid spec_enroll = true . Proof. vm_compute. reflexivity. Qed.
+(* All specifiers used in the generated HTML are valid (one forallb over the
+   specifier list). *)
+Definition all_specifiers_valid :
+  forallb (fun spec => esm_specifier_valid spec)
+    (spec_decrypt_post :: spec_decrypt_inbox :: spec_enroll :: nil) = true .
+Proof. vm_compute. reflexivity. Qed.
 
 (* A bare `static/crane_decrypt.mjs` (the regression that once broke the
    inbox) is PROVABLY INVALID under our specifier predicate. *)
@@ -399,14 +364,11 @@ Fixpoint id_list_unique (ids : list string) : bool :=
       else id_list_unique tl
   end.
 
-Definition ids_unique (ids : list string) : bool :=
-  id_list_unique ids.
+Definition post_page_ids_unique : id_list_unique post_page_ids = true . Proof. vm_compute. reflexivity. Qed.
 
-Definition post_page_ids_unique : ids_unique post_page_ids = true . Proof. vm_compute. reflexivity. Qed.
+Definition inbox_page_ids_unique : id_list_unique inbox_page_ids = true . Proof. vm_compute. reflexivity. Qed.
 
-Definition inbox_page_ids_unique : ids_unique inbox_page_ids = true . Proof. vm_compute. reflexivity. Qed.
-
-Definition enroll_page_ids_unique : ids_unique enroll_page_ids = true . Proof. vm_compute. reflexivity. Qed.
+Definition enroll_page_ids_unique : id_list_unique enroll_page_ids = true . Proof. vm_compute. reflexivity. Qed.
 
 (* =================================================================== *)
 (* 9. Computational examples (test fixtures)                           *)

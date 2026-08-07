@@ -116,9 +116,9 @@ Definition encrypt_one (md_path : string) : IO unit :=
   raw <- read md_path ;;
   let kv := parse_frontmatter_kv raw in
   let md_basename := basename_of md_path in
-  let slug_meta := meta_lookup "slug" kv in
+  let slug_meta := header_lookup "slug" kv in
   let slug := if is_empty slug_meta then strip_md md_basename else slug_meta in
-  let title_meta := meta_lookup "title" kv in
+  let title_meta := header_lookup "title" kv in
   let title := if is_empty title_meta then "Untitled" else title_meta in
   kid <- getenv "CRANE_BLOG_AUTHOR_KEY_ID" ;;
   let kid := trim kid in

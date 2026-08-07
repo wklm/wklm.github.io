@@ -273,9 +273,6 @@ Fixpoint layout_all_tr (ps : list string) (acc : list ParaLayout) : list ParaLay
         layout_all_tr rest (PLText (layout_paragraph advance_of MEASURE (shape_paragraph body)) :: acc)
   end.
 
-Definition layout_all (ps : list string) : list ParaLayout :=
-  layout_all_tr ps nil.
-
 Fixpoint total_height (qss : list ParaLayout) (acc : Z) : Z :=
   match qss with
   | nil => acc
