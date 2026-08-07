@@ -229,14 +229,26 @@ Definition dirname_output_path (output_dir slug : string) : string :=
 (* ---- Encrypted post model ---------------------------------------- *)
 
 (* An [EncryptedPost] is the opaque view the generator has of a
-   [posts-encrypted/<slug>.eml] file.  The public renderer only uses
-   the slug, a non-rendered sort key, and the encrypted body.  Public
-   pages never render sender, recipient, date, or real subject metadata.
+   [posts-encrypted/<slug>.eml] file.  The public renderer uses the
+   slug, a non-rendered sort key, and the raw envelope.
 
-   [ep_body] is the raw HPKE MIME envelope: multipart boundaries,
-   the [application/wrapped-keys] part with per-reader CEK wraps, and
-   the [application/aes-gcm] ciphertext.  The generator never parses
-   MIME semantics and never touches cryptographic bytes. *)
+   [ep_body] is the FULL outer envelope byte-for-byte: the public
+   header block (Subject: ..., MIME-Version, Public-Keys, Signature,
+   Signing-Key, Content-Type) followed by the multipart/hpke+wrapped
+   body ([application/wrapped-keys] part with per-reader CEK wraps +
+   [application/aes-gcm] ciphertext).  The generator never parses MIME
+   semantics and never touches cryptographic bytes.
+
+   The envelope is rendered verbatim into the page's
+   [<pre id='ciphertext'>] so the browser-side decrypt app parses
+   exactly the same bytes the native [decrypt_post] parses: its
+   [parse_envelope] reads the Signature / Signing-Key headers and the
+   Content-Type boundary from this same header block.  No
+   html-escaping is applied — an escaped boundary=... would no longer
+   match the browser parser; the envelope charset is hex/base64/ASCII
+   literals by construction.  Sender/recipient/date and the real
+   subject live only in the *inner* protected MIME headers, which are
+   encrypted. *)
 Record EncryptedPost : Type := mkEncryptedPost {
   ep_slug : string;
   ep_sort_key : string;
@@ -248,9 +260,10 @@ Definition empty_ep : EncryptedPost :=
 
 Definition public_subject : string := "Subject: ...".
 
-(* Truncated SHA-256 fingerprint of the ciphertext body, used as the
-   inbox link label.  The Rocq definition is identity; the C++ helper
-   [sha256_trunc_std] in [blog_helpers.h] provides the real hash. *)
+(* Truncated SHA-256 fingerprint of the full envelope ([ep_body] — public
+   headers + multipart body), used as the inbox link label.  The Rocq
+   definition is identity; the C++ helper [sha256_trunc_std] in
+   [blog_helpers.h] provides the real hash. *)
 Definition sha256_trunc (s : string) : string := s.
 
 Definition month_key (m : string) : string :=
@@ -355,12 +368,12 @@ Definition lookup_header (headers needle : string) : string :=
   lookup_header_aux headers needle 0%int63 fuel.
 
 Definition parse_eml (slug raw : string) : EncryptedPost :=
-  let '(headers, body) := split_headers_body raw 0%int63 fuel in
+  let '(headers, _body) := split_headers_body raw 0%int63 fuel in
   let date := lookup_header headers "Date" in
   mkEncryptedPost
     slug
     (sort_key slug date)
-    body.
+    raw.
 
 (* ---- Rendering --------------------------------------------------- *)
 
@@ -369,9 +382,15 @@ Definition parse_eml (slug raw : string) : EncryptedPost :=
    content-hashed asset URLs (site.<sha>.css?v=<hash>) computed at runtime
    by [run] below. *)
 
-(* The public subject is not data.Even if a bad [.eml] contains a real
-   [Subject] header, public pages render only the fixed placeholder.
-   
+(* The outer envelope carries no private metadata: encrypt_post emits
+   only the placeholder [Subject: ...], MIME-Version, Public-Keys,
+   Signature, Signing-Key and Content-Type — no From/To/Date, no
+   plaintext.  The deploy pipeline enforces this on every
+   [posts-encrypted/*.eml] (placeholder outer Subject, no
+   ^(From|To|Date):).  The full envelope is rendered verbatim into
+   #ciphertext (see the [EncryptedPost] comment for why no
+   html-escaping).
+
    Browser-side decryption runs in the crane_decrypt WASM module (ROCQ ->
    Crane -> em++, from src/DecryptApp.v): WebAuthn + Web Crypto API authenticate
    the reader, retrieve their ECDH key from IndexedDB, HPKE-unwrap the CEK, and
@@ -604,7 +623,7 @@ Set Crane Extraction Output Directory ".".
    the C++ call site is redirected to the helper in [blog_helpers.h]. *)
 Crane Extract Inlined Constant concat_all => "concat_all_std(%a0)" From "blog_helpers.h".
 
-(* Truncated SHA-256 fingerprint of ciphertext body for inbox labels. *)
+(* Truncated SHA-256 fingerprint of the full envelope for inbox labels. *)
 Crane Extract Inlined Constant sha256_trunc => "sha256_trunc_std(%a0)" From "blog_helpers.h".
 
 Crane Extraction "blog" run.

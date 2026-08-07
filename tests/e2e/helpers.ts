@@ -323,10 +323,12 @@ export function encryptFixturePost(args: {
   return eml;
 }
 
-// NOTE: render_eml_page emits only the multipart body into #ciphertext (no outer
-// Content-Type/boundary header).  src/DecryptApp.v parse_envelope now recovers the
-// boundary from the first "--" delimiter line (scan_boundary), so the e2e serves the
-// real render_eml_page output unmodified — no harness-side envelope rewriting.
+// NOTE: render_eml_page emits the FULL outer envelope (public headers + multipart
+// body) into #ciphertext, so the browser parses exactly the same bytes the native
+// decrypt_post parses.  src/DecryptApp.v parse_envelope reads the Signature /
+// Signing-Key headers and the Content-Type boundary from that header block, so
+// the e2e serves the real render_eml_page output unmodified — no harness-side
+// envelope rewriting.
 
 /**
  * Re-render _site from the current posts-encrypted/ + static/ using the
