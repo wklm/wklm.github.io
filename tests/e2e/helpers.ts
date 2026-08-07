@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -214,13 +214,13 @@ function resolveSigningKey(keysDir: string): { signKid: string; signPrivHex: str
         'set -euo pipefail',
         'scratch="$(mktemp -d)"',
         'trap \'rm -rf "$scratch"\' EXIT',
-        'printf \'%s\' "$1" | xxd -r -p > "$scratch/scalar.bin"',
+        'printf \'%s\' "$1" | perl -e \'print pack "H*", <STDIN>\' > "$scratch/scalar.bin"',
         'printf \'\x30\x77\x02\x01\x01\x04\x20\' > "$scratch/prefix.bin"',
         'printf \'\xa0\x0a\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07\' > "$scratch/suffix.bin"',
         'cat "$scratch/prefix.bin" "$scratch/scalar.bin" "$scratch/suffix.bin" > "$scratch/key.der"',
         'openssl ec -inform DER -in "$scratch/key.der" -pubout -conv_form uncompressed 2>/dev/null |',
         '  openssl pkey -pubin -outform DER 2>/dev/null |',
-        '  tail -c 65 | xxd -p -c 999 | tr -d \'\n\'',
+        '  tail -c 65 | od -An -tx1 -v | tr -d \' \n\'',
       ].join('\n'), 'bash', signPrivHex], { encoding: 'utf8' }).trim();
       if (!/^04[0-9a-f]{128}$/.test(pubHex)) {
         throw new Error(`could not derive public key for signing key ${signKid} (got ${pubHex.length} hex chars)`);
@@ -292,18 +292,18 @@ export function encryptFixturePost(args: {
   // env, and the browser decrypt gate rejects an unsigned envelope.
   const { signKid, signPrivHex } = resolveSigningKey(keysDir);
 
-  const uid = process.getuid?.() ?? 1000;
-  const gid = process.getgid?.() ?? 1000;
-
-  // Run the native encrypt_post from the runtime image with the worktree mounted
-  // at /site (its WORKDIR).  Mounting the worktree over the builder's /home would
-  // shadow its pre-built _build/; the runtime image keeps the binary on PATH.
-  execFileSync(
+  // Run the native encrypt_post from the runtime image.  DinD-safe: the
+  // self-hosted runner mounts only docker.sock, so -v bind mounts resolve
+  // against the HOST daemon and $PWD/... is an empty dir.  Create a container
+  // with the encrypt_post entrypoint + env + args, copy inputs in, start -a to
+  // run it, copy the produced .eml back out.  (No --user: docker cp reads the
+  // output back as root; the host-uid flag only mattered for bind mounts.)
+  const emlDir = join(repoRoot, 'posts-encrypted');
+  mkdirSync(emlDir, { recursive: true });
+  const cid = execFileSync(
     'docker',
     [
-      'run', '--rm',
-      '--user', `${uid}:${gid}`,
-      '-v', `${repoRoot}:/site`,
+      'create',
       '-w', '/site',
       '-e', `CRANE_BLOG_AUTHOR_KEY_ID=${kid}`,
       '-e', 'CRANE_BLOG_AUTHOR_EMAIL=e2e@wklm.online',
@@ -313,8 +313,25 @@ export function encryptFixturePost(args: {
       GEN_IMAGE,
       `posts/${slug}.md`,
     ],
-    { stdio: 'inherit' },
-  );
+    { encoding: 'utf8' },
+  ).trim();
+  try {
+    execFileSync('docker', ['cp', keysDir, `${cid}:/site/keys`], { stdio: 'ignore' });
+    execFileSync('docker', ['cp', postsDir, `${cid}:/site/posts`], { stdio: 'ignore' });
+    execFileSync('docker', ['start', '-a', cid], { stdio: 'inherit' });
+    const tmpEml = join(repoRoot, 'posts-encrypted', '.e2e-tmp');
+    rmSync(tmpEml, { recursive: true, force: true });
+    execFileSync('docker', ['cp', `${cid}:/site/posts-encrypted`, tmpEml], { stdio: 'ignore' });
+    // docker cp of a dir into a new dir nests it: posts-encrypted/.e2e-tmp/<slug>.eml
+    const nestedEml = join(tmpEml, `${slug}.eml`);
+    if (!existsSync(nestedEml)) {
+      throw new Error(`encrypt_post produced no ${slug}.eml in the container`);
+    }
+    execFileSync('mv', [nestedEml, join(emlDir, `${slug}.eml`)]);
+    rmSync(tmpEml, { recursive: true, force: true });
+  } finally {
+    execFileSync('docker', ['rm', '-f', cid], { stdio: 'ignore' });
+  }
 
   const eml = join(repoRoot, 'posts-encrypted', `${slug}.eml`);
   if (!existsSync(eml)) {
@@ -337,20 +354,27 @@ export function encryptFixturePost(args: {
  * privkey in IndexedDB (origin-scoped, unaffected by the disk re-render).
  */
 export function reRenderSite(): void {
-  const uid = process.getuid?.() ?? 1000;
-  const gid = process.getgid?.() ?? 1000;
   const siteDir = join(repoRoot, '_site');
   mkdirSync(siteDir, { recursive: true });
-  execFileSync(
-    'docker',
-    [
-      'run', '--rm',
-      '--user', `${uid}:${gid}`,
-      '-v', `${join(repoRoot, 'posts-encrypted')}:/site/posts-encrypted:ro`,
-      '-v', `${join(repoRoot, 'static')}:/site/static:ro`,
-      '-v', `${siteDir}:/site/_site`,
-      GEN_IMAGE,
-    ],
-    { stdio: 'inherit' },
-  );
+  // DinD-safe: copy the whole inputs dirs in (the runtime CMD mkdir -p's
+  // posts-encrypted + _site before generating), start -a to generate, then
+  // copy _site back out through a temp dir (docker cp of a dir into an
+  // existing dir nests it, so copy into a fresh tmp and move the contents).
+  const cid = execFileSync('docker', ['create', GEN_IMAGE], { encoding: 'utf8' }).trim();
+  try {
+    execFileSync('docker', ['cp', join(repoRoot, 'posts-encrypted'), `${cid}:/site/posts-encrypted`], { stdio: 'ignore' });
+    execFileSync('docker', ['cp', join(repoRoot, 'static'), `${cid}:/site/static`], { stdio: 'ignore' });
+    execFileSync('docker', ['start', '-a', cid], { stdio: 'inherit' });
+    // rsync from a SIBLING temp dir (a source inside the destination is
+    // refused; a plain `mv dir` onto an existing dir silently MERGES and keeps
+    // stale files — either way a second re-render would serve a previous
+    // test's envelope; --delete mirrors the new tree exactly)
+    const tmpSite = join(repoRoot, '.e2e-tmp-site');
+    rmSync(tmpSite, { recursive: true, force: true });
+    execFileSync('docker', ['cp', `${cid}:/site/_site`, tmpSite], { stdio: 'ignore' });
+    execFileSync('rsync', ['-a', '--delete', `${tmpSite}/`, `${siteDir}/`], { stdio: 'ignore' });
+    rmSync(tmpSite, { recursive: true, force: true });
+  } finally {
+    execFileSync('docker', ['rm', '-f', cid], { stdio: 'ignore' });
+  }
 }
