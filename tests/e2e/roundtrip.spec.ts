@@ -322,6 +322,45 @@ for (const row of MATRIX) {
   });
 }
 
+// The enrollment now auto-registers the fresh public key with the blog's key
+// directory (public Cloudflare Worker + KV): the reader's short key ID alone
+// must be enough for the author to encrypt to them — no key files exchanged by
+// hand.  This row proves the WASM EnrollApp POSTed the key and that the
+// directory resolves it: GET /keys/<kid> returns exactly the uncompressed
+// pubkey reconstructed from the enrolled JWK.
+const KEYDIR_URL = 'https://crane-blog-keydir.wojtekkulma.workers.dev';
+
+test('Facet A WASM enroll — fresh key auto-registers with the key directory', async ({ context, page }) => {
+  const sink = attachErrorCapture(page);
+  let cdp: CDPSession | undefined;
+  ({ cdp } = await addVirtualAuthenticator(context, page));
+  try {
+    await page.goto('/enroll/', { waitUntil: 'domcontentloaded' });
+    await waitForArmed(page, 'enroll-button');
+    await page.locator('#enroll-button').click();
+    await expect(page.locator('#enroll-result')).toBeVisible({ timeout: 60_000 });
+    const renderedKid = (await page.locator('#reader-key-id').textContent())?.trim() || '';
+    expect(renderedKid).toMatch(/^[0-9a-f]{12}$/);
+    createdKids.add(renderedKid); // afterEach cleanup of keys/<kid>.pub
+
+    // The registration status line reports the auto-registration outcome
+    // (set after the async POST to the directory resolves).
+    await expect(page.locator('#enroll-reg-status')).toContainText('Registered', { timeout: 30_000 });
+
+    // The directory resolves the key by the short ID alone; it must match the
+    // enrolled JWK's uncompressed pubkey (what encrypt_post would use).
+    const readerKeys = (await readIdbStore(page, 'reader-keys')) as ReaderKeyRecord[];
+    const jwk = parseJwk(readerKeys[0].privkeyJwk);
+    const uncompressedPubHex = uncompressedPubHexFromJwk(jwk);
+    const resp = await fetch(`${KEYDIR_URL}/keys/${renderedKid}`);
+    expect(resp.status).toBe(200);
+    expect((await resp.text()).trim()).toBe(uncompressedPubHex);
+    expect(sink.fatal).toEqual([]);
+  } finally {
+    if (cdp) await cdp.detach().catch(() => {});
+  }
+});
+
 // The "no usable authenticator" row: WebAuthn create() rejects (the realistic
 // case where the reader has no authenticator, or declines/cancels the prompt).
 // Enrollment MUST fail VISIBLY (a status error in the DOM) rather than silently

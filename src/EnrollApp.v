@@ -64,6 +64,11 @@ Definition enroll_challenge (kid : string) : string := cat "crane-enroll-" kid.
 Definition rp_name : string := "wklm.online".
 Definition user_display : string := "Crane Blog Reader".
 
+(* The public reader-key directory (Cloudflare Worker + KV).  Registration is
+   self-authenticating — the directory derives the key ID from the pubkey and
+   rejects mismatches — so this URL is safe to publish; no secrets here. *)
+Definition keydir_url : string := "https://crane-blog-keydir.wojtekkulma.workers.dev".
+
 (* Build the JSON record for a store via the json_object4 marshalling helper
    (BridgeFFI). *)
 Definition passkey_record (cred_id kid : string) : string :=
@@ -106,7 +111,24 @@ Definition do_enroll : BIO unit :=
       _ <- dom_hide id_enroll_ui ;;
       _ <- dom_show id_enroll_result ;;
       _ <- dom_set_text id_reader_key_id kid ;;
-      dom_set_text id_reader_pubkey_hex pub_hex.
+      _ <- dom_set_text id_reader_pubkey_hex pub_hex ;;
+      (* 5. Register the fresh public key with the blog's key directory so the
+            author can encrypt to this reader by the short ID alone — no
+            copy/paste of key files.  Best effort: a failed registration
+            still leaves the key on screen (the manual path stays available).
+            The body is a JSON {"kid", "pubkey"} record built with the
+            BridgeFFI json_object4 marshaller; pubkey is the UNCOMPRESSED
+            65-byte hex (the directory derives the compressed form and the
+            key ID itself). *)
+      let reg_body :=
+        json_object4 "kid" kid "pubkey" (hex_encode uncompressed) "" "" "" "" in
+      registered <- reg_key (cat keydir_url "/keys") reg_body ;;
+      if string_eqb registered "1" then
+        dom_set_text id_enroll_reg_status
+          "Registered with the key directory. Send the key ID above to the blog author."
+      else
+        dom_set_text id_enroll_reg_status
+          "Not registered (offline?). Send the key ID above to the author manually.".
 
 (* ---- the on-load check --------------------------------------------- *)
 Definition on_load : BIO unit :=

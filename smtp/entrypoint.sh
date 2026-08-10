@@ -44,6 +44,32 @@ if [ -d "${KEYS_DIR}" ]; then
     cp -f "${KEYS_DIR}"/*.pub "${BLOG_REPO_PATH}/keys/" 2>/dev/null || true
 fi
 
+# Auto-resolve the configured default readers (BLOG_PUBLIC_KEYS: kid1,kid2)
+# from the public key directory (Cloudflare Worker + KV), so a reader who
+# enrolled on the site is automatically known to the listener — the author
+# never adds a reader key file by hand.  Unknown kids only warn: the listener
+# still works for posts addressed to the author alone.
+KEYDIR_URL="${KEYDIR_URL:-https://crane-blog-keydir.wojtekkulma.workers.dev}"
+if [ -n "${BLOG_PUBLIC_KEYS:-}" ] && command -v curl >/dev/null 2>&1; then
+    for kid in $(printf '%s' "${BLOG_PUBLIC_KEYS}" | tr ',' ' '); do
+        case "$kid" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+                if [ -f "${BLOG_REPO_PATH}/keys/${kid}.pub" ]; then continue; fi
+                if out=$(curl -fsS --max-time 10 "${KEYDIR_URL}/keys/${kid}" 2>/dev/null); then
+                    if [ "${#out}" -eq 130 ]; then
+                        printf '%s' "$out" > "${BLOG_REPO_PATH}/keys/${kid}.pub"
+                        echo "entrypoint: resolved reader key ${kid} from key directory"
+                    else
+                        echo "entrypoint: warning: unexpected directory response for ${kid}" >&2
+                    fi
+                else
+                    echo "entrypoint: warning: reader key ${kid} not in key directory" >&2
+                fi
+                ;;
+        esac
+    done
+fi
+
 # Run the listener from inside the checkout (CWD basename == repo dir name, so
 # the listener's R4 guard permits its `git reset --hard`).
 cd "${BLOG_REPO_PATH}"

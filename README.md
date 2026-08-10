@@ -56,7 +56,7 @@ key), alongside `Public-Keys:` (recipient key IDs).
 | key          | meaning                                                           |
 |--------------|-------------------------------------------------------------------|
 | `slug`       | output directory and `.eml` basename; falls back to the file stem |
-| `recipients` | comma-separated emails (max 3); the author is always added        |
+| `recipients` | comma-separated reader key IDs (max 3); the author is always added. Each listed key is resolved from `keys/<kid>.pub` — automatically fetched from the public key directory if missing (see the reader flow below) |
 
 All other keys are left for the author's own reference inside the
 encrypted body — they are never leaked, because the body is never
@@ -96,6 +96,36 @@ under `posts/` is picked up by the hook, read as raw bytes, and
 attached to the inner MIME tree. HTTP(S) URLs and absolute paths
 are left untouched (they end up as plaintext inside the encrypted
 body).
+
+## Reader enrollment and the key directory
+
+The "reader sends only the short key ID" story is fully automatic — no key
+files are ever exchanged by hand, and no reader key is stored on fuji's disk.
+
+1. **Enroll.** On `wklm.online/enroll/` the reader's browser rolls an ECDH
+   P-256 keypair, stores the private JWK in IndexedDB, and **POSTs the public
+   key to the blog's public key directory** — a Cloudflare Worker + KV
+   (`crane-blog-keydir`, outside this repo). Registration is
+   self-authenticating: the directory derives the key ID from the pubkey
+   (`kid = sha256(compress(pubkey))[:12]`) and rejects mismatches, so a key
+   can only be registered under its own ID. The enroll page then shows the
+   key ID and a "Registered with the key directory" status; offline, it
+   falls back to showing the key for the manual path.
+2. **Encrypt by ID only.** The author writes `recipients: <kid>` in the
+   frontmatter. The pre-commit hook calls `scripts/resolve-keys.sh <kid>`,
+   which fetches the pubkey from the directory into `keys/<kid>.pub`
+   (gitignored, auto-populated — never saved by hand); `encrypt_post` wraps
+   the CEK for every listed recipient (plus the author) and emits one
+   `Public-Keys` / `Wraps` entry each. The smtp listener's entrypoint does
+   the same for its configured `BLOG_PUBLIC_KEYS`.
+3. **Decrypt.** Unchanged: the browser matches its enrolled key ID against
+   the envelope's `Public-Keys`, verifies the author signature, unwraps and
+   renders.
+
+The directory only ever holds public keys; the private JWK never leaves the
+reader's device. It is a registry, not an identity provider — registering a
+key proves only that its holder can be addressed as a recipient (see
+`TRUSTED.md` C16).
 
 ## Workflow
 

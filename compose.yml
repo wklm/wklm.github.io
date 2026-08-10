@@ -27,6 +27,9 @@ services:
       CRANE_BLOG_SIGNING_KEY_ID: ""
       CRANE_BLOG_SIGNING_KEY: ""
       BLOG_PUBLIC_KEYS: ""
+      # Public reader-key directory (Cloudflare Worker + KV); the entrypoint
+      # resolves BLOG_PUBLIC_KEYS entries from it automatically at startup.
+      KEYDIR_URL: "https://crane-blog-keydir.wojtekkulma.workers.dev"
       ENCRYPT_POST_BIN: "/usr/local/bin/encrypt_post"
       # Comma-separated allowlist of MAIL FROM addresses. Empty = accept any.
       BLOG_ALLOW_FROM: ""

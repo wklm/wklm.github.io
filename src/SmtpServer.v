@@ -41,6 +41,7 @@ Require Import ProcFFI.
 Require Import Smtp.
 Require Import MimeIngest.
 Require Import PostBuild.
+Require Import Recipients.  (* multi-recipient resolution + envelope building *)
 
 Open Scope pstring_scope.
 
@@ -96,24 +97,9 @@ Definition parse_allow (s : string) : list string :=
    extraction pure and the output deterministic. *)
 Definition fixed_date : string := "Thu, 01 Jan 1970 00:00:00 +0000".
 
-(* Build the full outer envelope from a single materialized CEK — identical in
-   shape to EncryptPost.build_envelope.  [cek] is a parameter so Crane
-   evaluates [random_bytes 32] exactly once (a nullary Definition would be
-   inlined and re-evaluated, splitting body-CEK from wrap-CEK).  [sign_sk] is
-   the raw 32-byte ECDSA signing key and [sign_pk_hex] the hex 65-byte
-   uncompressed signing public key: the RAW ciphertext package (nonce||ct||tag)
-   is signed, exactly as DecryptPost/DecryptApp verify it. *)
-Definition build_envelope
-  (cek pub_raw kid slug inner_mime sign_sk sign_pk_hex : string) : string :=
-  let ct_package := encrypt_body cek inner_mime slug in
-  let sig_raw := sign_post sign_sk ct_package in
-  let '(ek, wrapped) := wrap_cek cek pub_raw kid in
-  build_outer_envelope
-    (kid :: nil)
-    ((kid, hex_encode ek, hex_encode wrapped) :: nil)
-    (wrap_base64 (base64_encode ct_package))
-    (hex_encode sig_raw)
-    sign_pk_hex.
+(* Build the full outer envelope — shared, multi-recipient, in
+   Recipients.build_envelope (single source of truth with EncryptPost.v).
+   One Public-Keys / Wraps entry per recipient. *)
 
 (* Build the encrypted .eml from the post markdown + author identity.  Mirrors
    EncryptPost.encrypt_one's body assembly, but the markdown is in memory (no
@@ -121,15 +107,16 @@ Definition build_envelope
    plain text — listener.py's _plain_body strips attachments).  [sign_sk] /
    [sign_pk_hex] are threaded into build_envelope unchanged. *)
 Definition build_eml
-  (cek pub_raw kid author slug title md_body sign_sk sign_pk_hex : string) : string :=
-  let recipients_str := cat "reader:" kid in
+  (cek : key_material) (recipients_pk : list (string * string))
+  (author slug title md_body sign_sk sign_pk_hex : string) : string :=
+  let recipients_str := recipients_to (kid_list recipients_pk) in
   let protected_headers :=
     ("From", author) ::
     ("To", recipients_str) ::
     ("Date", fixed_date) ::
     ("Subject", title) :: nil in
   let inner_mime := build_inner_mime protected_headers "post.md" md_body nil in
-  build_envelope cek pub_raw kid slug inner_mime sign_sk sign_pk_hex.
+  build_envelope cek recipients_pk slug inner_mime sign_sk sign_pk_hex.
 
 (* ===================================================================== *)
 (*  git via procE  (R4-guarded)                                          *)
@@ -163,12 +150,26 @@ Definition repo_guard_ok (cwd repo_base : string) (gitdir_packed : string) : boo
 (*  The publish pipeline                                                 *)
 (* ===================================================================== *)
 
-(* Resolve the author public key (65-byte uncompressed, hex on disk) from
+(* Resolve a recipient public key (65-byte uncompressed, hex on disk) from
    keys/<kid>.pub. *)
 Definition pubkey_path (kid : string) : string := cat "keys/" (cat kid ".pub").
 
 (* Resolve the author signing public key from keys/<kid>.sign.pub. *)
 Definition sign_pubkey_path (kid : string) : string := cat "keys/" (cat kid ".sign.pub").
+
+(* Read keys/<kid>.pub for every recipient (author first).  Concrete at this
+   file's IO (dirE +' ioE +' toolE +' netE +' procE); see the note in
+   Recipients.v.  The recursion is the whole first statement so the
+   tail-position gate passes. *)
+Fixpoint read_pubkeys (kids : list string) : IO (list (string * string)) :=
+  match kids with
+  | [] => Ret []
+  | kid :: rest =>
+      others <- read_pubkeys rest ;;
+      pub_hex <- read (pubkey_path kid) ;;
+      let pub_raw := hex_decode (trim pub_hex) in
+      Ret ((kid, pub_raw) :: others)
+  end.
 
 (* The status reply strings (final DATA replies), mirroring listener.py. *)
 Definition reply_ok            : string := reply r250 "OK".
@@ -232,8 +233,6 @@ Definition publish (sender : string) (allow : list string) (msg : string)
     else
       kid0 <- getenv "CRANE_BLOG_AUTHOR_KEY_ID" ;;
       let kid := trim kid0 in
-      pub_hex <- read (pubkey_path kid) ;;
-      let pub_raw := hex_decode (trim pub_hex) in
       author0 <- getenv "CRANE_BLOG_AUTHOR_EMAIL" ;;
       let author := trim author0 in
       sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
@@ -258,17 +257,28 @@ Definition publish (sender : string) (allow : list string) (msg : string)
            the acceptance test exercises uses a real subject). *)
         let slug := slug_from_subject ing.(in_subject) "post" in
         let title := ing.(in_subject) in
-        let md := build_md author ing.(in_subject) ing.(in_body)
-                           fixed_date public_keys kid slug in
-        (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
-           the pre-commit hook wrote posts/<slug>.md. *)
-        let eml := build_eml (random_bytes 32%int63) pub_raw kid author slug title md sign_sk sign_pk_hex in
-        let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
-        _ <- create_directory "posts-encrypted" ;;
-        _ <- write_file eml_rel eml ;;
-        _ <- eprint (concat_all
-          ("smtp: encrypted -> " :: eml_rel :: lf :: nil)) ;;
-        publish_git branch slug eml_rel.
+        (* Recipients: the author (CRANE_BLOG_AUTHOR_KEY_ID) is always first;
+           the X-Crane-Public-Keys header / BLOG_PUBLIC_KEYS env adds up to 3
+           more readers, resolved from keys/<kid>.pub. *)
+        let recips := build_recipients kid public_keys in
+        recipients_pk <- read_pubkeys recips ;;
+        if negb (recips_ok recipients_pk)
+        then
+          _ <- eprint (concat_all
+            ("smtp: missing or unreadable recipient public key under keys/" :: lf :: nil)) ;;
+          Ret reply_proc_failed
+        else
+          let md := build_md author ing.(in_subject) ing.(in_body)
+                             fixed_date public_keys kid slug in
+          (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
+             the pre-commit hook wrote posts/<slug>.md. *)
+          let eml := build_eml (random_bytes 32%int63) recipients_pk author slug title md sign_sk sign_pk_hex in
+          let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
+          _ <- create_directory "posts-encrypted" ;;
+          _ <- write_file eml_rel eml ;;
+          _ <- eprint (concat_all
+            ("smtp: encrypted -> " :: eml_rel :: lf :: nil)) ;;
+          publish_git branch slug eml_rel.
 
 (* ===================================================================== *)
 (*  Per-connection SMTP fold                                             *)
