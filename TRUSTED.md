@@ -15,6 +15,7 @@ in ROCQ) in crane_blog are:
 | **CI stack gate** | `scripts/check-tail-position.sh` in deploy/e2e workflows (C10) | Class-level stack-overflow prevention on the extracted C++; a build-time re-check, not a proof |
 | **Thin marshalling shims** | `browser_helpers.h`, `crypto_helpers.h`, `net_helpers.h`, `proc_helpers.h` (C1–C6) | Pure platform delegation per the thin-shim test; guarded by `check-shim-thinness.sh` |
 | **Delivery/cache layer** | Cloudflare, git-pages HTTP cache headers (C14) | HTML served with `no-store`, assets with `max-age=14400`; cache-busting via `?v=` query parameter on asset URLs (Logic.v `asset_version`) |
+| **Reader key directory** | Public Cloudflare Worker + KV (`crane-blog-keydir`), `scripts/resolve-keys.sh`, `EnrollApp` `reg_key` → `keydir_register` (C16/C2) | Registration is self-authenticating (`kid == sha256(compress(pubkey))[:12]`) and keys are public by design; a registered key grants only the ability to be a recipient. Availability/DoS surface, not confidentiality — no reader private key ever crosses it |
 | **Build config** | dune, Dockerfile, CI workflows (C10) | Orchestration only; crane_*.check syntax gates guard extraction |
 
 **Everything above** — every behavioral decision, the generated artifact's
@@ -423,6 +424,39 @@ completeness but are **not active trusted boundaries today**.
   MSDF atlas — no typesetting logic crosses the seam (all line-breaking /
   layout is the proven Knuth-Plass + GlyphLayout pipeline). Until the WASM
   integration step ships it, it is a no-op and trusts nothing at runtime.
+
+---
+
+## C16 — Reader key directory (public Cloudflare Worker + KV)
+
+- **What it is.** A public key directory that makes the "reader sends only the
+  short key ID" story work end-to-end, automatically, with no manual key files:
+  on enrollment the browser POSTs the fresh public key (`EnrollApp.v` `reg_key`
+  → `browser_helpers.h` `keydir_register`, boundary C2); the encrypt side
+  resolves `keys/<kid>.pub` by ID from the same directory
+  (`scripts/resolve-keys.sh`, the pre-commit hook, and the smtp container's
+  `entrypoint.sh`).
+- **Deployment.** The `crane-blog-keydir` Worker + KV namespace on Cloudflare
+  (a separate wrangler project outside this repo; bound as `KEYDIR`).
+  `POST /keys {kid, pubkey}` validates in pure JS: `pubkey` is a 130-hex
+  uncompressed SEC1 P-256 point, checked on-curve, and
+  `kid == sha256(compress(pubkey))[:12]` — **self-authenticating**: a request
+  can only register a key under its own ID.  `GET /keys/<kid>` returns the
+  pubkey hex, byte-identical to what `crypto_helpers.h` expects in
+  `keys/<kid>.pub`.  Per-IP registration budget in KV + Cloudflare rate limits
+  bound abuse; the origin allowlist covers `wklm.online` on any port (the e2e
+  origin is `wklm.online:8443`).
+- **Why it is trusted rather than proven.** The directory is a public registry
+  of *public* keys: no confidentiality is at stake; registration grants exactly
+  the capability of being addressable as a recipient of posts; and the key ID
+  is the authenticity check (mismatched IDs are rejected).  The remaining
+  risks are availability (rate caps) and storage spam (bounded by validation).
+  It is **not** an identity provider: registering a key proves nothing about
+  who the human is — the same trust-on-first-use as the previous manual key
+  exchange, now automatic.  No reader private key ever crosses this boundary:
+  the JWK stays in the reader's IndexedDB (C2); fuji and Cloudflare only ever
+  see public keys.  Envelope signing is unchanged — a registered key alone can
+  never author posts.
 
 ---
 

@@ -59,6 +59,7 @@ Definition id_enroll_ui              := "enroll-ui".
 Definition id_enroll_button          := "enroll-button".
 Definition id_enroll_status          := "enroll-status".
 Definition id_enroll_result          := "enroll-result".
+Definition id_enroll_reg_status      := "enroll-reg-status".
 Definition id_reader_key_id          := "reader-key-id".
 Definition id_reader_pubkey_hex      := "reader-pubkey-hex".
 Definition id_enroll_existing        := "enroll-existing".
@@ -103,7 +104,7 @@ Definition inbox_page_ids : list string :=
 
 Definition enroll_page_ids : list string :=
   id_main :: id_enroll_ui :: id_enroll_button :: id_enroll_status ::
-  id_enroll_result :: id_reader_key_id :: id_reader_pubkey_hex ::
+  id_enroll_result :: id_enroll_reg_status :: id_reader_key_id :: id_reader_pubkey_hex ::
   id_enroll_existing :: id_enroll_existing_status ::
   id_enroll_existing_info :: nil.
 
@@ -332,6 +333,7 @@ Definition serialize_enroll_page (p : enroll_page) : string :=
       "<p><strong>Key ID:</strong> <code id='reader-key-id'></code></p>" ::
       "<p>Full public key (for reference):</p>" ::
       "<pre id='reader-pubkey-hex' class='pubkey-display'></pre>" ::
+      "<p id='enroll-reg-status' class='enroll-note'></p>" ::
       "<p class='enroll-note'>The private key never leaves this device. "
         :: "You will be asked to authenticate with your passkey to decrypt posts.</p>" ::
       "</div>" ::

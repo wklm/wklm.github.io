@@ -87,6 +87,15 @@ GRANDFATHERED=(
   'StringLib::hex_encode_aux'      # audit appendix candidate; depth = bytes to hex (small).
   'entries_to_triples'             # audit appendix candidate (DecryptApp); depth = wraps entries.
   'collect_ids_aux'                # enroll-side cons-wrapped; depth = enrolled key count.
+  # -- Recipients.v (multi-recipient resolution; native tools only, depth capped) --
+  'Recipients::mem_str'            # tail branch (or-branch) + argument-inside-call; depth = list len.
+  'Recipients::dedup_str'          # cons-wrapped; depth = recipients (<= max_extra_recipients + 1 = 4).
+  'Recipients::collect_kids'       # cons-wrapped; depth = comma-separated kids in frontmatter (small).
+  'Recipients::take_kids'          # cons-wrapped; depth = max_extra_recipients (3).
+  'Recipients::recips_ok'          # argument-inside-call; depth = recipients (<= 4).
+  'Recipients::kid_list'           # cons-wrapped; depth = recipients (<= 4).
+  'Recipients::wrap_all'           # cons-wrapped; depth = recipients (<= 4); one HPKE wrap per entry.
+  'Recipients::readers_to'         # cons-wrapped; depth = recipients (<= 4).
   # -- generator (blog.cpp) --
   'html_escape_aux'                # per-byte cat-wrapped; depth = escaped chunk length.
   'nat_of_int_fuel0'               # `F(...)+1` shape; bounded by int-as-string length.
@@ -96,6 +105,7 @@ GRANDFATHERED=(
   # -- native tools (decrypt_post.exe / encrypt_post.exe) --
   'MimeBuild::inner_attachments'   # cons-wrapped; depth = #attachments.
   'read_images'                    # assigned recursion; depth = #images (native tool).
+  'read_pubkeys'                   # assigned recursion; depth = #recipients (capped at max_extra_recipients + 1 = 4).
   'MimeBuild::wrap_base64_aux'     # cat-wrapped; depth = base64 lines of one image.
   'MimeBuild::collect_meta'        # cons-wrapped; depth = frontmatter lines.
   'MimeBuild::collect_images_aux'  # cons-wrapped; depth = markdown image refs.

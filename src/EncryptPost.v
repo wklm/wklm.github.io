@@ -35,6 +35,7 @@ Require Import MimeBuild.
 Require Import CryptoSpec.
 Require Import IoEffects.
 Require Import PostBuild.   (* slug_from_content *)
+Require Import Recipients.  (* multi-recipient resolution + envelope building *)
 
 Open Scope pstring_scope.
 
@@ -91,24 +92,25 @@ Fixpoint read_images (rels : list string) : IO (list (string * string)) :=
       Ret ((basename_of rel, wrap_base64 (base64_encode bytes)) :: others)
   end.
 
-(* Build the full outer envelope from a *single* materialized CEK.  cek is a
-   function parameter so Crane evaluates [random_bytes 32] exactly once at the
-   call site — a nullary Definition (like generate_cek) would be inlined and
-   re-evaluated, encrypting the body under a different CEK than the wrap.
-   [sign_sk] is the raw 32-byte ECDSA signing key and [sign_pk_hex] the hex
-   65-byte uncompressed signing public key: the RAW ciphertext package
-   (nonce||ct||tag) is signed, exactly as DecryptPost/DecryptApp verify it. *)
-Definition build_envelope
-  (cek pub_raw kid slug inner_mime sign_sk sign_pk_hex : string) : string :=
-  let ct_package := encrypt_body cek inner_mime slug in
-  let sig_raw := sign_post sign_sk ct_package in
-  let '(ek, wrapped) := wrap_cek cek pub_raw kid in
-  build_outer_envelope
-    (kid :: nil)
-    ((kid, hex_encode ek, hex_encode wrapped) :: nil)
-    (wrap_base64 (base64_encode ct_package))
-    (hex_encode sig_raw)
-    sign_pk_hex.
+(* Read keys/<kid>.pub for every recipient (author first).  Concrete at this
+   file's IO (dirE +' ioE +' toolE); see the note in Recipients.v.  The
+   recursion is the whole first statement so the tail-position gate passes. *)
+Fixpoint read_pubkeys (kids : list string) : IO (list (string * string)) :=
+  match kids with
+  | [] => Ret []
+  | kid :: rest =>
+      others <- read_pubkeys rest ;;
+      pub_hex <- read (cat "keys/" (cat kid ".pub")) ;;
+      let pub_raw := hex_decode (trim pub_hex) in
+      Ret ((kid, pub_raw) :: others)
+  end.
+
+(* Build the full outer envelope — now shared, multi-recipient, in
+   Recipients.build_envelope (single source of truth with SmtpServer.v).
+   The CEK is still a materialized parameter so [random_bytes 32] is evaluated
+   exactly once at the call site.  One Public-Keys / Wraps entry per recipient;
+   the RAW ciphertext package is signed exactly as DecryptPost/DecryptApp
+   verify it. *)
 
 (* ---- the encrypt pipeline for one .md file ------------------------- *)
 
@@ -122,8 +124,6 @@ Definition encrypt_one (md_path : string) : IO unit :=
   let title := if is_empty title_meta then "Untitled" else title_meta in
   kid <- getenv "CRANE_BLOG_AUTHOR_KEY_ID" ;;
   let kid := trim kid in
-  pub_hex <- read (cat "keys/" (cat kid ".pub")) ;;
-  let pub_raw := hex_decode (trim pub_hex) in
   email <- getenv "CRANE_BLOG_AUTHOR_EMAIL" ;;
   let email := trim email in
   sign_kid0 <- getenv "CRANE_BLOG_SIGNING_KEY_ID" ;;
@@ -139,18 +139,30 @@ Definition encrypt_one (md_path : string) : IO unit :=
     let sign_pk_hex := trim sign_pub_hex in
     let image_rels := collect_image_refs raw in
     images <- read_images image_rels ;;
-    let recipients_str := cat "reader:" kid in
-    let protected_headers :=
-      ("From", email) ::
-      ("To", recipients_str) ::
-      ("Date", fixed_date) ::
-      ("Subject", title) :: nil in
-    let inner_mime := build_inner_mime protected_headers md_basename raw images in
-    let envelope := build_envelope (random_bytes 32%int63) pub_raw kid slug inner_mime sign_sk sign_pk_hex in
-    _ <- create_directory "posts-encrypted" ;;
-    _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
-    eprint (concat_all
-      ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil)).
+    (* Recipients: the author (CRANE_BLOG_AUTHOR_KEY_ID) is always first;
+       frontmatter `recipients: kid1, kid2` adds up to 3 more readers.  Their
+       public keys are resolved from keys/<kid>.pub. *)
+    let recipients_meta := header_lookup "recipients" kv in
+    let recips := build_recipients kid recipients_meta in
+    recipients_pk <- read_pubkeys recips ;;
+    if negb (recips_ok recipients_pk)
+    then
+      _ <- eprint (concat_all
+        ("encrypt_post: missing or unreadable recipient public key under keys/" :: lf :: nil)) ;;
+      exit_with 1%int63
+    else
+      let recipients_str := recipients_to (kid_list recipients_pk) in
+      let protected_headers :=
+        ("From", email) ::
+        ("To", recipients_str) ::
+        ("Date", fixed_date) ::
+        ("Subject", title) :: nil in
+      let inner_mime := build_inner_mime protected_headers md_basename raw images in
+      let envelope := build_envelope (random_bytes 32%int63) recipients_pk slug inner_mime sign_sk sign_pk_hex in
+      _ <- create_directory "posts-encrypted" ;;
+      _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
+      eprint (concat_all
+        ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil)).
 
 (* ---- entry point --------------------------------------------------- *)
 

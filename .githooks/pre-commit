@@ -127,6 +127,25 @@ if [[ ${#staged[@]} -eq 0 ]]; then
     exit 0
 fi
 
+# Resolve reader public keys from the key directory (automatic, on the fly).
+# Readers enroll on the site and their keys are registered in the public key
+# directory; their short IDs appear in the post frontmatter as
+# `recipients: kid1, kid2`.  Fetch any missing keys/<kid>.pub before
+# encrypting — the author never saves a key file by hand.  Unknown kids fail
+# the commit with a clear message.
+needed=()
+for path in "${staged[@]}"; do
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && needed+=("$line")
+    done < <(
+        grep -m1 '^recipients:' "$path" 2>/dev/null | sed 's/^recipients:[[:space:]]*//' \
+          | tr ',' '\n' | tr -d '[:space:]' | grep -E '^[0-9a-f]{12}$' || true
+    )
+done
+if [[ ${#needed[@]} -gt 0 ]]; then
+    bash "$repo/scripts/resolve-keys.sh" "${needed[@]}"
+fi
+
 if ! command -v dune >/dev/null 2>&1; then
     echo "pre-commit: dune not on PATH; did you 'eval \$(opam env)'?" >&2
     exit 1

@@ -23,7 +23,7 @@ FROM debian:13-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       git openssh-client ca-certificates libssl3 libstdc++6 \
+       git openssh-client ca-certificates libssl3 libstdc++6 curl \
     && rm -rf /var/lib/apt/lists/* \
     # Single-tenant container: trust the checkout regardless of bind-mount
     # ownership (git's dubious-ownership guard otherwise blocks operations on a

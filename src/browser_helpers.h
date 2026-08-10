@@ -733,6 +733,40 @@ inline std::string idb_put(const std::string& store, const std::string& json_rec
 }
 
 // ===========================================================================
+// Key-directory registration (brE).  Posts the reader's fresh public key to
+// the crane-blog key directory (public Cloudflare Worker + KV) so the author
+// can encrypt to the reader by the short ID alone.  url = full directory
+// endpoint; body = the JSON {"kid", "pubkey"} record chosen by ROCQ
+// (EnrollApp.v).  Returns "1" on any 2xx, "" on failure.  TRUSTED-OK(C2):
+// this is pure marshalling of a ROCQ-chosen URL/body over fetch; the
+// endpoint URL and the registration policy live in ROCQ, not here.
+inline std::string keydir_register(const std::string& url,
+                                    const std::string& json_body) {
+    char* p = reinterpret_cast<char*>(EM_ASM_PTR({
+        return Asyncify.handleAsync(async () => {
+            try {
+                var resp = await fetch(UTF8ToString($0), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: UTF8ToString($1)
+                });
+                if (!resp.ok) throw new Error('keydir_register ' + resp.status);
+                var enc = new TextEncoder(); var b = enc.encode('1');
+                var ptr = _malloc(4 + b.length);
+                HEAPU8[ptr] = (b.length >> 0) & 0xff; HEAPU8[ptr+1] = (b.length >> 8) & 0xff;
+                HEAPU8[ptr+2] = (b.length >> 16) & 0xff; HEAPU8[ptr+3] = (b.length >> 24) & 0xff;
+                HEAPU8.set(b, ptr + 4);
+                return ptr;
+            } catch (e) {
+                var ptr = _malloc(4); HEAPU8[ptr]=0; HEAPU8[ptr+1]=0;
+                HEAPU8[ptr+2]=0; HEAPU8[ptr+3]=0; return ptr;
+            }
+        });
+    }, url.data(), json_body.data()));
+    return crane_browser_detail::take_lp(p);
+}
+
+// ===========================================================================
 // WebAuthn (brE).  create returns the new credential rawId as hex ("" on
 // failure); get authenticates an existing credential by hex id, returning "1"
 // on success / "" on failure.

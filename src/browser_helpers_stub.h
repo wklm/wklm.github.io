@@ -63,6 +63,7 @@ inline std::monostate ss_remove(const std::string&) { return {}; }
 // ---- IndexedDB ----
 inline std::string idb_get_all(const std::string&) { return std::string("[]"); }
 inline std::string idb_put(const std::string&, const std::string&) { return std::string(); }
+inline std::string keydir_register(const std::string&, const std::string&) { return std::string(); }
 
 // ---- WebAuthn ----
 // Signatures match browser_helpers.h: the ceremony policy (alg CSV, residentKey,
