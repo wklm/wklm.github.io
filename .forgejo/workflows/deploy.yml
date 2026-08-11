@@ -38,17 +38,20 @@ jobs:
           for eml in posts-encrypted/*.eml; do
             [ -e "$eml" ] || continue
             clean="$(tr -d '\r' < "$eml")"
-            if ! printf '%s\n' "$clean" | grep -qx 'Subject: \.\.\.'; then
+            # here-strings, not `printf | grep -q`: -q exits on first match and can
+            # SIGPIPE the upstream stage, racing into spurious refusals on large
+            # envelopes; and here-strings keep the whole line intact for -x.
+            if ! grep -x 'Subject: \.\.\.' <<<"$clean" >/dev/null; then
               echo "$eml: outer Subject not placeholder. File head:"
               head -n 5 "$eml"
               exit 1
             fi
-            printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
-            printf '%s\n' "$clean" | grep -qE '^Signature: [0-9a-f]{128}$' \
+            grep -iE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' <<<"$clean" >/dev/null || { echo "$eml: not an encrypted envelope"; exit 1; }
+            grep -E '^Signature: [0-9a-f]{128}$' <<<"$clean" >/dev/null \
               || { echo "$eml: missing 64-byte hex Signature header (128 hex chars) — signed envelopes only"; exit 1; }
-            printf '%s\n' "$clean" | grep -qE '^Signing-Key: [0-9a-f]{130}$' \
+            grep -E '^Signing-Key: [0-9a-f]{130}$' <<<"$clean" >/dev/null \
               || { echo "$eml: missing 65-byte uncompressed hex Signing-Key header (130 hex chars) — signed envelopes only"; exit 1; }
-            if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+            if grep -E '^(From|To|Date): ' <<<"$clean" >/dev/null; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
           done
 
       - name: Build generator image (+ builder stage for the tail-position gate)
