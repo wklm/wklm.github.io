@@ -190,20 +190,29 @@ Definition is_bad_url (url : string) : bool :=
            (orb (starts_with url "https://")
                 (int_eqb (PrimString.get url 0%int63) ch_slash))).
 
+(* Collect image references.  The scan JUMPS to the next '!' with find_char
+   (which extracts to an iterative loop) instead of stepping one byte per
+   frame: the per-byte step was a non-tail recursion over the whole body — one
+   native frame plus a full std::string copy per body byte (Crane passes
+   strings by value), overflowing the native stack on essays beyond ~11 KB
+   (the same class as research-stack-overflow-rootcause.md §5).  Depth is now
+   O(#image refs + #bang-jumps), not O(body length). *)
 Fixpoint collect_images_aux (body : string) (pos : int) (fuel : nat) : list string :=
   match fuel with
   | O => []
   | S f' =>
       let n := PrimString.length body in
-      if leb n (add pos 1%int63) then []
+      if leb n pos then []
       else
-        let c0 := PrimString.get body pos in
-        let c1 := PrimString.get body (add pos 1%int63) in
-        if andb (int_eqb c0 ch_bang) (int_eqb c1 ch_lbrack) then
-          let close := find_char body ch_rbrack (add pos 2%int63) mime_fuel in
+        let bang := find_char body ch_bang pos mime_fuel in
+        if leb n (add bang 1%int63) then []
+        else if negb (int_eqb (PrimString.get body (add bang 1%int63)) ch_lbrack) then
+          collect_images_aux body (add bang 1%int63) f'
+        else
+          let close := find_char body ch_rbrack (add bang 2%int63) mime_fuel in
           if leb n (add close 1%int63) then []
           else if negb (int_eqb (PrimString.get body (add close 1%int63)) ch_lparen) then
-            collect_images_aux body (add pos 1%int63) f'
+            collect_images_aux body (add bang 1%int63) f'
           else
             let paren_open := add close 2%int63 in
             let paren_close := find_char body ch_rparen paren_open mime_fuel in
@@ -214,7 +223,6 @@ Fixpoint collect_images_aux (body : string) (pos : int) (fuel : nat) : list stri
               if is_bad_url url
               then collect_images_aux body next f'
               else url :: collect_images_aux body next f'
-        else collect_images_aux body (add pos 1%int63) f'
   end.
 
 Definition collect_image_refs (body : string) : list string :=

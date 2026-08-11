@@ -90,27 +90,31 @@ done < <(
 )
 if [[ ${#emls[@]} -gt 0 ]]; then
     for eml in "${emls[@]}"; do
-        if ! git show ":$eml" | tr -d '\r' | grep -qx 'Subject: \.\.\.'; then
+        # NOTE: no -q here.  `grep -q` exits on the first match and SIGPIPEs the
+        # upstream `git show | tr` stages; under `set -o pipefail` that races
+        # into a spurious refusal on larger envelopes.  Read everything and
+        # discard output instead.
+        if ! git show ":$eml" | tr -d '\r' | grep -x 'Subject: \.\.\.' >/dev/null; then
             echo "pre-commit: refusing $eml; outer Subject must be literal ..." >&2
             exit 1
         fi
-        if ! git show ":$eml" | tr -d '\r' | grep -qi '^Content-Type: multipart/hpke+wrapped'; then
+        if ! git show ":$eml" | tr -d '\r' | grep -i '^Content-Type: multipart/hpke+wrapped' >/dev/null; then
             echo "pre-commit: refusing $eml; expected HPKE multipart/hpke+wrapped envelope" >&2
             exit 1
         fi
-        if ! git show ":$eml" | tr -d '\r' | grep -qE '^Signature: [0-9a-f]{128}$'; then
+        if ! git show ":$eml" | tr -d '\r' | grep -E '^Signature: [0-9a-f]{128}$' >/dev/null; then
             echo "pre-commit: refusing $eml; missing 64-byte hex Signature header (128 hex chars) -- signed envelopes only" >&2
             exit 1
         fi
-        if ! git show ":$eml" | tr -d '\r' | grep -qE '^Signing-Key: [0-9a-f]{130}$'; then
+        if ! git show ":$eml" | tr -d '\r' | grep -E '^Signing-Key: [0-9a-f]{130}$' >/dev/null; then
             echo "pre-commit: refusing $eml; missing 65-byte uncompressed hex Signing-Key header (130 hex chars) -- signed envelopes only" >&2
             exit 1
         fi
-        if ! git show ":$eml" | tr -d '\r' | grep -q 'Public-Keys: '; then
+        if ! git show ":$eml" | tr -d '\r' | grep 'Public-Keys: ' >/dev/null; then
             echo "pre-commit: refusing $eml; missing Public-Keys header" >&2
             exit 1
         fi
-        if git show ":$eml" | tr -d '\r' | grep -Eq '^(From|To|Date): '; then
+        if git show ":$eml" | tr -d '\r' | grep -E '^(From|To|Date): ' >/dev/null; then
             echo "pre-commit: refusing $eml; outer envelope exposes sender, recipient, or date metadata" >&2
             exit 1
         fi
