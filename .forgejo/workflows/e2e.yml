@@ -70,11 +70,13 @@ jobs:
           for eml in posts-encrypted/*.eml; do
             [ -e "$eml" ] || continue
             clean="$(tr -d '\r' < "$eml")"
-            printf '%s\n' "$clean" | grep -qx 'Subject: \.\.\.' || { echo "$eml: outer Subject not placeholder"; exit 1; }
-            printf '%s\n' "$clean" | grep -qiE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' || { echo "$eml: not an encrypted envelope"; exit 1; }
-            printf '%s\n' "$clean" | grep -qE '^Signature: [0-9a-f]{128}$' || { echo "$eml: missing 64-byte hex Signature"; exit 1; }
-            printf '%s\n' "$clean" | grep -qE '^Signing-Key: [0-9a-f]{130}$' || { echo "$eml: missing 65-byte uncompressed hex Signing-Key"; exit 1; }
-            if printf '%s\n' "$clean" | grep -Eq '^(From|To|Date): '; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+            # here-strings, not `printf | grep -q`: see deploy.yml — -q early-exit
+            # races spurious refusals on large envelopes.
+            grep -x 'Subject: \.\.\.' <<<"$clean" >/dev/null || { echo "$eml: outer Subject not placeholder"; exit 1; }
+            grep -iE '^Content-Type: multipart/(hpke\+wrapped|encrypted)' <<<"$clean" >/dev/null || { echo "$eml: not an encrypted envelope"; exit 1; }
+            grep -E '^Signature: [0-9a-f]{128}$' <<<"$clean" >/dev/null || { echo "$eml: missing 64-byte hex Signature"; exit 1; }
+            grep -E '^Signing-Key: [0-9a-f]{130}$' <<<"$clean" >/dev/null || { echo "$eml: missing 65-byte uncompressed hex Signing-Key"; exit 1; }
+            if grep -E '^(From|To|Date): ' <<<"$clean" >/dev/null; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
           done
 
       - name: Build runtime generator image
