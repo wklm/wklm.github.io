@@ -54,6 +54,24 @@ slug: ${SLUG}
 ---
 ${SECRET_PARA}
 
+## A Markdown Heading
+
+Some **bold** and *italic* and \`inline code\` and a [link](https://wklm.online).
+
+- first item
+- second item
+
+1. ordered one
+2. ordered two
+
+> A quoted line.
+
+---
+
+\`\`\`
+let code = 1 < 2;
+\`\`\`
+
 ${LONG_PARA}
 
 A short closing paragraph to exercise the multi-paragraph chunked renderer.
@@ -237,6 +255,36 @@ async function runRoundTrip(page: Page, sink: ErrorSink) {
   // module hanging or timing out — the Wave-2b DP perf fix + chunking working
   // end to end (the old O(n^3) breaker would not have finished in time).
   await expect(page.locator('#real-body')).toContainText('Knuth and Plass');
+
+  // ---- Markdown formatting renders (md_to_html in #real-body) ------------
+  // The accessible reading view is a real markdown renderer now: headings,
+  // inline formatting, lists, blockquotes, rules and fenced code all produce
+  // the corresponding HTML, and only fixed-literal tags ever appear (the
+  // fixture's inline code "1 < 2" must come out escaped, never as markup).
+  const bodyHtml = (await page.locator('#real-body').innerHTML()) || '';
+  expect(bodyHtml).toContain('<h2>A Markdown Heading</h2>');
+  expect(bodyHtml).toContain('<strong>bold</strong>');
+  expect(bodyHtml).toContain('<em>italic</em>');
+  expect(bodyHtml).toContain('<code>inline code</code>');
+  // innerHTML re-serializes attribute quotes to double quotes — the renderer
+  // emits single-quoted attributes (Crane cannot extract a " into a string),
+  // and the DOM serializer normalizes them to ".
+  expect(bodyHtml).toContain('<a href="https://wklm.online">link</a>');
+  expect(bodyHtml).toContain('<ul><li>first item</li><li>second item</li></ul>');
+  expect(bodyHtml).toContain('<ol><li>ordered one</li><li>ordered two</li></ol>');
+  expect(bodyHtml).toContain('<blockquote><p>A quoted line.</p></blockquote>');
+  expect(bodyHtml).toContain('<hr>');
+  expect(bodyHtml).toContain('<pre><code>');
+  expect(bodyHtml).toContain('let code = 1 &lt; 2;');
+  expect(await page.locator('#real-body strong').count()).toBe(1);
+  expect(await page.locator('#real-body h2').count()).toBe(1);
+  expect(await page.locator('#real-body ul li').count()).toBe(2);
+  expect(await page.locator('#real-body ol li').count()).toBe(2);
+  expect(await page.locator('#real-body blockquote').count()).toBe(1);
+  expect(await page.locator('#real-body pre code').count()).toBe(1);
+  // No <script>/<img>/foreign tags can ever come out of the renderer:
+  expect(bodyHtml).not.toContain('<script');
+  expect(bodyHtml).not.toContain('<img');
 
   // ---- Verified-Reader canvas: the ROCQ Typeset engine painted the body. ----
   // The decrypted body is rendered onto #reader-canvas via reader_begin/
