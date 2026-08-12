@@ -43,7 +43,7 @@ Import ListNotations.
 Require Import StringLib.
 Require Import MimeLib.
 Require Import MimeBuild.        (* split_parts, split_headers_body2, hex_decode, strip_ws... *)
-Require Import InnerMime.        (* extract_inner_text / body_to_html / images_label *)
+Require Import InnerMime.        (* extract_inner_text / md_to_html / images_label *)
 Require Import CryptoSpec.       (* unwrap_cek / decrypt_body (pure ROCQ, unchanged) *)
 Require Import BrowserCrypto.    (* re-points the 9 axioms to browser_helpers.h *)
 Require Import BridgeFFI.        (* json_array_len / json_array_field *)
@@ -204,7 +204,24 @@ Definition passkey_gate (kid : string) : BIO bool :=
    then one [reader_glyph] brE effect per quad, sequenced after [reader_begin].
    The draw MUST be an itree brE effect (not the dead-code-eliminated
    GlyphLayout.draw_glyph_quads [_ -> unit] axiom) so its result is sequenced
-   into the run — see crane-extraction-gotchas. *)
+   into the run — see crane-extraction-gotchas.
+
+   Wave 4 (markdown awareness): the canvas is the visible reading surface, so
+   it now honours markdown at the BLOCK level while leaving the verified
+   Typeset core (Boxes / Metrics / KnuthPlass / GlyphLayout) byte-identical:
+     - headings 1..6 are laid out at a reduced measure (MEASURE / k) and their
+       quads drawn scaled by k with the font size set via [reader_style] k, so
+       a heading that fits at 10pt fills the measure at its true size;
+     - list items get a leading bullet (U+2022) quad + hanging indent;
+     - blockquotes are indented; fenced code renders monospace with the fence
+       markers stripped (split_paragraphs joins lines with spaces, so code line
+       structure is lost on canvas — full-fidelity code lives in the #real-body
+       HTML view);
+     - inline markers (bold as **bold**, emphasis as *em*, code spans as
+       `code`, links as [label](url)) are stripped so the canvas reads cleanly.
+
+   [heading_k lvl] (the sp scale per level) MUST stay in lockstep with the
+   reader_style table in browser_helpers.h — see the cross-reference there. *)
 
 (* Line measure (sp).  450pt = 450 * 65536 sp; at 96/72 px-per-pt that is ~600px,
    inside the canvas's CSS box (#reader-canvas is width:100%, max-width:42rem in
@@ -246,16 +263,28 @@ Fixpoint max_qy (qs : list quad) (acc : Z) : Z :=
 (* Inter-paragraph gap (sp): 12pt = 12 * 65536. *)
 Definition para_gap : Z := 786432%Z.
 
-(* Total stacked height (sp) of all paragraphs + gaps, used to size the canvas
-   before drawing.  Lays each paragraph out (the DP is O(n^2) after the Wave-2
-   KnuthPlass perf fix, so this pre-pass is cheap).
+(* ---- Markdown block classification for the canvas ------------------ *)
+(* Heading scale (sp): k = 65536 means 1.0x (10pt).  MUST match the
+   reader_style font table in browser_helpers.h (same ids).
 
-   Tail-recursive via accumulator + [rev] so Crane-extracted C++ can be
-   tail-call-optimized by em++ -O2, keeping the WASM call stack shallow
-   under Emscripten Asyncify instrumentation. *)
+   Defined BEFORE the ParaLayout inductive so its declaration lands ahead of
+   the struct in the extracted header: para_height (a method on the variant
+   struct) calls heading_k, and C++ member bodies cannot reference names
+   declared later in the header (the big_stretch forward-ref gotcha). *)
+Definition heading_k (lvl : int) : Z :=
+  if int_eqb lvl 1%int63 then 131072%Z   (* 2.00x = 20pt *)
+  else if int_eqb lvl 2%int63 then 114688%Z  (* 1.75x = 17.5pt *)
+  else if int_eqb lvl 3%int63 then 98304%Z   (* 1.50x = 15pt *)
+  else if int_eqb lvl 4%int63 then 81920%Z   (* 1.25x = 12.5pt *)
+  else 65536%Z.                             (* h5/h6: 1.0x, bold only *)
+
 Inductive ParaLayout : Type :=
-| PLText : list quad -> ParaLayout
-| PLLatex : string -> ParaLayout.
+| PLText    : list quad -> ParaLayout
+| PLHeading : list quad -> int -> ParaLayout   (* quads, heading level 1..6 *)
+| PLList    : list quad -> ParaLayout          (* bulleted (ul or ol) *)
+| PLQuote   : list quad -> ParaLayout          (* indented blockquote *)
+| PLCode    : list quad -> ParaLayout          (* monospace, fence stripped *)
+| PLLatex   : string -> ParaLayout.
 
 Definition is_latex_para (p : string) : bool :=
   let n := PrimString.length p in
@@ -263,6 +292,24 @@ Definition is_latex_para (p : string) : bool :=
   andb (int_eqb (PrimString.get p 0%int63) 36%int63)
        (int_eqb (PrimString.get p 1%int63) 36%int63).
 
+(* Layout measure for a heading at scale [k]: break the paragraph as if the
+   text were k/65536 wider, so after scaling the line fills [MEASURE]. *)
+Definition heading_measure (lvl : int) : Z :=
+  Z.div (Z.mul MEASURE 65536%Z) (heading_k lvl).
+
+(* Drop a leading and a trailing ``` fence marker from a paragraph (the fence
+   lines were space-joined by split_paragraphs, so both markers are inline). *)
+Definition strip_fences (s : string) : string :=
+  let n := PrimString.length s in
+  let s1 := if starts_with s "```" then PrimString.sub s 3%int63 (sub n 3%int63) else s in
+  let m := PrimString.length s1 in
+  if andb (leb 3%int63 m)
+          (string_eqb (PrimString.sub s1 (sub m 3%int63) 3%int63) "```")
+  then PrimString.sub s1 0%int63 (sub m 3%int63)
+  else s1.
+
+(* Lay out each paragraph with its markdown block kind.  Heading/latex
+   paragraphs keep their own layout params; the Typeset core is untouched. *)
 Fixpoint layout_all_tr (ps : list string) (acc : list ParaLayout) : list ParaLayout :=
   match ps with
   | nil => rev acc
@@ -270,35 +317,146 @@ Fixpoint layout_all_tr (ps : list string) (acc : list ParaLayout) : list ParaLay
       if is_latex_para body then
         layout_all_tr rest (PLLatex body :: acc)
       else
-        layout_all_tr rest (PLText (layout_paragraph advance_of MEASURE (shape_paragraph body)) :: acc)
+        let lvl := md_heading_level body in
+        if ltb 0%int63 lvl then
+          layout_all_tr rest
+            (PLHeading (layout_paragraph advance_of (heading_measure lvl)
+                          (shape_paragraph (md_strip_inline (md_heading_content body lvl))))
+                       lvl :: acc)
+        else if md_is_ul body then
+          layout_all_tr rest
+            (PLList (layout_paragraph advance_of MEASURE
+                       (shape_paragraph (md_strip_inline (md_list_body body)))) :: acc)
+        else if md_is_ol body then
+          layout_all_tr rest
+            (PLList (layout_paragraph advance_of MEASURE
+                       (shape_paragraph (md_strip_inline (md_list_body body)))) :: acc)
+        else if md_is_quote body then
+          layout_all_tr rest
+            (PLQuote (layout_paragraph advance_of MEASURE
+                        (shape_paragraph (md_strip_inline (md_quote_content body)))) :: acc)
+        else if md_fence body then
+          layout_all_tr rest
+            (PLCode (layout_paragraph advance_of MEASURE
+                       (shape_paragraph (md_strip_inline (strip_fences body)))) :: acc)
+        else
+          layout_all_tr rest
+            (PLText (layout_paragraph advance_of MEASURE
+                       (shape_paragraph (md_strip_inline body))) :: acc)
   end.
 
+(* Visual height (sp) of one laid-out paragraph. *)
+Definition para_height (pl : ParaLayout) : Z :=
+  match pl with
+  | PLText qs => max_qy qs 0%Z
+  | PLHeading qs lvl => Z.div (Z.mul (max_qy qs 0%Z) (heading_k lvl)) 65536%Z
+  | PLList qs => max_qy qs 0%Z
+  | PLQuote qs => max_qy qs 0%Z
+  | PLCode qs => max_qy qs 0%Z
+  | PLLatex _ => 3276800%Z
+  end.
+
+(* Total stacked height (sp) of all paragraphs + gaps, used to size the canvas
+   before drawing.  Lays each paragraph out (the DP is O(n^2) after the Wave-2
+   KnuthPlass perf fix, so this pre-pass is cheap).
+
+   Tail-recursive via accumulator + [rev] so Crane-extracted C++ can be
+   tail-call-optimized by em++ -O2, keeping the WASM call stack shallow
+   under Emscripten Asyncify instrumentation. *)
+(* Total stacked height (sp) of all paragraphs + gaps, used to size the canvas
+   before drawing.  Lays each paragraph out (the DP is O(n^2) after the Wave-2
+   KnuthPlass perf fix, so this pre-pass is cheap).
+
+   Tail-recursive via accumulator + [rev] so Crane-extracted C++ can be
+   tail-call-optimized by em++ -O2, keeping the WASM call stack shallow
+   under Emscripten Asyncify instrumentation. *)
 Fixpoint total_height (qss : list ParaLayout) (acc : Z) : Z :=
   match qss with
   | nil => acc
-  | PLText qs :: rest =>
-      total_height rest (Z.add (Z.add acc (max_qy qs 0%Z)) para_gap)
-  | PLLatex _ :: rest =>
-      total_height rest (Z.add (Z.add acc 3276800%Z) para_gap)
+  | pl :: rest =>
+      total_height rest (Z.add (Z.add acc (para_height pl)) para_gap)
   end.
 
-(* Sequence one [reader_glyph] per quad, offsetting every baseline by [dy] (sp).
-   Each effect's unit result is bound + discarded, so none is dead-code-eliminated. *)
-Fixpoint draw_quads_at (qs : list quad) (dy : Z) : BIO unit :=
+(* Sequence one [reader_glyph] per quad, offsetting every baseline by [dy] (sp)
+   and every pen by [dx] (sp).  Each effect's unit result is bound + discarded,
+   so none is dead-code-eliminated. *)
+Fixpoint draw_quads_at (qs : list quad) (dx dy : Z) : BIO unit :=
   match qs with
   | nil => Ret tt
   | q :: rest =>
-      _ <- reader_glyph (q_x q) (Z.add (q_y q) dy) (q_uv q) ;;
-      draw_quads_at rest dy
+      _ <- reader_glyph (Z.add dx (q_x q)) (Z.add dy (q_y q)) (q_uv q) ;;
+      draw_quads_at rest dx dy
   end.
 
-(* Lay out + paint each paragraph at an accumulating vertical offset [dy]. *)
+(* Draw quads scaled by [k] (sp scale, 65536 = 1.0): x and y are both scaled
+   BEFORE the paragraph offset [dy] is added, so a heading's internal baseline
+   grid grows with its font size. *)
+Fixpoint draw_quads_scaled (qs : list quad) (k : Z) (dy : Z) : BIO unit :=
+  match qs with
+  | nil => Ret tt
+  | q :: rest =>
+      _ <- reader_glyph (Z.div (Z.mul (q_x q) k) 65536%Z)
+                        (Z.add dy (Z.div (Z.mul (q_y q) k) 65536%Z))
+                        (q_uv q) ;;
+      draw_quads_scaled rest k dy
+  end.
+
+(* ---- List bullet + indents ---------------------------------------- *)
+(* U+2022 BULLET, drawn directly via the quad codepoint (reader_glyph paints
+   String.fromCodePoint, so the shaper's 0-255 byte mask does not apply to a
+   manually-emitted quad). *)
+Definition list_bullet : int := 8226%int63.
+
+(* 24pt hanging indent, in sp. *)
+Definition list_indent : Z := 1572864%Z.
+
+(* Add [dx] to every quad's pen x.  Tail-recursive accumulator (the gate
+   rejects cons-wrapped self-recursion). *)
+Fixpoint shift_quads_tr (qs : list quad) (dx : Z) (acc : list quad) : list quad :=
+  match qs with
+  | nil => rev acc
+  | q :: rest =>
+      shift_quads_tr rest dx (mkQuad (Z.add dx (q_x q)) (q_y q) (q_uv q) :: acc)
+  end.
+
+Definition shift_quads (qs : list quad) (dx : Z) : list quad :=
+  shift_quads_tr qs dx nil.
+
+(* Baseline of the first quad in a buffer (0 when empty). *)
+Definition first_qy (qs : list quad) : Z :=
+  match qs with
+  | nil => 0%Z
+  | q :: _ => q_y q
+  end.
+
+(* A bullet quad at x=0 on the first baseline, then the item text indented. *)
+Definition prepend_bullet (qs : list quad) : list quad :=
+  mkQuad 0%Z (first_qy qs) list_bullet :: shift_quads qs list_indent.
+
+(* Lay out + paint each paragraph at an accumulating vertical offset [dy].
+   Non-body kinds switch the canvas font via [reader_style] and restore it. *)
 Fixpoint render_paras (qss : list ParaLayout) (dy : Z) : BIO unit :=
   match qss with
   | nil => Ret tt
   | PLText qs :: rest =>
-      _ <- draw_quads_at qs dy ;;
-      render_paras rest (Z.add (Z.add dy (max_qy qs 0%Z)) para_gap)
+      _ <- draw_quads_at qs 0%Z dy ;;
+      render_paras rest (Z.add (Z.add dy (para_height (PLText qs))) para_gap)
+  | PLHeading qs lvl :: rest =>
+      _ <- reader_style lvl ;;
+      _ <- draw_quads_scaled qs (heading_k lvl) dy ;;
+      _ <- reader_style 0%int63 ;;
+      render_paras rest (Z.add (Z.add dy (para_height (PLHeading qs lvl))) para_gap)
+  | PLList qs :: rest =>
+      _ <- draw_quads_at (prepend_bullet qs) 0%Z dy ;;
+      render_paras rest (Z.add (Z.add dy (para_height (PLList qs))) para_gap)
+  | PLQuote qs :: rest =>
+      _ <- draw_quads_at (shift_quads qs list_indent) 0%Z dy ;;
+      render_paras rest (Z.add (Z.add dy (para_height (PLQuote qs))) para_gap)
+  | PLCode qs :: rest =>
+      _ <- reader_style 7%int63 ;;
+      _ <- draw_quads_at (shift_quads qs 786432%Z) 0%Z dy ;;   (* 12pt *)
+      _ <- reader_style 0%int63 ;;
+      render_paras rest (Z.add (Z.add dy (para_height (PLCode qs))) para_gap)
   | PLLatex latex :: rest =>
       used_h <- render_latex_canvas latex 0%Z dy ;;
       render_paras rest (Z.add (Z.add dy used_h) para_gap)
@@ -347,7 +505,7 @@ Definition render_decrypted (plaintext : string) : BIO unit :=
     dom_set_text id_real_body
       "(The decrypted message contained no readable text.)"
   else
-    _ <- dom_set_html id_real_body (body_to_html (inner_body ic)) ;;
+    _ <- dom_set_html id_real_body (md_to_html (inner_body ic)) ;;
     _ <- render_images ic ;;
     if leb (PrimString.length (inner_body ic)) max_canvas_body
     then render_canvas (inner_body ic)
