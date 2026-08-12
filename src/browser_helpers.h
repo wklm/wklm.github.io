@@ -548,6 +548,46 @@ inline std::monostate reader_glyph(double x_sp, double y_sp, int cp) {
     return std::monostate{};
 }
 
+// Select the font for subsequent reader_glyph calls.  Style ids must match the
+// ROCQ heading_k table in DecryptApp.v (DecryptApp.heading_k), which scales
+// the quad coordinates for the same id:
+//   id 0 = body     Georgia 10pt (k = 1.00)
+//   id 1 = h1       Georgia 20pt (k = 2.00)
+//   id 2 = h2       Georgia 17.5pt (k = 1.75)
+//   id 3 = h3       Georgia 15pt  (k = 1.50)
+//   id 4 = h4       Georgia 12.5pt (k = 1.25)
+//   id 5 = h5       Georgia 10pt bold (k = 1.00)
+//   id 6 = h6       Georgia 10pt bold (k = 1.00)
+//   id 7 = code     ui-monospace 10pt (k = 1.00)
+// Font sizes are expressed as 10pt design size * (k / 65536) * 96/72 px-per-pt,
+// so the painted glyphs line up with the ROCQ-computed (scaled) advances.
+inline std::monostate reader_style(int style) {
+    // NOTE: no top-level commas in the EM_ASM body — __VA_ARGS__ splits on
+    // top-level commas, so comma-declared vars would be mangled into extra
+    // macro args (each var gets its own statement instead).
+    EM_ASM({
+        var r = Module.__rdr;
+        if (!r || !r.cx) return;
+        var PXPT = 96 / 72;
+        var base = 10 * PXPT; // 10pt design size in CSS px
+        var k = 65536;
+        var weight = 'normal';
+        var family = 'Georgia, "Times New Roman", serif';
+        switch ($0) {
+            case 1: k = 131072; break;                     // h1 20pt
+            case 2: k = 114688; break;                     // h2 17.5pt
+            case 3: k = 98304; break;                      // h3 15pt
+            case 4: k = 81920; break;                      // h4 12.5pt
+            case 5: k = 65536; weight = 'bold'; break;     // h5 10pt bold
+            case 6: k = 65536; weight = 'bold'; break;     // h6 10pt bold
+            case 7: k = 65536; family = 'ui-monospace, Menlo, Consolas, monospace'; break;
+            default: k = 65536; break;                     // body
+        }
+        r.cx.font = weight + ' ' + (base * k / 65536) + 'px ' + family;
+    }, style);
+    return std::monostate{};
+}
+
 inline int64_t render_latex_canvas(const std::string& latex, int64_t x_sp, int64_t y_sp) {
     return EM_ASM_INT({
         var r = Module.__rdr;

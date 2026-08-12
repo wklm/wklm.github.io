@@ -81,6 +81,12 @@ Inductive brE : Type -> Type :=
    are [Z] (= Typeset [sp]) for the coordinates, realized as int64 via ZInt. *)
 | ReaderBegin   : string -> Z -> brE unit         (* canvas id, total height (sp) -> init+size 2D ctx *)
 | ReaderGlyph   : Z -> Z -> int -> brE unit       (* x_sp, y_sp, codepoint -> fillText *)
+(* ReaderStyle selects the font (and scale id) for subsequent ReaderGlyph
+   calls: 0=body serif 10pt, 1..6 = h1..h6 (sizes matched to the ROCQ
+   heading_k table in DecryptApp.v), 7 = monospace code.  The ROCQ side
+   scales the quad coordinates by heading_k for the same id, so size and
+   spacing stay consistent. *)
+| ReaderStyle   : int -> brE unit                 (* font style id *)
 (* Key directory (public Cloudflare Worker + KV; see EnrollApp.keydir_url).
    RegKey posts the reader's fresh public key so the author can encrypt to
    the reader by the short ID alone.  url = full directory endpoint,
@@ -134,6 +140,8 @@ Definition reader_begin {E} `{brE -< E} (id : string) (h : Z) : itree E unit :=
   embed (ReaderBegin id h).
 Definition reader_glyph {E} `{brE -< E} (x y : Z) (cp : int) : itree E unit :=
   embed (ReaderGlyph x y cp).
+Definition reader_style {E} `{brE -< E} (s : int) : itree E unit :=
+  embed (ReaderStyle s).
 Definition render_latex_canvas {E} `{brE -< E} (latex : string) (x y : Z) : itree E Z :=
   embed (RenderLatexCanvas latex x y).
 
@@ -172,6 +180,7 @@ Crane Extract Inductive brE => ""
     "crane_action_flag(std::monostate{})"
     "reader_begin(%a0, (double)%a1)"
     "reader_glyph((double)%a0, (double)%a1, (int)%a2)"
+    "reader_style((int)%a0)"
     "keydir_register(%a0, %a1)" ]
   From "browser_helpers.h".
 
@@ -214,6 +223,8 @@ Crane Extract Inlined Constant reader_begin =>
   "reader_begin(%a0, (double)%a1)" From "browser_helpers.h".
 Crane Extract Inlined Constant reader_glyph =>
   "reader_glyph((double)%a0, (double)%a1, (int)%a2)" From "browser_helpers.h".
+Crane Extract Inlined Constant reader_style =>
+  "reader_style((int)%a0)" From "browser_helpers.h".
 
 Crane Extract Inlined Constant reg_key =>
   "keydir_register(%a0, %a1)" From "browser_helpers.h".

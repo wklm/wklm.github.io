@@ -1,17 +1,26 @@
 (* InnerMime.v — pure port of static/decrypt.ml's [extract_inner_text] and
    [body_to_html] (+ [strip_frontmatter]): given the decrypted inner MIME, pull
    out the Subject, the concatenated text body, and the attachment filenames,
-   then render the body to escaped HTML for the decrypted reading view.
+   then render the body to HTML for the decrypted reading view.
+
+   [body_to_html] was replaced by the markdown renderer [md_to_html]
+   (InnerMime.v below): the accessible #real-body view now honours headings,
+   bold/emphasis/code spans, links, lists, blockquotes, rules and fenced code
+   blocks, while every input byte still flows through [escape_byte]/[escape_url_byte]
+   and all emitted tags are fixed literals, so the T1 escaping discipline holds
+   for the new renderer exactly as it did for the escape-only one.
 
    Reuses StringLib.v (string primitives) and MimeLib.v / MimeBuild.v (header /
    body split, boundary extraction, multipart split, part-filename, terminator
    trim).  All helpers are top-level Definitions / Fixpoints with explicit
-   return types to keep Crane's C++ free of std::any.
+   return types to keep Crane's C++ free of std::any, and every recursive
+   helper is tail-recursive (the check-tail-position.sh CI gate enforces this
+   on the extracted C++).
 
    T1 (privacy): the only sink for untrusted decrypted text is set_text_content;
-   [body_to_html] HTML-escapes every metacharacter (ampersand, angle brackets,
-   double-quote) so the single escaped-HTML sink (set_inner_html) can never
-   inject markup. *)
+   [md_to_html] HTML-escapes every metacharacter (ampersand, angle brackets,
+   double-quote — and single-quote inside URLs) so the single escaped-HTML sink
+   (set_inner_html) can never inject markup. *)
 
 From Corelib Require Import PrimString PrimInt63.
 Require Import StringLib.
@@ -141,7 +150,7 @@ Definition strip_frontmatter (s : string) : string :=
     if leb n body_start then s
     else PrimString.sub s body_start (sub n body_start).
 
-(* ---- HTML escaping + paragraph conversion (port of body_to_html) --- *)
+(* ---- HTML escaping + Markdown -> HTML (md_to_html) ------------------ *)
 (* Escape one byte for HTML text context (amp, lt, gt, dquote); else verbatim. *)
 Definition escape_byte (c : int) : string :=
   if int_eqb c ch_amp then "&amp;"
@@ -150,25 +159,112 @@ Definition escape_byte (c : int) : string :=
   else if int_eqb c ch_quote then "&quot;"
   else PrimString.make 1%int63 c.
 
-(* Walk [s] from [pos], emitting escaped text; "\n\n" -> "</p><p>", a lone "\n"
-   -> "<br>".  Top-level Fixpoint (params, single string return) to avoid
-   std::any (no nested let fix, no tuple recursion). *)
-(* AIDEV-NOTE: STACK-SAFETY TRAP (the "Maximum call stack size exceeded" crash).
-   [body_to_html] runs on EVERY decrypt (render_decrypted, DecryptApp.v:342 —
-   unconditionally; the max_canvas_body 4000-char guard only gates render_canvas).
-   The previous shape recursed once per body byte with the recursive call as an
-   ARGUMENT to [cat] (non-tail), so em++ -O2 could not TCO it and each byte cost
-   one Asyncify frame — capped only by mime_fuel=65536 — overflowing the 32 MB
-   WASM stack (the __emscripten_memcpy_js at the trace top is [cat]'s per-frame
-   std::string copy; binary-confirmed: func[119] self-recursing at 0x2783a).
-   ROCQ totality proved a normal form EXISTS, not that the native stack is
-   bounded — the fuel that proves termination is exactly the frame count that
-   overflowed.  Fix: tail-recursive [acc] (the call is now the whole RHS -> TCO
-   to a loop -> O(1) stack).  We accumulate with [cat acc piece] (append RIGHT),
-   so output order is preserved WITHOUT a finalising [rev]/[++] — important
-   because Coq's [List.rev]/[app] extract to NON-tail O(n^2) C++ and would just
-   relocate the overflow.  [PrimString.cat] is a primitive (O(1) stack). *)
-Fixpoint body_to_html_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
+(* Escape the bytes of [s] in [pos, stop) into [acc] (tail-recursive).  This is
+   the single escape primitive the whole markdown renderer funnels untrusted
+   text through, so the T1 discipline ("the only sink is escaped HTML") holds
+   by construction: every emitted tag below is a FIXED literal, never derived
+   from input. *)
+Fixpoint escape_run (s : string) (pos stop : int) (fuel : nat) (acc : string) : string :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => acc
+  | S f' =>
+      if orb (leb stop pos) (leb n pos) then acc
+      else escape_run s (add pos 1%int63) stop f'
+               (cat acc (escape_byte (PrimString.get s pos)))
+  end.
+
+(* Escape one byte inside a URL in a single-quoted HTML attribute: same as
+   [escape_byte] but ALSO escapes the single quote (&#39;) so a URL can never
+   break out of the attribute delimiter. *)
+Definition escape_url_byte (c : int) : string :=
+  if int_eqb c 39%int63 then "&#39;"   (* ' *)
+  else escape_byte c.
+
+Fixpoint escape_url_run (s : string) (pos stop : int) (fuel : nat) (acc : string) : string :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => acc
+  | S f' =>
+      if orb (leb stop pos) (leb n pos) then acc
+      else escape_url_run s (add pos 1%int63) stop f'
+               (cat acc (escape_url_byte (PrimString.get s pos)))
+  end.
+
+(* ---- Inline delimiter scanners ------------------------------------- *)
+(* All four return the index of the closing delimiter (or [n] = length of s
+   when the delimiter is never found, so the caller falls back to literal
+   text).  Tail-recursive, fuel-bounded. *)
+
+(* First "**" at or after [pos]. *)
+Fixpoint find_dd (s : string) (pos : int) (fuel : nat) : int :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => n
+  | S f' =>
+      if leb n (add pos 1%int63) then n
+      else if andb (int_eqb (PrimString.get s pos) 42%int63)
+                   (int_eqb (PrimString.get s (add pos 1%int63)) 42%int63)
+           then pos
+           else find_dd s (add pos 1%int63) f'
+  end.
+
+(* First single "*" at or after [pos] (emphasis closer). *)
+Fixpoint find_star (s : string) (pos : int) (fuel : nat) : int :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => n
+  | S f' =>
+      if leb n pos then n
+      else if int_eqb (PrimString.get s pos) 42%int63
+           then pos
+           else find_star s (add pos 1%int63) f'
+  end.
+
+(* First "`" at or after [pos] (code-span closer). *)
+Fixpoint find_tick (s : string) (pos : int) (fuel : nat) : int :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => n
+  | S f' =>
+      if leb n pos then n
+      else if int_eqb (PrimString.get s pos) 96%int63
+           then pos
+           else find_tick s (add pos 1%int63) f'
+  end.
+
+(* First "]" at or after [pos] (link label terminator). *)
+Fixpoint find_rbracket (s : string) (pos : int) (fuel : nat) : int :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => n
+  | S f' =>
+      if leb n pos then n
+      else if int_eqb (PrimString.get s pos) 93%int63
+           then pos
+           else find_rbracket s (add pos 1%int63) f'
+  end.
+
+(* First ")" at or after [pos] (link URL terminator). *)
+Fixpoint find_rparen (s : string) (pos : int) (fuel : nat) : int :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => n
+  | S f' =>
+      if leb n pos then n
+      else if int_eqb (PrimString.get s pos) 41%int63
+           then pos
+           else find_rparen s (add pos 1%int63) f'
+  end.
+
+(* ---- Inline renderer ------------------------------------------------ *)
+(* Render the inline markdown of one line: escapes every byte, and expands
+   **bold**, *italic*, `code` and [text](url) to fixed-literal tags whose
+   CONTENT is escaped by [escape_run] (URLs included).  Unmatched delimiters
+   stay literal.  No nesting (span content is escaped flat) so the whole
+   function is tail-recursive — one frame per byte, TCO-able by em++ -O2, and
+   fuel-bounded. *)
+Fixpoint md_inline_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
   let n := PrimString.length s in
   match fuel with
   | O => acc
@@ -176,18 +272,338 @@ Fixpoint body_to_html_aux (s : string) (pos : int) (fuel : nat) (acc : string) :
       if leb n pos then acc
       else
         let c := PrimString.get s pos in
-        if int_eqb c ch_newline then
+        (* 42 = '*', 96 = '`', 91 = '[', 93 = ']', 40 = '(', 41 = ')' *)
+        if int_eqb c 42%int63 then
           if andb (ltb (add pos 1%int63) n)
-                  (int_eqb (PrimString.get s (add pos 1%int63)) ch_newline)
-          then body_to_html_aux s (add pos 2%int63) f' (cat acc "</p><p>")
-          else body_to_html_aux s (add pos 1%int63) f' (cat acc "<br>")
+                  (int_eqb (PrimString.get s (add pos 1%int63)) 42%int63)
+          then (* **strong** *)
+            let closer := find_dd s (add pos 2%int63) f' in
+            if leb n closer then
+              md_inline_aux s (add pos 2%int63) f' (cat acc "**")
+            else
+              md_inline_aux s (add closer 2%int63) f'
+                (cat acc (cat "<strong>"
+                   (cat (escape_run s (add pos 2%int63) closer f' "") "</strong>")))
+          else (* *em* *)
+            let closer := find_star s (add pos 1%int63) f' in
+            if leb n closer then
+              md_inline_aux s (add pos 1%int63) f' (cat acc "*")
+            else
+              md_inline_aux s (add closer 1%int63) f'
+                (cat acc (cat "<em>"
+                   (cat (escape_run s (add pos 1%int63) closer f' "") "</em>")))
+        else if int_eqb c 96%int63 then (* `code` *)
+          let closer := find_tick s (add pos 1%int63) f' in
+          if leb n closer then
+            md_inline_aux s (add pos 1%int63) f' (cat acc "`")
+          else
+            md_inline_aux s (add closer 1%int63) f'
+              (cat acc (cat "<code>"
+                 (cat (escape_run s (add pos 1%int63) closer f' "") "</code>")))
+        else if int_eqb c 91%int63 then (* [text](url) *)
+          let dm := find_rbracket s (add pos 1%int63) f' in
+          let has_open := andb (ltb dm n) (ltb (add dm 1%int63) n) in
+          let is_link := andb has_open
+             (int_eqb (PrimString.get s (add dm 1%int63)) 40%int63) in
+          if is_link then
+            let url_start := add dm 2%int63 in
+            let rp := find_rparen s url_start f' in
+            if leb n rp then
+              md_inline_aux s (add pos 1%int63) f' (cat acc "[")
+            else
+              md_inline_aux s (add rp 1%int63) f'
+                (cat acc (cat "<a href='"
+                   (cat (escape_url_run s url_start rp f' "")
+                     (cat "'>"
+                       (cat (escape_run s (add pos 1%int63) dm f' "") "</a>")))))
+          else
+            md_inline_aux s (add pos 1%int63) f' (cat acc "[")
         else
-          body_to_html_aux s (add pos 1%int63) f' (cat acc (escape_byte c))
+          md_inline_aux s (add pos 1%int63) f' (cat acc (escape_byte c))
   end.
 
-Definition body_to_html (s : string) : string :=
-  let stripped := strip_frontmatter s in
-  cat "<p>" (cat (body_to_html_aux stripped 0%int63 mime_fuel "") "</p>").
+Definition md_inline (s : string) : string :=
+  md_inline_aux s 0%int63 mime_fuel "".
+
+(* Raw substring (no escaping) — the canvas path consumes this, where the
+   text is painted glyph-by-glyph and there is no HTML context to escape. *)
+Definition md_slice (s : string) (a b : int) : string :=
+  PrimString.sub s a (sub b a).
+
+(* ---- Inline stripper (plain text, for the canvas path) -------------- *)
+(* Drop the markdown delimiters so the Verified-Reader canvas reads cleanly:
+   **bold** -> bold, *em* -> em, `code` -> code, [label](url) -> label.
+   Same scanners as [md_inline_aux]; emits RAW bytes (no HTML escaping).
+   Tail-recursive, fuel-bounded. *)
+Fixpoint md_strip_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
+  let n := PrimString.length s in
+  match fuel with
+  | O => acc
+  | S f' =>
+      if leb n pos then acc
+      else
+        let c := PrimString.get s pos in
+        if int_eqb c 42%int63 then
+          if andb (ltb (add pos 1%int63) n)
+                  (int_eqb (PrimString.get s (add pos 1%int63)) 42%int63)
+          then (* **strong** *)
+            let closer := find_dd s (add pos 2%int63) f' in
+            if leb n closer then
+              md_strip_aux s (add pos 2%int63) f' (cat acc "**")
+            else
+              md_strip_aux s (add closer 2%int63) f'
+                (cat acc (md_slice s (add pos 2%int63) closer))
+          else (* *em* *)
+            let closer := find_star s (add pos 1%int63) f' in
+            if leb n closer then
+              md_strip_aux s (add pos 1%int63) f' (cat acc "*")
+            else
+              md_strip_aux s (add closer 1%int63) f'
+                (cat acc (md_slice s (add pos 1%int63) closer))
+        else if int_eqb c 96%int63 then (* `code` *)
+          let closer := find_tick s (add pos 1%int63) f' in
+          if leb n closer then
+            md_strip_aux s (add pos 1%int63) f' (cat acc "`")
+          else
+            md_strip_aux s (add closer 1%int63) f'
+              (cat acc (md_slice s (add pos 1%int63) closer))
+        else if int_eqb c 91%int63 then (* [label](url) *)
+          let dm := find_rbracket s (add pos 1%int63) f' in
+          let has_open := andb (ltb dm n) (ltb (add dm 1%int63) n) in
+          let is_link := andb has_open
+             (int_eqb (PrimString.get s (add dm 1%int63)) 40%int63) in
+          if is_link then
+            let rp := find_rparen s (add dm 2%int63) f' in
+            if leb n rp then
+              md_strip_aux s (add pos 1%int63) f' (cat acc "[")
+            else
+              md_strip_aux s (add rp 1%int63) f'
+                (cat acc (md_slice s (add pos 1%int63) dm))
+          else
+            md_strip_aux s (add pos 1%int63) f' (cat acc "[")
+        else
+          md_strip_aux s (add pos 1%int63) f' (cat acc (PrimString.make 1%int63 c))
+  end.
+
+Definition md_strip_inline (s : string) : string :=
+  md_strip_aux s 0%int63 mime_fuel "".
+
+(* ---- Block-level classification ------------------------------------- *)
+(* All classifiers take the TRIMMED line [t].  Return "" / 0 / false when the
+   line is not of the kind — single-type returns, no tuples (std::any trap). *)
+
+(* Fenced code: a trimmed line starting with three backticks. *)
+Definition md_fence (t : string) : bool := starts_with t "```".
+
+(* Count leading '#' at [pos].  Tail-recursive accumulator (the gate rejects
+   the operand form `1 + count_hashes ...`). *)
+Fixpoint count_hashes (t : string) (pos : int) (fuel : nat) (acc : int) : int :=
+  match fuel with
+  | O => acc
+  | S f' =>
+      if andb (ltb pos (PrimString.length t))
+              (int_eqb (PrimString.get t pos) 35%int63)
+      then count_hashes t (add pos 1%int63) f' (add acc 1%int63)
+      else acc
+  end.
+
+(* Heading level 1..6, or 0 when [t] is not an ATX heading (# ...). *)
+Definition md_heading_level (t : string) : int :=
+  let c := count_hashes t 0%int63 8%nat 0%int63 in
+  if andb (ltb 0%int63 c) (leb c 6%int63) then
+    let n := PrimString.length t in
+    if orb (int_eqb n c) (int_eqb (PrimString.get t c) 32%int63)
+    then c else 0%int63
+  else 0%int63.
+
+(* Text after the '#' run (and one separating space) of a heading. *)
+Definition md_heading_content (t : string) (lvl : int) : string :=
+  trim_left (PrimString.sub t lvl (sub (PrimString.length t) lvl)).
+
+(* Is [t] a run of 3+ identical '-', '*' or '_' (horizontal rule)? *)
+Fixpoint all_of (t : string) (pos : int) (c : int) (fuel : nat) : bool :=
+  match fuel with
+  | O => true
+  | S f' =>
+      if leb (PrimString.length t) pos then true
+      else if int_eqb (PrimString.get t pos) c
+           then all_of t (add pos 1%int63) c f'
+           else false
+  end.
+
+Definition md_is_hr (t : string) : bool :=
+  andb (leb 3%int63 (PrimString.length t))
+    (orb (all_of t 0%int63 45%int63 4096%nat)
+     (orb (all_of t 0%int63 42%int63 4096%nat)
+          (all_of t 0%int63 95%int63 4096%nat))).
+
+(* Is [t] a blockquote line (leading '>')? *)
+Definition md_is_quote (t : string) : bool :=
+  andb (negb (is_empty t)) (int_eqb (PrimString.get t 0%int63) 62%int63).
+
+(* Content after the '>' (and one optional space). *)
+Definition md_quote_content (t : string) : string :=
+  if md_is_quote t then
+    let n := PrimString.length t in
+    trim_left (PrimString.sub t 1%int63 (sub n 1%int63))
+  else "".
+
+(* Unordered list: "- ", "* ", "+ " at start. *)
+Definition md_is_ul (t : string) : bool :=
+  let n := PrimString.length t in
+  andb (leb 2%int63 n)
+    (orb (andb (int_eqb (PrimString.get t 0%int63) 45%int63)
+               (int_eqb (PrimString.get t 1%int63) 32%int63))
+     (orb (andb (int_eqb (PrimString.get t 0%int63) 42%int63)
+                (int_eqb (PrimString.get t 1%int63) 32%int63))
+          (andb (int_eqb (PrimString.get t 0%int63) 43%int63)
+                (int_eqb (PrimString.get t 1%int63) 32%int63)))).
+
+(* Skip a run of digits at [pos]; returns the first non-digit index. *)
+Fixpoint skip_digits (t : string) (pos : int) (fuel : nat) : int :=
+  match fuel with
+  | O => pos
+  | S f' =>
+      if andb (ltb pos (PrimString.length t))
+              (andb (leb 48%int63 (PrimString.get t pos))
+                    (leb (PrimString.get t pos) 57%int63))
+      then skip_digits t (add pos 1%int63) f'
+      else pos
+  end.
+
+(* Ordered list: digits then ". " (e.g. "1. item"). *)
+Definition md_is_ol (t : string) : bool :=
+  let n := PrimString.length t in
+  let d := skip_digits t 0%int63 16%nat in
+  andb (ltb 0%int63 d)
+    (andb (ltb (add d 1%int63) n)
+      (andb (int_eqb (PrimString.get t d) 46%int63)
+            (int_eqb (PrimString.get t (add d 1%int63)) 32%int63))).
+
+(* List item content (after the marker), "" when not a list item. *)
+Definition md_list_body (t : string) : string :=
+  let n := PrimString.length t in
+  if md_is_ul t then PrimString.sub t 2%int63 (sub n 2%int63)
+  else if md_is_ol t then
+    let d := skip_digits t 0%int63 16%nat in
+    PrimString.sub t (add d 2%int63) (sub n (add d 2%int63))
+  else "".
+
+(* ---- Block-level emit helpers ---------------------------------------- *)
+(* Fixed-literal tags.  [lvl] is known 1..6 by the caller. *)
+Definition md_hopen (lvl : int) : string :=
+  if int_eqb lvl 1%int63 then "<h1>"
+  else if int_eqb lvl 2%int63 then "<h2>"
+  else if int_eqb lvl 3%int63 then "<h3>"
+  else if int_eqb lvl 4%int63 then "<h4>"
+  else if int_eqb lvl 5%int63 then "<h5>"
+  else "<h6>".
+
+Definition md_hclose (lvl : int) : string :=
+  if int_eqb lvl 1%int63 then "</h1>"
+  else if int_eqb lvl 2%int63 then "</h2>"
+  else if int_eqb lvl 3%int63 then "</h3>"
+  else if int_eqb lvl 4%int63 then "</h4>"
+  else if int_eqb lvl 5%int63 then "</h5>"
+  else "</h6>".
+
+(* Close a block's tag(s) when it is open.  A quote block opens BOTH
+   <blockquote> and <p>, so it closes as "</p></blockquote>". *)
+Definition md_close_p (acc : string) (in_p : bool) : string :=
+  if in_p then cat acc "</p>" else acc.
+
+Definition md_close_ul (acc : string) (in_ul : bool) : string :=
+  if in_ul then cat acc "</ul>" else acc.
+
+Definition md_close_ol (acc : string) (in_ol : bool) : string :=
+  if in_ol then cat acc "</ol>" else acc.
+
+Definition md_close_quote (acc : string) (in_quote : bool) : string :=
+  if in_quote then cat acc "</p></blockquote>" else acc.
+
+(* Close every open block (no nesting, so order only matters for the quote's
+   two tags, which are adjacent). *)
+Definition md_close_all (acc : string) (in_p in_ul in_ol in_quote : bool) : string :=
+  md_close_p (md_close_quote (md_close_ol (md_close_ul acc in_ul) in_ol) in_quote) in_p.
+
+(* ---- Block renderer -------------------------------------------------- *)
+(* Line-by-line tail-recursive state machine.  State is carried as separate
+   parameters (in_p / in_ul / in_ol / in_quote / in_code) — never a tuple — so
+   Crane extracts plain tail calls (em++ -O2 -> loop, shallow Asyncify stack).
+   Each line closes whichever blocks it must leave, opens what it enters, and
+   appends its (escaped / inline-rendered) content to [acc]. *)
+Fixpoint md_block (ls : list string) (acc : string)
+  (in_p in_ul in_ol in_quote in_code : bool) (fuel : nat) : string :=
+  match fuel with
+  | O => acc
+  | S f' =>
+      match ls with
+      | nil => md_close_all acc in_p in_ul in_ol in_quote
+      | l :: rest =>
+          let t := trim l in
+          if in_code then
+            if md_fence t then
+              md_block rest (cat acc "</code></pre>") false false false false false f'
+            else
+              md_block rest (cat acc (cat (escape_run l 0%int63 (PrimString.length l) f' "") lf))
+                       false false false false true f'
+          else if string_eqb t "" then
+            md_block rest (md_close_all acc in_p in_ul in_ol in_quote)
+                     false false false false false f'
+          else if md_fence t then
+            md_block rest (cat (md_close_all acc in_p in_ul in_ol in_quote) "<pre><code>")
+                     false false false false true f'
+          else
+            let lvl := md_heading_level t in
+            if ltb 0%int63 lvl then
+              md_block rest
+                (cat (md_close_all acc in_p in_ul in_ol in_quote)
+                  (cat (md_hopen lvl)
+                    (cat (md_inline_aux (md_heading_content t lvl) 0%int63 f' "")
+                         (md_hclose lvl))))
+                false false false false false f'
+            else if md_is_hr t then
+              md_block rest (cat (md_close_all acc in_p in_ul in_ol in_quote) "<hr>")
+                       false false false false false f'
+            else if md_is_quote t then
+              let acc1 := md_close_p acc in_p in
+              let acc2 := md_close_ul acc1 in_ul in
+              let acc3 := md_close_ol acc2 in_ol in
+              let acc4 := if in_quote then acc3 else cat acc3 "<blockquote><p>" in
+              let acc5 := if in_quote then cat acc4 "</p><p>" else acc4 in
+              md_block rest
+                (cat acc5 (md_inline_aux (md_quote_content t) 0%int63 f' ""))
+                false false false true false f'
+            else if md_is_ul t then
+              let acc1 := md_close_p acc in_p in
+              let acc2 := md_close_ol acc1 in_ol in
+              let acc3 := md_close_quote acc2 in_quote in
+              let acc4 := if in_ul then acc3 else cat acc3 "<ul>" in
+              md_block rest
+                (cat acc4 (cat "<li>" (cat (md_inline_aux (md_list_body t) 0%int63 f' "") "</li>")))
+                false true false false false f'
+            else if md_is_ol t then
+              let acc1 := md_close_p acc in_p in
+              let acc2 := md_close_ul acc1 in_ul in
+              let acc3 := md_close_quote acc2 in_quote in
+              let acc4 := if in_ol then acc3 else cat acc3 "<ol>" in
+              md_block rest
+                (cat acc4 (cat "<li>" (cat (md_inline_aux (md_list_body t) 0%int63 f' "") "</li>")))
+                false false true false false f'
+            else (* plain paragraph line *)
+              let acc1 := md_close_ul acc in_ul in
+              let acc2 := md_close_ol acc1 in_ol in
+              let acc3 := md_close_quote acc2 in_quote in
+              let acc4 := if in_p then acc3 else cat acc3 "<p>" in
+              let acc5 := if in_p then cat acc4 "<br>" else acc4 in
+              md_block rest (cat acc5 (md_inline_aux t 0%int63 f' ""))
+                       true false false false false f'
+      end
+  end.
+
+Definition md_to_html (s : string) : string :=
+  md_block (split_lines (strip_frontmatter s)) ""
+           false false false false false mime_fuel.
 
 (* ---- Attachment label ("Attachments: a, b, ...") ------------------- *)
 Definition images_label (names : list string) : string :=

@@ -27,6 +27,13 @@ unwrapped. A reader who has enrolled a P-256 keypair in the browser can
 decrypt posts in-page via Web Crypto API. An unenrolled reader sees
 only opaque ciphertext.
 
+The decrypted reading view renders the post's Markdown: headings,
+**bold** / *emphasis* / `` `code` `` spans, links, bullet and numbered
+lists, blockquotes, rules and fenced code blocks are typeset onto the
+Verified-Reader canvas (`Typeset/`) and mirrored in the accessible
+`#real-body` HTML (every input byte HTML-escaped — `src/InnerMime.v`'s
+`md_to_html`).
+
 ## Authoring model
 
 Plaintext lives on the author's working tree under `posts/` and is
