@@ -642,6 +642,11 @@ inline std::string dom_path_slug(std::monostate) {
             path = path.substring(0, path.length - 1);
         var parts = path.split('/');
         var slug = parts.length > 0 ? parts[parts.length - 1] : '';
+        // A post page is served at /<slug>/index.html, so when the last
+        // segment is the directory index the real slug is the preceding
+        // segment; the /<slug>/ form (no index.html) is unchanged.
+        if (slug === 'index.html' && parts.length > 1)
+            slug = parts[parts.length - 2];
         if (slug === '') slug = 'post';
         var enc = new TextEncoder();
         var b = enc.encode(slug);
