@@ -40,4 +40,5 @@ tests/e2e/.cache/
 # (crane-blog:wasm-merged). Rebuilt by CI / stage-site.sh; never committed.
 
 # encrypt_post / round-trip scratch (key material + plaintext fixtures).
-keys/
+keys/*
+!keys/author-signing.pub

@@ -118,6 +118,24 @@ Definition build_eml
   let inner_mime := build_inner_mime protected_headers "post.md" md_body nil in
   build_envelope cek recipients_pk slug inner_mime sign_sk sign_pk_hex.
 
+(* Build the PUBLIC .eml from the post markdown + author identity (feature 2):
+   no CEK, no wraps, no keys/<kid>.pub resolution.  The inner MIME is
+   byte-identical to an author-only post (To: reader: <kid>) and the envelope
+   signs the canonical form
+   sha256(sign_info_public || slug || normalize_crlf inner_mime) — the same
+   build_public_envelope single source of truth as EncryptPost.v.  [kid] is
+   passed explicitly (SPEC-NIT 1; sibling build_eml's author pattern). *)
+Definition build_public_eml
+  (kid author slug title md_body sign_sk sign_pk_hex : string) : string :=
+  let recipients_str := recipients_to (kid :: nil) in
+  let protected_headers :=
+    ("From", author) ::
+    ("To", recipients_str) ::
+    ("Date", fixed_date) ::
+    ("Subject", title) :: nil in
+  let inner_mime := build_inner_mime protected_headers "post.md" md_body nil in
+  build_public_envelope slug inner_mime sign_sk sign_pk_hex.
+
 (* ===================================================================== *)
 (*  git via procE  (R4-guarded)                                          *)
 (* ===================================================================== *)
@@ -257,28 +275,59 @@ Definition publish (sender : string) (allow : list string) (msg : string)
            the acceptance test exercises uses a real subject). *)
         let slug := slug_from_subject ing.(in_subject) "post" in
         let title := ing.(in_subject) in
-        (* Recipients: the author (CRANE_BLOG_AUTHOR_KEY_ID) is always first;
-           the X-Crane-Public-Keys header / BLOG_PUBLIC_KEYS env adds up to 3
-           more readers, resolved from keys/<kid>.pub. *)
-        let recips := build_recipients kid public_keys in
-        recipients_pk <- read_pubkeys recips ;;
-        if negb (recips_ok recipients_pk)
-        then
+        (* G2/A fix: the X-Crane-Public-Keys header is a FULL override of the
+           BLOG_PUBLIC_KEYS env default, so the keyless public branch must be
+           gated on the same explicit opt-in as the startup guard (C6/M9) at
+           REQUEST time too — otherwise an unauthenticated sender can publish
+           a public post with X-Crane-Public-Keys: * (bypassing the startup
+           check, which only sees the env). *)
+        allow_pub0 <- getenv "BLOG_ALLOW_PUBLIC" ;;
+        let allow_pub := trim allow_pub0 in
+        if andb (is_public_marker public_keys) (negb (string_eqb allow_pub "1")) then
           _ <- eprint (concat_all
-            ("smtp: missing or unreadable recipient public key under keys/" :: lf :: nil)) ;;
+            ("smtp: public post rejected: BLOG_ALLOW_PUBLIC=1 is required (the X-Crane-Public-Keys override is not an opt-in)" :: lf :: nil)) ;;
           Ret reply_proc_failed
         else
+        (* Feature 2 / D3: exactly "*" => PUBLIC (keyless) envelope — no
+           keys/<kid>.pub resolution, no CEK; mixed "*" + named readers is
+           rejected BEFORE any key reads (uncapped detection, D-M2). *)
+        if is_public_marker public_keys then
           let md := build_md author ing.(in_subject) ing.(in_body)
                              fixed_date public_keys kid slug in
-          (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
-             the pre-commit hook wrote posts/<slug>.md. *)
-          let eml := build_eml (random_bytes 32%int63) recipients_pk author slug title md sign_sk sign_pk_hex in
+          let eml := build_public_eml kid author slug title md sign_sk sign_pk_hex in
           let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
           _ <- create_directory "posts-encrypted" ;;
           _ <- write_file eml_rel eml ;;
           _ <- eprint (concat_all
-            ("smtp: encrypted -> " :: eml_rel :: lf :: nil)) ;;
-          publish_git branch slug eml_rel.
+            ("smtp: public -> " :: eml_rel :: lf :: nil)) ;;
+          publish_git branch slug eml_rel
+        else if contains_public_marker public_keys then
+          _ <- eprint (concat_all
+            ("smtp: recipients may not mix the public marker * with named readers" :: lf :: nil)) ;;
+          Ret reply_proc_failed
+        else
+          (* Recipients: the author (CRANE_BLOG_AUTHOR_KEY_ID) is always first;
+             the X-Crane-Public-Keys header / BLOG_PUBLIC_KEYS env adds up to 3
+             more readers, resolved from keys/<kid>.pub. *)
+          let recips := build_recipients kid public_keys in
+          recipients_pk <- read_pubkeys recips ;;
+          if negb (recips_ok recipients_pk)
+          then
+            _ <- eprint (concat_all
+              ("smtp: missing or unreadable recipient public key under keys/" :: lf :: nil)) ;;
+            Ret reply_proc_failed
+          else
+            let md := build_md author ing.(in_subject) ing.(in_body)
+                               fixed_date public_keys kid slug in
+            (* Encrypt the *post markdown* (md), exactly as encrypt_post would after
+               the pre-commit hook wrote posts/<slug>.md. *)
+            let eml := build_eml (random_bytes 32%int63) recipients_pk author slug title md sign_sk sign_pk_hex in
+            let eml_rel := cat "posts-encrypted/" (cat slug ".eml") in
+            _ <- create_directory "posts-encrypted" ;;
+            _ <- write_file eml_rel eml ;;
+            _ <- eprint (concat_all
+              ("smtp: encrypted -> " :: eml_rel :: lf :: nil)) ;;
+            publish_git branch slug eml_rel.
 
 (* ===================================================================== *)
 (*  Per-connection SMTP fold                                             *)
@@ -362,6 +411,24 @@ Definition run : IO unit :=
   let branch := env_branch branch0 in
   allow0 <- getenv "BLOG_ALLOW_FROM" ;;
   let allow := parse_allow allow0 in
+  (* C6/M9/A6 startup guards: public publishing turns the listener into an
+     author-equivalent write channel, so it must never run unauthenticated or
+     without an explicit opt-in for the global "*" footgun. *)
+  env_pk0 <- getenv "BLOG_PUBLIC_KEYS" ;;
+  let env_pk := trim env_pk0 in
+  allow_pub0 <- getenv "BLOG_ALLOW_PUBLIC" ;;
+  let allow_pub := trim allow_pub0 in
+  if andb (string_eqb env_pk "*") (negb (string_eqb allow_pub "1")) then
+    _ <- eprint (concat_all
+      ("smtp: BLOG_PUBLIC_KEYS=* makes every post public and requires explicit BLOG_ALLOW_PUBLIC=1" :: lf :: nil)) ;;
+    exit_with 1%int63
+  else if andb (orb (string_eqb env_pk "*") (string_eqb allow_pub "1"))
+               (match allow with [] => true | _ :: _ => false end) then
+    _ <- eprint (concat_all
+      ("smtp: refusing to start: public publishing is enabled but BLOG_ALLOW_FROM is empty" :: lf ::
+       "smtp: the listener has author-equivalent write access; refusing to run unauthenticated" :: lf :: nil)) ;;
+    exit_with 1%int63
+  else
   lfd <- net_listen host port ;;
   if ltb lfd 0%int63 then
     _ <- eprint (concat_all ("smtp: failed to bind " :: host :: lf :: nil)) ;;

@@ -59,16 +59,22 @@ Definition html_escape_char (s : string) (pos : int) : string :=
   else if int_eqb ch ch_apos then "&#39;"
   else PrimString.sub s pos 1%int63.
 
-Fixpoint html_escape_aux (s : string) (pos : int) (remaining : nat) : string :=
+(* Accumulator-passing so the self-call is in TAIL position: the naive
+   [cat (escape_char) (html_escape_aux ...)] form nests the recursive call
+   inside [cat], which under em++ -O2 + Asyncify grows one native WASM frame
+   per input byte and overflows the stack on a large body.  check-tail-position.sh
+   enforces this.  [acc] is built left-to-right (append), so the result is
+   byte-identical to the naive form. *)
+Fixpoint html_escape_aux (s : string) (pos : int) (remaining : nat) (acc : string) : string :=
   match remaining with
-  | O => ""
+  | O => acc
   | S remaining' =>
-      if leb (PrimString.length s) pos then ""
-      else cat (html_escape_char s pos) (html_escape_aux s (add pos 1%int63) remaining')
+      if leb (PrimString.length s) pos then acc
+      else html_escape_aux s (add pos 1%int63) remaining' (cat acc (html_escape_char s pos))
   end.
 
 Definition html_escape (s : string) : string :=
-  html_escape_aux s 0%int63 fuel.
+  html_escape_aux s 0%int63 fuel "".
 
 Fixpoint concat_all (parts : list string) : string :=
   match parts with
@@ -239,14 +245,14 @@ Definition dirname_output_path (output_dir slug : string) : string :=
    [application/aes-gcm] ciphertext).  The generator never parses MIME
    semantics and never touches cryptographic bytes.
 
-   The envelope is rendered verbatim into the page's
-   [<pre id='ciphertext'>] so the browser-side decrypt app parses
-   exactly the same bytes the native [decrypt_post] parses: its
+   The envelope is rendered into the page's [<pre id='ciphertext'>]
+   (HTML-escaped by [serialize_post_page]; the browser's textContent
+   read-back entity-decodes it, so the bytes the decrypt app parses are
+   byte-identical to what native [decrypt_post] parses).  Its
    [parse_envelope] reads the Signature / Signing-Key headers and the
-   Content-Type boundary from this same header block.  No
-   html-escaping is applied — an escaped boundary=... would no longer
-   match the browser parser; the envelope charset is hex/base64/ASCII
-   literals by construction.  Sender/recipient/date and the real
+   Content-Type boundary from this same header block.  The envelope
+   charset is hex/base64/ASCII literals by construction (escaped for
+   XSS safety, not for correctness).  Sender/recipient/date and the real
    subject live only in the *inner* protected MIME headers, which are
    encrypted. *)
 Record EncryptedPost : Type := mkEncryptedPost {
@@ -372,6 +378,15 @@ Definition parse_eml (slug raw : string) : EncryptedPost :=
     (sort_key slug date)
     raw.
 
+(* The build-time-pinned author signing key (D-C5/A5), read by [run] from the
+   committed keys/author-signing.pub and threaded through [render_eml_page] as
+   the <meta name='crane-author-signing-key'> content.  It is NOT derived from
+   the envelope's own Signing-Key header (that would be TOFU: an attacker
+   minting their own keypair would sign with a key that "matches" itself).
+   The browser's [do_public] therefore compares the pinned meta against the
+   envelope's Signing-Key and fails closed on mismatch — authenticity rests on
+   the committed pin, not on the envelope. *)
+
 (* ---- Rendering --------------------------------------------------- *)
 
 (* Page-shell + render functions are now thin wrappers around PageModel.v
@@ -384,17 +399,17 @@ Definition parse_eml (slug raw : string) : EncryptedPost :=
    Signature, Signing-Key and Content-Type — no From/To/Date, no
    plaintext.  The deploy pipeline enforces this on every
    [posts-encrypted/*.eml] (placeholder outer Subject, no
-   ^(From|To|Date):).  The full envelope is rendered verbatim into
-   #ciphertext (see the [EncryptedPost] comment for why no
-   html-escaping).
+   ^(From|To|Date):).  The full envelope is rendered (HTML-escaped)
+   into #ciphertext; the browser's textContent read-back restores the
+   exact bytes.
 
    Browser-side decryption runs in the crane_decrypt WASM module (ROCQ ->
    Crane -> em++, from src/DecryptApp.v): WebAuthn + Web Crypto API authenticate
    the reader, retrieve their ECDH key from IndexedDB, HPKE-unwrap the CEK, and
    AES-GCM decrypt the body. *)
-Definition render_eml_page (ep : EncryptedPost) (version : string) : string :=
+Definition render_eml_page (ep : EncryptedPost) (version : string) (pinned : string) : string :=
   let prefix := "../" in
-  serialize_post_page (mk_post_page ep.(ep_body) prefix version).
+  serialize_post_page (mk_post_page ep.(ep_body) prefix version pinned).
 
 Definition render_inbox_page (eps : list EncryptedPost) (version : string) : string :=
   let rows := map (fun ep => 
@@ -554,13 +569,13 @@ Fixpoint sort_eps (eps : list EncryptedPost) : list EncryptedPost :=
   | ep :: rest => insert_ep ep (sort_eps rest)
   end.
 
-Fixpoint write_eml_pages (output_dir : string) (eps : list EncryptedPost) (version : string) : IO unit :=
+Fixpoint write_eml_pages (output_dir : string) (eps : list EncryptedPost) (version : string) (pinned : string) : IO unit :=
   match eps with
   | nil => Ret tt
   | ep :: rest =>
       _ <- create_directory (dirname_output_path output_dir ep.(ep_slug)) ;;
-      _ <- write_file (file_output_path output_dir ep.(ep_slug)) (render_eml_page ep version) ;;
-      write_eml_pages output_dir rest version
+      _ <- write_file (file_output_path output_dir ep.(ep_slug)) (render_eml_page ep version pinned) ;;
+      write_eml_pages output_dir rest version pinned
   end.
 
 (* [run] is the extracted entry point.  It reads the ciphertext tree
@@ -592,6 +607,12 @@ Definition run : IO unit :=
                        (filter (fun name => has_suffix name ".eml") files) in
   parsed <- read_eml_list eml_paths ;;
   let eps := sort_eps parsed in
+  (* D-C5/A5 trust anchor: the build-time-pinned author signing key.  Read from
+     the committed keys/author-signing.pub (the CI deploy gates assert every
+     envelope's Signing-Key equals this pin).  Empty when absent — the browser
+     then fails closed on any public post. *)
+  pinned0 <- read "./keys/author-signing.pub" ;;
+  let pinned := trim pinned0 in
   _ <- create_directory "./_site" ;;
   _ <- create_directory "./_site/styles" ;;
   _ <- write_file (styles_output_path "./_site") stylesheet ;;
@@ -605,7 +626,7 @@ Definition run : IO unit :=
   _ <- write_file hashed_css css ;;
   (* Use the combined hash as the cache-busting version on all pages *)
   _ <- write_file (index_output_path "./_site") (render_inbox_page eps hash) ;;
-  _ <- write_eml_pages "./_site" eps hash ;;
+  _ <- write_eml_pages "./_site" eps hash pinned ;;
   _ <- create_directory (enroll_dir_output_path "./_site") ;;
   _ <- write_file (enroll_output_path "./_site") (render_enroll_page hash) ;;
   _ <- create_directory "./_site/static" ;;

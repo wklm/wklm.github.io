@@ -51,7 +51,13 @@ jobs:
               || { echo "$eml: missing 64-byte hex Signature header (128 hex chars) — signed envelopes only"; exit 1; }
             grep -E '^Signing-Key: [0-9a-f]{130}$' <<<"$clean" >/dev/null \
               || { echo "$eml: missing 65-byte uncompressed hex Signing-Key header (130 hex chars) — signed envelopes only"; exit 1; }
-            if grep -E '^(From|To|Date): ' <<<"$clean" >/dev/null; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+            outer_head="$(sed -n '1,/^$/p' <<<"$clean")"
+            if grep -E '^(From|To|Date): ' <<<"$outer_head" >/dev/null; then echo "$eml: leaks sender/recipient/date"; exit 1; fi
+            # D-C5/A5 pin: envelope Signing-Key must equal keys/author-signing.pub
+            if [[ ! -f keys/author-signing.pub ]]; then echo "$eml: keys/author-signing.pub (trust anchor) missing"; exit 1; fi
+            eml_sign_key="$(grep -E '^Signing-Key: ' <<<"$outer_head" | sed 's/^Signing-Key: *//')"
+            pinned="$(tr -d '\r\n ' < keys/author-signing.pub)"
+            if [[ "$eml_sign_key" != "$pinned" ]]; then echo "$eml: Signing-Key does not match pinned keys/author-signing.pub"; exit 1; fi
           done
 
       - name: Build generator image (+ builder stage for the tail-position gate)
@@ -81,6 +87,7 @@ jobs:
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
           docker cp posts-encrypted "$cid":/site/posts-encrypted
           docker cp static "$cid":/site/static
+          docker cp keys "$cid":/site/keys
           docker start -a "$cid"
           # Trailing /. copies CONTENTS into the existing ./_site dir
           # (a bare path would nest as _site/_site).

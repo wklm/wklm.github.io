@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { CDPSession, Page } from '@playwright/test';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   addVirtualAuthenticator,
@@ -80,6 +80,16 @@ A short closing paragraph to exercise the multi-paragraph chunked renderer.
 // Recipient key ids created in-browser during the run (for cleanup).
 const createdKids = new Set<string>();
 
+// G4/D-C5: encryptFixturePost pins an ephemeral signing key to
+// keys/author-signing.pub so the generator emits a matching trust-anchor meta
+// (an INDEPENDENT build-time constant, not the envelope's own Signing-Key).
+// Save the committed pin and restore it after each test so the working tree
+// stays pristine across runs.
+const PIN_PATH = join(repoRoot, 'keys', 'author-signing.pub');
+const ORIGINAL_PIN = (() => {
+  try { return readFileSync(PIN_PATH, 'utf8').trim(); } catch { return null; }
+})();
+
 // The test writes a fixture post + recipient key into the worktree (keys/ and
 // posts/ are gitignored; posts-encrypted/ is tracked, so the .eml must be
 // removed).  Clean them up so the repo stays pristine across runs.
@@ -87,10 +97,15 @@ test.afterEach(() => {
   const paths = [
     join(repoRoot, 'posts-encrypted', `${SLUG}.eml`),
     join(repoRoot, 'posts', `${SLUG}.md`),
+    join(repoRoot, 'posts-encrypted', `${PUBLIC_SLUG}.eml`),
+    join(repoRoot, 'posts', `${PUBLIC_SLUG}.md`),
+    join(repoRoot, 'posts', PUBLIC_IMG_NAME),
   ];
   for (const kid of createdKids) paths.push(join(repoRoot, 'keys', `${kid}.pub`));
   for (const p of paths) rmSync(p, { force: true });
   createdKids.clear();
+  if (ORIGINAL_PIN !== null) writeFileSync(PIN_PATH, ORIGINAL_PIN);
+  else rmSync(PIN_PATH, { force: true });
 });
 
 /**
@@ -629,4 +644,246 @@ test('Facet A decrypt FAILURE — not a recipient: #decrypt-error VISIBLE + #dec
   } finally {
     if (cdp) await cdp.detach().catch(() => {});
   }
+});
+
+// ===========================================================================
+// Feature 2 — PUBLIC posts (frontmatter `recipients: *` => Public-Keys: *).
+// Readable with ZERO keys: no enroll, no WebAuthn, no IndexedDB.  The author
+// signature is verified against the build-time-pinned signing key meta
+// (D-C5/A5), and the browser FAILS CLOSED on missing/mismatched pin, missing
+// signature, tampered body, or a kind-flipped marker.
+// ===========================================================================
+
+const PUBLIC_SLUG = 'e2e-public-fixture';
+const PUBLIC_MARKER = 'crane-wasm-public-marker';
+const PUBLIC_MD = `---
+title: E2E Public Fixture
+date: 2026-06-01
+slug: ${PUBLIC_SLUG}
+recipients: *
+---
+This is a PUBLIC post. ${PUBLIC_MARKER} proves keyless rendering.
+
+No key, no WebAuthn, no IndexedDB — just the pinned signature.
+`;
+const HOSTILE_MD = `---
+title: E2E Hostile Fixture
+date: 2026-06-02
+slug: ${PUBLIC_SLUG}
+recipients: *
+---
+<script>window.__crane_xss = true;</script><img src=x onerror="window.__crane_xss2 = true">
+Hostile body marker: crane-wasm-hostile-marker
+`;
+// D-D7.2: a public post may reference an image attachment; encrypt_post reads
+// the file from posts/<rel> and embeds it as an inner-MIME octet-stream part.
+// The browser surfaces it in #real-images as an "Attachments: <name>" label
+// (InnerMime.images_label — the inner-MIME pipeline carries the filename, not
+// the bytes, so there is deliberately no <img> element in the DOM).
+const PUBLIC_IMG_NAME = 'e2e-public-image.png';
+const PUBLIC_IMG_MARKER = 'crane-wasm-public-image-marker';
+const PUBLIC_IMG_MD = `---
+title: E2E Public Image Fixture
+date: 2026-06-03
+slug: ${PUBLIC_SLUG}
+recipients: *
+---
+${PUBLIC_IMG_MARKER} — with an inline image below.
+
+![a 1x1 pixel](${PUBLIC_IMG_NAME})
+`;
+
+// A dummy 12-hex author key id: the public branch only needs it for the inner
+// To header (reader: <author_kid>) — no keys/<kid>.pub is ever read.
+const DUMMY_AUTHOR_KID = 'e2e000000001';
+
+/** normalize_crlf mirror (CryptoSpec.normalize_crlf: CRLF/CR -> LF). */
+function normalizeCrlf(s: string): string {
+  return s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+/** Read the outer header block of an .eml (for metadata-scoped asserts). */
+function outerHead(emlText: string): string {
+  return emlText.split(/\r?\n\r?\n/)[0];
+}
+
+test('Facet A public post — keyless auto-render with a valid pinned signature', async ({ context, page }) => {
+  const eml = encryptFixturePost({
+    kid: DUMMY_AUTHOR_KID,
+    slug: PUBLIC_SLUG,
+    markdown: PUBLIC_MD,
+    public: true,
+  });
+  // D1 envelope shape: same container, exactly Public-Keys: *, no wraps/aes-gcm,
+  // one application/x-crane-public part; outer header block carries no
+  // From/To/Date (the inner MIME's protected headers live inside the part).
+  const emlText = readFileSync(eml, 'utf8');
+  expect(emlText).toContain('multipart/hpke+wrapped');
+  expect(emlText).toContain('Public-Keys: *');
+  expect(emlText).not.toContain('application/wrapped-keys');
+  expect(emlText).not.toContain('application/aes-gcm');
+  expect(emlText).toContain('application/x-crane-public');
+  expect(outerHead(emlText)).not.toMatch(/^(From|To|Date): /m);
+
+  reRenderSite();
+
+  const sink = attachErrorCapture(page);
+  await page.goto(`/${PUBLIC_SLUG}/`, { waitUntil: 'domcontentloaded' });
+
+  // Zero-key auto-render: content shows without any enroll / authenticator.
+  await expect(page.locator('#decrypted-content')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#real-body')).toContainText(PUBLIC_MARKER);
+  // No reader-key UI surfaced on a keyless public post.
+  await expect(page.locator('#decrypt-ui')).toBeHidden();
+  await expect(page.locator('#decrypt-error')).toBeEmpty();
+  // C2 byte-equality: #ciphertext.textContent == normalize_crlf(.eml bytes).
+  // The browser HTML input-stream normalizes CRLF -> LF; the canonical signed
+  // form is LF, so the verifier passes and the bytes round-trip exactly.
+  const domCipher = await page.locator('#ciphertext').textContent();
+  expect(normalizeCrlf(emlText)).toBe(domCipher);
+  // D-C5: the pinned meta matches the envelope's Signing-Key.
+  const meta = await page.locator('meta[name="crane-author-signing-key"]').getAttribute('content');
+  const signKey = (emlText.match(/^Signing-Key: ([0-9a-f]{130})/m) || [])[1];
+  expect(signKey).toBeTruthy();
+  expect(meta).toBe(signKey);
+  expect(sink.fatal, `unexpected console/page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
+});
+
+test('Facet A public post — tampered body: signature fails, NOTHING renders', async ({ context, page }) => {
+  const eml = encryptFixturePost({
+    kid: DUMMY_AUTHOR_KID,
+    slug: PUBLIC_SLUG,
+    markdown: PUBLIC_MD,
+    public: true,
+  });
+  // Flip one byte in the inner MIME body region -> canonical digest changes.
+  writeFileSync(eml, readFileSync(eml, 'utf8').replace('This is a PUBLIC post.', 'This is a PUBLIC post?'));
+  reRenderSite();
+
+  const sink = attachErrorCapture(page);
+  await page.goto(`/${PUBLIC_SLUG}/`, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#decrypt-error')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#decrypt-error')).toContainText(/signature verification failed/i);
+  await expect(page.locator('#decrypted-content')).toBeHidden();
+  const bodyText = (await page.locator('#real-body').textContent()) || '';
+  expect(bodyText).not.toContain(PUBLIC_MARKER);
+  expect(sink.fatal, `unexpected console/page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
+});
+
+test('Facet A public post — hostile body: <script>/<img> inert + escaped, byte-exact', async ({ context, page }) => {
+  const eml = encryptFixturePost({
+    kid: DUMMY_AUTHOR_KID,
+    slug: PUBLIC_SLUG,
+    markdown: HOSTILE_MD,
+    public: true,
+  });
+  reRenderSite();
+
+  // C1/A2: the RAW staged HTML contains the ESCAPED literals, not executable
+  // tags (the only <script> tags are the app's own module loader).
+  const rawHtml = readFileSync(join(repoRoot, '_site', PUBLIC_SLUG, 'index.html'), 'utf8');
+  expect(rawHtml).toContain('&lt;script&gt;window.__crane_xss = true;&lt;/script&gt;');
+  expect(rawHtml).not.toContain('<script>window.__crane_xss');
+  expect(rawHtml).toContain('&lt;img src=x onerror=&quot;window.__crane_xss2 = true&quot;&gt;');
+
+  const sink = attachErrorCapture(page);
+  await page.goto(`/${PUBLIC_SLUG}/`, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#decrypted-content')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#real-body')).toContainText('crane-wasm-hostile-marker');
+  // No XSS executed (neither the <script> nor the img onerror).
+  const xss = await page.evaluate(() => ({
+    a: (window as any).__crane_xss as unknown,
+    b: (window as any).__crane_xss2 as unknown,
+  }));
+  expect(xss.a).toBeUndefined();
+  expect(xss.b).toBeUndefined();
+  // Byte-exact: escaping round-trips on textContent read-back.
+  const domCipher = await page.locator('#ciphertext').textContent();
+  expect(normalizeCrlf(readFileSync(eml, 'utf8'))).toBe(domCipher);
+  expect(sink.fatal, `unexpected console/page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
+});
+
+test('Facet A public post — kind-flip (Public-Keys: * -> kid): fail-closed, never renders', async ({ context, page }) => {
+  const eml = encryptFixturePost({
+    kid: DUMMY_AUTHOR_KID,
+    slug: PUBLIC_SLUG,
+    markdown: PUBLIC_MD,
+    public: true,
+  });
+  writeFileSync(eml, readFileSync(eml, 'utf8').replace('Public-Keys: *', 'Public-Keys: 0123456789ab'));
+  reRenderSite();
+
+  const sink = attachErrorCapture(page);
+  await page.goto(`/${PUBLIC_SLUG}/`, { waitUntil: 'domcontentloaded' });
+  // The flipped envelope is treated as encrypted; with no reader keys on this
+  // device the decrypt UI (button) shows and the content NEVER renders.
+  await expect(page.locator('#decrypted-content')).toBeHidden({ timeout: 60_000 });
+  await expect(page.locator('#decrypt-ui')).toBeVisible();
+  const bodyText = (await page.locator('#real-body').textContent()) || '';
+  expect(bodyText).not.toContain(PUBLIC_MARKER);
+  expect(sink.fatal, `unexpected console/page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
+});
+
+test('Facet A public post — pinned-key mismatch (forged Signing-Key): fail-closed, never renders', async ({ context, page }) => {
+  const eml = encryptFixturePost({
+    kid: DUMMY_AUTHOR_KID,
+    slug: PUBLIC_SLUG,
+    markdown: PUBLIC_MD,
+    public: true,
+  });
+  // G4/D-C5 Row C: forge a DIFFERENT Signing-Key header (valid 130-hex, but not
+  // the build-time-pinned key).  The outer Signing-Key is unsigned metadata, so
+  // the signature is untouched — the browser must reject at the PIN check
+  // (meta != Signing-Key) BEFORE ever attempting signature verification.
+  const forgedKey = '04' + 'cd'.repeat(64);
+  writeFileSync(eml, readFileSync(eml, 'utf8').replace(/^Signing-Key: [0-9a-f]{130}/m, `Signing-Key: ${forgedKey}`));
+  reRenderSite();
+
+  const sink = attachErrorCapture(page);
+  await page.goto(`/${PUBLIC_SLUG}/`, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#decrypt-error')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#decrypt-error')).toContainText(/does not match the pinned author key/i);
+  await expect(page.locator('#decrypted-content')).toBeHidden();
+  const forgedBody = (await page.locator('#real-body').textContent()) || '';
+  expect(forgedBody).not.toContain(PUBLIC_MARKER);
+  expect(sink.fatal, `unexpected console/page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
+});
+
+test('Facet A public post — image attachment renders into #real-images (keyless)', async ({ context, page }) => {
+  // D-D7.2 (Row E): write a tiny 1x1 PNG into posts/ and reference it from the
+  // public markdown.  encrypt_post reads posts/<rel> (read_images) and embeds it
+  // as an inner-MIME application/octet-stream attachment; the keyless browser
+  // surfaces it in #real-images after auto-render.  The 1x1 transparent PNG is a
+  // real, valid image (the octet-stream part carries it base64-encoded).
+  const png1x1 = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  );
+  writeFileSync(join(repoRoot, 'posts', PUBLIC_IMG_NAME), png1x1);
+
+  const eml = encryptFixturePost({
+    kid: DUMMY_AUTHOR_KID,
+    slug: PUBLIC_SLUG,
+    markdown: PUBLIC_IMG_MD,
+    public: true,
+  });
+  // The image was embedded as an inner-MIME application/octet-stream part.
+  const emlText = readFileSync(eml, 'utf8');
+  expect(emlText).toContain('application/octet-stream');
+  expect(emlText).toContain(PUBLIC_IMG_NAME);
+  reRenderSite();
+
+  const sink = attachErrorCapture(page);
+  await page.goto(`/${PUBLIC_SLUG}/`, { waitUntil: 'domcontentloaded' });
+
+  // Zero-key auto-render succeeds, the plaintext renders, and the attachment
+  // filename is surfaced in #real-images (the inner-MIME attachment label).
+  await expect(page.locator('#decrypted-content')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#real-body')).toContainText(PUBLIC_IMG_MARKER);
+  await expect(page.locator('#real-images')).toContainText(`Attachments: ${PUBLIC_IMG_NAME}`);
+  // The inner-MIME flow renders a filename label, not an <img> tag (md_to_html
+  // is <img>-free by design; the attachment bytes never become a DOM image).
+  expect(await page.locator('#real-images img').count()).toBe(0);
+  expect(await page.locator('#decrypted-content img').count()).toBe(0);
+  expect(sink.fatal, `unexpected console/page errors:\n${sink.fatal.join('\n')}`).toEqual([]);
 });

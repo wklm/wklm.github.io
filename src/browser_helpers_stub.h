@@ -48,6 +48,7 @@ inline std::monostate dom_set_text(const std::string&, const std::string&) { ret
 inline std::monostate dom_set_inner_html(const std::string&, const std::string&) { return {}; }
 inline std::monostate dom_show(const std::string&) { return {}; }
 inline std::monostate dom_hide(const std::string&) { return {}; }
+inline std::string   dom_get_meta(const std::string&) { return std::string(); }
 inline std::string   dom_path_slug(std::monostate) { return std::string(); }
 
 // ---- Verified-Reader canvas (Wave 1) ----

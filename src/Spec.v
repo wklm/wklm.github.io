@@ -9,31 +9,35 @@ Open Scope pstring_scope.
 (* the fixed template strings plus the FULL outer envelope rendered   *)
 (* verbatim into #ciphertext — placeholder Subject: ..., MIME-Version,*)
 (* Public-Keys, Signature, Signing-Key, Content-Type, and the         *)
-(* multipart ciphertext body.  Sender, recipient, real date, and the  *)
-(* real subject exist only in the *inner* protected MIME headers,     *)
-(* which are encrypted; the outer envelope never carries them         *)
-(* (encrypt_post emits no From/To/Date, and the deploy pipeline       *)
-(* enforces that on every posts-encrypted/*.eml).                     *)
+(* multipart body.  Sender, recipient, real date, and the real        *)
+(* subject exist only in the *inner* protected MIME headers, which    *)
+(* are encrypted (or, for a PUBLIC `recipients: *` post, signed       *)
+(* plaintext — a deliberate, frontmatter-`*`-gated exception whose    *)
+(* body is still authenticated by the pinned-author signature before  *)
+(* rendering); the outer envelope never carries them (encrypt_post    *)
+(* emits no From/To/Date, and the deploy pipeline enforces that on    *)
+(* every posts-encrypted/*.eml).  The post body is additionally       *)
+(* HTML-escaped at serialization (PageModel.html_escape) so a public  *)
+(* body can never inject markup into the page.                        *)
 (*                                                                   *)
 (* The page rendering depends only on the slug, the sort key (Date    *)
 (* from the outer headers when present) and the full raw envelope.    *)
 (* ================================================================= *)
 
-Theorem privacy : forall (slug raw version : string),
+Theorem privacy : forall (slug raw version pinned : string),
   let '(headers, _body) := split_headers_body raw 0%int63 fuel in
   let ep := parse_eml slug raw in
-  render_eml_page ep version =
-  render_eml_page (mkEncryptedPost slug (sort_key slug (lookup_header headers "Date")) raw) version.
+  render_eml_page ep version pinned =
+  render_eml_page (mkEncryptedPost slug (sort_key slug (lookup_header headers "Date")) raw) version pinned.
 Proof.
-  (* AIDEV-NOTE: render_eml_page gained a [version] arg and the old supporting
-     lemmas (render_eml_page_only_uses_body / parse_eml_body_eq) were dropped in a
-     refactor, leaving this orphan theorem un-compilable.  Privacy is now by
-     CONSTRUCTION: parse_eml slug raw IS mkEncryptedPost slug (sort_key slug
-     date) raw — it structurally retains only slug, the sort-key(Date) and the
-     FULL raw envelope (public headers + multipart body), so the two renderings
-     are definitionally identical.  The outer envelope contains no From/To/Date
-     and no plaintext by construction of encrypt_post + CI policy. *)
-  intros slug raw version. unfold parse_eml.
+  (* AIDEV-NOTE: parse_eml slug raw IS mkEncryptedPost slug (sort_key slug
+     (lookup_header headers "Date")) raw — it structurally retains only slug,
+     the sort-key(Date) and the FULL raw envelope (public headers + multipart
+     body), so the two renderings are definitionally identical (privacy by
+     CONSTRUCTION: the outer envelope carries no From/To/Date and no plaintext).
+     The [pinned] trust-anchor key is the shared build-time pin, not a function
+     of the post, so it cancels on both sides under reflexivity (O(1)). *)
+  intros slug raw version pinned. unfold parse_eml.
   destruct (split_headers_body raw 0%int63 fuel) as [headers body].
   reflexivity.
 Qed.
@@ -90,10 +94,25 @@ Proof. intros s pos H H0 H1 H2 H3; unfold html_escape_char; rewrite H, H0, H1, H
 (* 2. render_eml_page — only ep_body is read                         *)
 (* ================================================================= *)
 
-Lemma render_eml_page_only_uses_body : forall ep s k version,
-  render_eml_page ep version =
-  render_eml_page (mkEncryptedPost s k ep.(ep_body)) version.
-Proof. destruct ep; reflexivity. Qed.
+Lemma render_eml_page_only_uses_body : forall ep s k version pinned,
+  render_eml_page ep version pinned =
+  render_eml_page (mkEncryptedPost s k ep.(ep_body)) version pinned.
+Proof.
+  (* AIDEV-NOTE (perf — CRITICAL): a bare [destruct ep; reflexivity] (or [cbn]/
+     [simpl]) HANGS here for hours.  After destruct the two sides differ only in
+     the [ep_body] projection, but [reflexivity]/[cbn] reduce the whole
+     [serialize_post_page] body, which wraps that projection in
+     [html_escape (ep.(ep_body))].  [html_escape] is a fuel-bounded Fixpoint
+     whose guard [if leb (length body) pos] is stuck on the variable [body], so
+     kernel conversion / [cbn] unfold the Fixpoint at all 2,000,000 fuel levels
+     (O(fuel^2)).  [f_equal] avoids this entirely: it applies congruence at the
+     function level (unfolding only [render_eml_page], never [serialize_post_page]
+     or [html_escape]) and reduces the [ep_body] projections at the leaves — O(1).
+     Do NOT revert to [destruct ep; reflexivity] / [cbn]. *)
+  intros [sl sk b] s k version pinned.
+  unfold render_eml_page.
+  f_equal.
+Qed.
 
 (* ================================================================= *)
 (* 3. parse_eml — slug/sort-key come from the argument + Date header; *)
@@ -130,8 +149,9 @@ Example test_html_escape_all :
   html_escape "&<>""'" = "&amp;&lt;&gt;&quot;&#39;" := eq_refl.
 
 Example test_render_nonempty :
-  True.
-Proof. exact I. Qed.
+  (* render_eml_page always emits a non-empty page (the envelope body rendered
+     HTML-escaped into <pre id='ciphertext'>). *)
+  negb (is_empty (render_eml_page (mkEncryptedPost "s" "k" "BODY") "v" "")) = true := eq_refl.
 
 Example test_parse_eml_body :
   let raw := "Date: Fri

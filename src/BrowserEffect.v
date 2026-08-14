@@ -49,6 +49,7 @@ Inductive brE : Type -> Type :=
 | DomSetHtml    : string -> string -> brE unit   (* set innerHTML (escaped only) *)
 | DomShow       : string -> brE unit
 | DomHide       : string -> brE unit
+| DomGetMeta    : string -> brE string          (* <meta name=...> content (public-post trust anchor) *)
 | DomPathSlug   : brE string                      (* location.pathname last seg *)
 | RenderLatexCanvas : string -> Z -> Z -> brE Z
 (* sessionStorage *)
@@ -105,6 +106,8 @@ Definition dom_show {E} `{brE -< E} (id : string) : itree E unit :=
   embed (DomShow id).
 Definition dom_hide {E} `{brE -< E} (id : string) : itree E unit :=
   embed (DomHide id).
+Definition dom_get_meta {E} `{brE -< E} (name : string) : itree E string :=
+  embed (DomGetMeta name).
 Definition dom_path_slug {E} `{brE -< E} : itree E string :=
   embed DomPathSlug.
 
@@ -166,6 +169,7 @@ Crane Extract Inductive brE => ""
     "dom_set_inner_html(%a0, %a1)"
     "dom_show(%a0)"
     "dom_hide(%a0)"
+    "dom_get_meta(%a0)"
     "dom_path_slug(std::monostate{})"
     "render_latex_canvas(%a0, (int64_t)%a1, (int64_t)%a2)"
     "ss_get(%a0)"
@@ -197,6 +201,8 @@ Crane Extract Inlined Constant dom_show =>
   "dom_show(%a0)" From "browser_helpers.h".
 Crane Extract Inlined Constant dom_hide =>
   "dom_hide(%a0)" From "browser_helpers.h".
+Crane Extract Inlined Constant dom_get_meta =>
+  "dom_get_meta(%a0)" From "browser_helpers.h".
 Crane Extract Inlined Constant dom_path_slug =>
   "dom_path_slug(std::monostate{})" From "browser_helpers.h".
 Crane Extract Inlined Constant ss_get =>

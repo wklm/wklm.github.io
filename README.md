@@ -27,6 +27,17 @@ unwrapped. A reader who has enrolled a P-256 keypair in the browser can
 decrypt posts in-page via Web Crypto API. An unenrolled reader sees
 only opaque ciphertext.
 
+A post whose frontmatter says `recipients: *` is **public**: the same
+signed envelope with `Public-Keys: *`, whose body is carried as signed
+plaintext (an `application/x-crane-public` 8bit part) instead of a
+wrapped CEK — readable by anyone, with **no key** (D1/D2). Public
+posts are still signed by the author, and the browser verifies that
+signature against the **build-time-pinned** author signing key emitted
+into each post page (`<meta name='crane-author-signing-key'>`), failing
+closed when the pin is missing or mismatched — a forged envelope
+carrying its own keypair is rejected (D-C5). `*` cannot be mixed with
+named readers.
+
 The decrypted reading view renders the post's Markdown: headings,
 **bold** / *emphasis* / `` `code` `` spans, links, bullet and numbered
 lists, blockquotes, rules and fenced code blocks are typeset onto the
@@ -54,7 +65,7 @@ and `application/aes-gcm` (AES-256-GCM ciphertext) parts. The inner
 payload is a `multipart/mixed` containing the original Markdown and
 every inline image as a base64 attachment. Two outer headers
 authenticate the envelope: `Signature:` (128 hex chars — the raw 64-byte
-ECDSA P-256 signature over `SHA-256("crane-blog-sign-v1" ‖ ciphertext)`) and
+ECDSA P-256 signature over the double hash `SHA-256(SHA-256("crane-blog-sign-v1" ‖ ciphertext))` (the FFI hashes the 32-byte digest once more before ECDSA)) and
 `Signing-Key:` (130 hex chars — the 65-byte uncompressed SEC1 signing public
 key), alongside `Public-Keys:` (recipient key IDs).
 
@@ -63,7 +74,7 @@ key), alongside `Public-Keys:` (recipient key IDs).
 | key          | meaning                                                           |
 |--------------|-------------------------------------------------------------------|
 | `slug`       | output directory and `.eml` basename; falls back to the file stem |
-| `recipients` | comma-separated reader key IDs (max 3); the author is always added. Each listed key is resolved from `keys/<kid>.pub` — automatically fetched from the public key directory if missing (see the reader flow below) |
+| `recipients` | comma-separated reader key IDs (max 3); the author is always added. Each listed key is resolved from `keys/<kid>.pub` — automatically fetched from the public key directory if missing (see the reader flow below). Exactly `*` makes the post **public** (signed plaintext, no key needed); `*` mixed with named readers is rejected |
 
 All other keys are left for the author's own reference inside the
 encrypted body — they are never leaked, because the body is never

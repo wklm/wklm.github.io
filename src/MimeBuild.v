@@ -355,6 +355,85 @@ Definition build_outer_envelope
     ct_package_b64_wrapped ::
     cat "--" (cat outer_boundary (cat "--" crlf)) :: nil).
 
+(* Public outer envelope (feature 2, D1/D4): the SAME multipart/hpke+wrapped
+   container as [build_outer_envelope] — identical header order, identical
+   preamble line, identical boundary and CRLF discipline — with exactly ONE
+   part: Content-Type: application/x-crane-public, CTE 8bit, whose body is
+   the byte-identical inner MIME, and Public-Keys: * instead of the
+   recipient list.  No wrapped-keys part, no Wraps header, no base64, no
+   aes-gcm.  [signature_hex] is the hex ECDSA signature over
+   sha256(sign_info_public || slug || normalize_crlf inner_mime) and
+   [signing_key_hex] the hex 65-byte uncompressed author signing public key
+   (emitted as the Signature / Signing-Key headers, byte-identical header
+   slots to the encrypted envelope). *)
+Definition build_public_outer_envelope
+  (inner_mime signature_hex signing_key_hex : string) : string :=
+  concat_all (
+    outer_subject :: crlf ::
+    "MIME-Version: 1.0" :: crlf ::
+    "Public-Keys: *" :: crlf ::
+    "Signature: " :: signature_hex :: crlf ::
+    "Signing-Key: " :: signing_key_hex :: crlf ::
+    "Content-Type: multipart/hpke+wrapped; boundary=" :: quote_wrap outer_boundary :: crlf ::
+    crlf ::
+    "This is an HPKE encrypted message for Crane Blog readers." :: crlf ::
+    cat "--" (cat outer_boundary crlf) ::
+    "Content-Type: application/x-crane-public" :: crlf ::
+    "Content-Transfer-Encoding: 8bit" :: crlf ::
+    crlf ::
+    inner_mime :: crlf ::
+    cat "--" (cat outer_boundary (cat "--" crlf)) :: nil).
+
+(* ---- boundary-literal rejection (A13 / R2 MINOR-4) ------------------ *)
+(* Reject post bodies containing a full line equal to a MIME boundary
+   literal (--=_cb_inner_0_= or --=_cb_outer_0_=): such a line inside the
+   markdown part would terminate (or reopen) the inner multipart framing and
+   corrupt the envelope.  Total, fuel-bounded; each line is compared after
+   stripping ONE trailing CR, so a CRLF-ending writer's boundary line is
+   caught too (the CRLF-aware parsers trim it before matching). *)
+Fixpoint has_boundary_literal_aux (lines : list string) (fuel : nat) : bool :=
+  match fuel with
+  | O => false
+  | S f' =>
+      match lines with
+      | [] => false
+      | line :: rest =>
+          let t := trim_trailing_cr line in
+          if orb (orb (string_eqb t (cat "--" inner_boundary))
+                      (string_eqb t (cat "--" outer_boundary)))
+                 (orb (string_eqb t (cat "--" (cat inner_boundary "--")))
+                      (string_eqb t (cat "--" (cat outer_boundary "--"))))
+          then true
+          else has_boundary_literal_aux rest f'
+      end
+  end.
+
+Definition has_boundary_literal (body : string) : bool :=
+  has_boundary_literal_aux (split_lines body) mime_fuel.
+
+Example boundary_literal_detected_inner :
+  has_boundary_literal (concat_all ("intro" :: lf :: "--=_cb_inner_0_=" :: lf :: "outro" :: nil))
+  = true := eq_refl.
+
+Example boundary_literal_detected_outer :
+  has_boundary_literal (concat_all ("intro" :: lf :: "--=_cb_outer_0_=" :: lf :: "outro" :: nil))
+  = true := eq_refl.
+
+Example boundary_literal_clean :
+  has_boundary_literal (concat_all ("intro" :: lf :: "body" :: lf :: "outro" :: nil))
+  = false := eq_refl.
+
+(* R2 MINOR-4 (closing literals): a full line equal to a CLOSING boundary
+   (--=<...>=--) must also be rejected — it would truncate the multipart on
+   the decrypt side. *)
+Example boundary_literal_detected_closing_inner :
+  has_boundary_literal (concat_all ("intro" :: lf :: "--=_cb_inner_0_=--" :: lf :: "outro" :: nil))
+  = true := eq_refl.
+
+Example boundary_literal_detected_closing_outer :
+  has_boundary_literal (concat_all ("intro" :: lf :: "--=_cb_outer_0_=--" :: lf :: "outro" :: nil))
+  = true := eq_refl.
+
 (* ---- Correct header/body split ------------------------------------- *)
 (* MimeLib.split_headers_body only detects an LF-LF blank line near EOF (its
    loop checks CRLF-CRLF at every position but LF-LF only when fewer than 4

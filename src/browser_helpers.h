@@ -477,6 +477,26 @@ inline std::monostate dom_hide(const std::string& id) {
     return std::monostate{};
 }
 
+// Trust anchor for public (keyless) posts: read <meta name="..."> content.
+// Returns "" when the tag is absent.  Same length-prefixed buffer contract
+// as dom_get_text (browser_helpers.h), decoded via crane_browser_detail.
+inline std::string dom_get_meta(const std::string& name) {
+    char* p = reinterpret_cast<char*>(EM_ASM_PTR({
+        var el = document.querySelector('meta[name="' + UTF8ToString($0) + '"]');
+        var s = el ? (el.content || '') : '';
+        var enc = new TextEncoder();
+        var b = enc.encode(s);
+        var ptr = _malloc(4 + b.length);
+        HEAPU8[ptr] = (b.length >> 0) & 0xff;
+        HEAPU8[ptr+1] = (b.length >> 8) & 0xff;
+        HEAPU8[ptr+2] = (b.length >> 16) & 0xff;
+        HEAPU8[ptr+3] = (b.length >> 24) & 0xff;
+        HEAPU8.set(b, ptr + 4);
+        return ptr;
+    }, name.data()));
+    return crane_browser_detail::take_lp(p);
+}
+
 // ---------------------------------------------------------------------------
 // Verified-Reader canvas (Wave 1).  The ROCQ Typeset engine lays the decrypted
 // body into integer glyph quads (x,y in scaled points, 65536 sp = 1 pt); these

@@ -64,6 +64,7 @@ cid="$(docker create "$gen_image")"
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 docker cp posts-encrypted "$cid":/site/posts-encrypted
 docker cp static "$cid":/site/static
+[ -f keys/author-signing.pub ] && docker cp keys "$cid":/site/keys || true
 docker start -a "$cid"
 # Trailing /. copies CONTENTS into the existing _site dir
 # (a bare path would nest as _site/_site).

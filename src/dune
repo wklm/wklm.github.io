@@ -19,7 +19,12 @@
 ; every module of the theory.  Run as [dune build @proofs] in CI.
 (rule
  (alias proofs)
- (deps (glob_files *.vo))
+ (deps
+  BridgeFFI.vo BrowserCrypto.vo BrowserEffect.vo BrowserPolicy.vo CryptoSpec.vo
+  DecryptApp.vo DecryptPost.vo EncryptPost.vo EnrollApp.vo InnerMime.vo
+  InnerMimeTests.vo IoEffects.vo Logic.vo MimeBuild.vo MimeIngest.vo MimeLib.vo
+  NetFFI.vo PageModel.vo PostBuild.vo ProcFFI.vo PublicEnvelope.vo Recipients.vo
+  Smtp.vo SmtpServer.vo Spec.vo StringLib.vo)
  (action (progn)))
 
 (rule

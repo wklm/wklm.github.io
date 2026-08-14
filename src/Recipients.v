@@ -150,3 +150,85 @@ Definition build_envelope
     (wrap_base64 (base64_encode ct_package))
     (hex_encode sig_raw)
     sign_pk_hex.
+
+(* ---- public (keyless) envelopes — feature 2 -------------------------- *)
+
+(* True iff the recipients value is EXACTLY "*" after trim (D3).  A kid can
+   never be "*" (kids are exactly 12 hex chars, [0-9a-f]{12}), so the
+   sentinel is unambiguous. *)
+Definition is_public_marker (s : string) : bool :=
+  string_eqb (trim s) "*".
+
+(* True iff "*" appears anywhere in the UNCAPPED comma-split value (D-M2,
+   A7): clean_kids caps at max_extra_recipients (3) BEFORE the scan, so
+   "kid1, kid2, kid3, *" would silently drop the star; this predicate scans
+   the full split.  The leading orb (is_public_marker s) term (F1) makes the
+   A11 implication below a reflexivity proof — it is extensionally
+   redundant (any exact "*" is also found by the uncapped scan) and pinned
+   by the Examples. *)
+Definition contains_public_marker (s : string) : bool :=
+  orb (is_public_marker s)
+      (mem_str "*" (collect_kids (split_on_char_fuel s ch_comma 0%int63 mime_fuel)
+                                 mime_fuel)).
+
+(* Build the PUBLIC outer envelope: NO CEK, NO wrapped-keys part; the
+   signature is sign_post_public over slug || normalize_crlf inner_mime
+   (D-C2), hex-encoded into the Signature header.  Single source of truth
+   for the CLI and SMTP writers. *)
+Definition build_public_envelope (slug inner_mime sign_sk sign_pk_hex : string) : string :=
+  let sig_raw := sign_post_public sign_sk slug inner_mime in
+  build_public_outer_envelope inner_mime (hex_encode sig_raw) sign_pk_hex.
+
+(* ---- machine-checked pins (A11, D-M2, F4, R1-B9) -------------------- *)
+
+Example public_marker_exact : is_public_marker "*" = true := eq_refl.
+Example public_marker_trimmed : is_public_marker " * " = true := eq_refl.
+Example public_marker_rejects_kid : is_public_marker "ae5b3540fd3c" = false := eq_refl.
+Example public_marker_rejects_mixed : contains_public_marker "*, ae5b3540fd3c" = true := eq_refl.
+(* D-M2: the star in position 4 (past clean_kids' 3-cap) must be DETECTED. *)
+Example public_marker_star_after_cap : contains_public_marker "kid1, kid2, kid3, *" = true := eq_refl.
+Example public_marker_plain_kids : contains_public_marker "kid1, kid2, kid3, kid4" = false := eq_refl.
+(* F4 / R1-B9: "*," is NOT exactly "*" (never silently public) but IS
+   detected by the uncapped scan + orb term ⇒ mixed-reject branch. *)
+Example public_marker_rejects_trailing_comma : is_public_marker "*, " = false := eq_refl.
+Example public_marker_detects_star_trailing_comma : contains_public_marker "*, " = true := eq_refl.
+(* A11 (F1) floor: the exact-marker predicate implies detection. *)
+Example public_marker_implies_contains_star :
+  is_public_marker "*" = true -> contains_public_marker "*" = true := fun _ => eq_refl.
+
+Lemma public_marker_implies_contains : forall (s : string),
+  is_public_marker s = true -> contains_public_marker s = true.
+Proof. intros s H. unfold contains_public_marker. rewrite H. reflexivity. Qed.
+
+(* Full-string byte pin of the public envelope (house eq_refl style — the
+   strongest form; no str_contains, R2 MINOR-2).  Coq string literals carry
+   no CR/LF/dquote escapes, so the RHS is written as the definition's own
+   concat_all shape with crlf / quote_wrap exactly as the writer emits the
+   bytes.  Closing the equality pins the whole §2 layout: Public-Keys: *
+   present, one application/x-crane-public part, no wrapped-keys / aes-gcm. *)
+Example public_envelope_bytes_exact :
+  build_public_outer_envelope "INNER" "SIG" "PK"
+  = concat_all (
+      outer_subject :: crlf ::
+      "MIME-Version: 1.0" :: crlf ::
+      "Public-Keys: *" :: crlf ::
+      "Signature: " :: "SIG" :: crlf ::
+      "Signing-Key: " :: "PK" :: crlf ::
+      "Content-Type: multipart/hpke+wrapped; boundary=" :: quote_wrap outer_boundary :: crlf ::
+      crlf ::
+      "This is an HPKE encrypted message for Crane Blog readers." :: crlf ::
+      cat "--" (cat outer_boundary crlf) ::
+      "Content-Type: application/x-crane-public" :: crlf ::
+      "Content-Transfer-Encoding: 8bit" :: crlf ::
+      crlf ::
+      "INNER" :: crlf ::
+      cat "--" (cat outer_boundary (cat "--" crlf)) :: nil)
+  := eq_refl.
+
+(* M10/F2 (plan §7.2 row 10): the SMTP builder [build_public_eml] delegates to
+   [build_public_envelope], which is definitionally [build_public_outer_envelope]
+   over [hex_encode (sign_post_public ...)] — this eq_refl pins that shape
+   WITHOUT computing through the opaque [ecdsa_p256_sign] (no vm_compute). *)
+Example build_public_envelope_shape (slug inner_mime sign_sk sign_pk_hex : string) :
+  build_public_envelope slug inner_mime sign_sk sign_pk_hex
+  = build_public_outer_envelope inner_mime (hex_encode (sign_post_public sign_sk slug inner_mime)) sign_pk_hex := eq_refl.

@@ -27,6 +27,16 @@ site does not solicit a passing audience. To read a piece you must
 already be on the recipient list, or you must do the work of
 becoming one. Everyone else sees the envelope.
 
+**Public posts (shipped exception).** A post whose frontmatter says
+`recipients: *` is published as signed plaintext inside the same
+envelope — `Public-Keys: *`, an `application/x-crane-public` part, and
+the author's ECDSA signature over the canonical (CRLF-normalized)
+body bound to its slug. Anyone can read it with no key; the browser
+verifies the signature against the build-time-pinned author signing
+key and refuses to render forged or tampered posts. This is the one
+deliberate departure from the ciphertext-only stance, chosen per-post
+by the author.
+
 The generator that builds the inbox is written in Rocq and extracted
 to C++ via Crane. That fact matters to me, but the site is not a
 demo for the generator. The generator is infrastructure; the
@@ -172,6 +182,9 @@ Content and tooling work:
 
 Comments, analytics, newsletters, pop-ups, cookie banners,
 tracking pixels, A/B tests, a CMS, a dashboard, a Twitter-card
-generator, a theme switcher, any rendering of post bodies on the
-public site, any plaintext on the public site beyond envelope
-metadata. If any of these appear, something has gone wrong.
+generator, a theme switcher, any *unauthenticated* rendering of post
+bodies on the public site, any plaintext on the public site beyond
+envelope metadata. If any of these appear, something has gone wrong.
+(Public `recipients: *` posts are the single deliberate exception:
+their body is rendered only after the pinned-author signature
+verifies.)

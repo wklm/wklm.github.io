@@ -13,6 +13,12 @@
         (AAD = kid), ECDSA-sign the raw ciphertext package (CRANE_BLOG_SIGNING_KEY
         + keys/<kid>.sign.pub) and emit the outer multipart/hpke+wrapped envelope
         (Signature / Signing-Key headers) to posts-encrypted/<slug>.eml;
+      - OR, when frontmatter `recipients: *` (feature 2), emit a PUBLIC (keyless)
+        envelope instead: the same outer container with Public-Keys: *, one
+        application/x-crane-public 8bit part carrying the byte-identical inner
+        MIME, signed over sha256(sign_info_public || slug || normalize_crlf
+        inner_mime) — no key resolution, no CEK, no wraps; mixed "*" + named
+        readers is rejected (D3, D-M2).
       - print an "encrypted ... -> ..." status line to stderr.
 
     Paths are CWD-relative; scripts/test-roundtrip.sh runs the tool from the
@@ -139,30 +145,69 @@ Definition encrypt_one (md_path : string) : IO unit :=
     let sign_pk_hex := trim sign_pub_hex in
     let image_rels := collect_image_refs raw in
     images <- read_images image_rels ;;
-    (* Recipients: the author (CRANE_BLOG_AUTHOR_KEY_ID) is always first;
-       frontmatter `recipients: kid1, kid2` adds up to 3 more readers.  Their
-       public keys are resolved from keys/<kid>.pub. *)
-    let recipients_meta := header_lookup "recipients" kv in
-    let recips := build_recipients kid recipients_meta in
-    recipients_pk <- read_pubkeys recips ;;
-    if negb (recips_ok recipients_pk)
+    (* A13 (R2 MINOR-4): a body line equal to a MIME boundary literal would
+       corrupt the inner multipart framing — reject it up front (covers both
+       the public and the encrypted branch; the body is the same [raw]). *)
+    if has_boundary_literal raw
     then
       _ <- eprint (concat_all
-        ("encrypt_post: missing or unreadable recipient public key under keys/" :: lf :: nil)) ;;
+        ("encrypt_post: body contains a line equal to a MIME boundary literal" :: lf :: nil)) ;;
       exit_with 1%int63
     else
-      let recipients_str := recipients_to (kid_list recipients_pk) in
-      let protected_headers :=
-        ("From", email) ::
-        ("To", recipients_str) ::
-        ("Date", fixed_date) ::
-        ("Subject", title) :: nil in
-      let inner_mime := build_inner_mime protected_headers md_basename raw images in
-      let envelope := build_envelope (random_bytes 32%int63) recipients_pk slug inner_mime sign_sk sign_pk_hex in
-      _ <- create_directory "posts-encrypted" ;;
-      _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
-      eprint (concat_all
-        ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil)).
+      (* Recipients (feature 1/2): frontmatter `recipients:` is honored —
+         empty/absent => author-only ([author_kid]); exactly "*" => PUBLIC
+         (keyless signed plaintext envelope, branch BEFORE read_pubkeys so
+         keys/<kid>.pub is never read); mixed "*" + named readers =>
+         rejected (D3, D-M2). *)
+      let recipients_meta := header_lookup "recipients" kv in
+      if is_public_marker recipients_meta
+      then
+        (* PUBLIC branch (D1/D4/D-C2): no CEK, no wraps.  The inner MIME is
+           byte-identical to an author-only post (To: reader: <author_kid>);
+           the envelope signs
+           sha256(sign_info_public || slug || normalize_crlf inner_mime). *)
+        let recipients_str := recipients_to (kid :: nil) in
+        let protected_headers :=
+          ("From", email) ::
+          ("To", recipients_str) ::
+          ("Date", fixed_date) ::
+          ("Subject", title) :: nil in
+        let inner_mime := build_inner_mime protected_headers md_basename raw images in
+        let envelope := build_public_envelope slug inner_mime sign_sk sign_pk_hex in
+        _ <- create_directory "posts-encrypted" ;;
+        _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
+        eprint (concat_all
+          ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil))
+      else if contains_public_marker recipients_meta
+      then
+        (* Mixed "*" + named readers (D3): reject BEFORE read_pubkeys. *)
+        _ <- eprint (concat_all
+          ("encrypt_post: recipients may not mix the public marker * with named readers" :: lf :: nil)) ;;
+        exit_with 1%int63
+      else
+        (* Encrypted path: the author (CRANE_BLOG_AUTHOR_KEY_ID) is always
+           first; frontmatter `recipients: kid1, kid2` adds up to 3 more
+           readers.  Their public keys are resolved from keys/<kid>.pub. *)
+        let recips := build_recipients kid recipients_meta in
+        recipients_pk <- read_pubkeys recips ;;
+        if negb (recips_ok recipients_pk)
+        then
+          _ <- eprint (concat_all
+            ("encrypt_post: missing or unreadable recipient public key under keys/" :: lf :: nil)) ;;
+          exit_with 1%int63
+        else
+          let recipients_str := recipients_to (kid_list recipients_pk) in
+          let protected_headers :=
+            ("From", email) ::
+            ("To", recipients_str) ::
+            ("Date", fixed_date) ::
+            ("Subject", title) :: nil in
+          let inner_mime := build_inner_mime protected_headers md_basename raw images in
+          let envelope := build_envelope (random_bytes 32%int63) recipients_pk slug inner_mime sign_sk sign_pk_hex in
+          _ <- create_directory "posts-encrypted" ;;
+          _ <- write_file (cat "posts-encrypted/" (cat slug ".eml")) envelope ;;
+          eprint (concat_all
+            ("encrypted " :: md_path :: " -> posts-encrypted/" :: slug :: ".eml" :: lf :: nil)).
 
 (* ---- entry point --------------------------------------------------- *)
 

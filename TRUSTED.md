@@ -179,6 +179,17 @@ CryptoSpec.v.
   `Signature:` (hex of the 64-byte raw r‖s — **128 hex chars**) and
   `Signing-Key:` (hex of the 65-byte SEC1 uncompressed point — **130 hex
   chars**).
+- **Public (keyless) variant (feature 2).** `sign_post_public` /
+  `verify_post_public` in `src/CryptoSpec.v` use a **domain-separated** info
+  string `sign_info_public = "crane-blog-sign-public-v1"` (byte-disjoint from
+  `sign_info`, so a public envelope's signature can never replay against a
+  ciphertext envelope's verification and vice versa) over the canonical form
+  `digest = SHA-256(sign_info_public ‖ slug ‖ normalize_crlf inner_mime)`,
+  where `normalize_crlf` (CRLF/CR → LF) makes the signed bytes deterministic
+  across writers and the browser's HTML input-stream preprocessing (C2/A1).
+  Both variants are *derived* from the same `ecdsa_p256_sign`/`verify`
+  primitives — no new axioms; the realized double-hash (`e = SHA-256(digest)`)
+  applies unchanged.
 - **Native realization (C1).** `src/crypto_helpers.h` `ecdsa_p256_sign` /
   `ecdsa_p256_verify` — OpenSSL ECDSA over P-256 (DER⇄raw r‖s marshalling).
   **e = SHA-256(digest)**: the 32-byte protocol pre-hash is passed as the
@@ -204,8 +215,16 @@ CryptoSpec.v.
   + `keys/<kid>.sign.pub` and **rejects** a missing `Signature` header, a
   `Signing-Key` that does not match the trusted key, or a failed `verify_post`.
   `DecryptApp.v` (browser) rejects a missing/empty signature or a failed
-  `verify_post` against the envelope's *own* `Signing-Key` header — the browser
-  has no external trust anchor, so the header is self-describing there.
+  `verify_post` against the envelope's *own* `Signing-Key` header — for
+  ENCRYPTED posts the browser has no external trust anchor, so the header is
+  self-describing there. **PUBLIC posts are different (D-C5):** the site
+  generator emits the envelope's Signing-Key as a build-time-pinned
+  `<meta name='crane-author-signing-key'>` in the post page, and `DecryptApp`
+  verifies public-post signatures against that pin, **failing closed** when the
+  meta is missing or does not match the envelope's key. The pin's authority is
+  the deploy pipeline: the CI deploy gates assert every committed `.eml`'s
+  `Signing-Key` equals the committed `keys/author-signing.pub`, so a forged
+  envelope carrying its own keypair is rejected before it can reach a reader.
 - **Gates.** `.githooks/pre-commit` rejects any staged `posts-encrypted/*.eml`
   lacking `Signature: [0-9a-f]{128}`, `Signing-Key: [0-9a-f]{130}`, or
   `Public-Keys`; the deploy workflows (`.github` + `.forgejo`) enforce the same
@@ -466,7 +485,7 @@ completeness but are **not active trusted boundaries today**.
 >
 > | Theorem | File | Phase | Guarantee |
 > |---------|------|-------|-----------|
-> | **T1** (`privacy`) | `src/Spec.v` | gen | Generator renders only ciphertext + fixed template; `parse_eml` discards Subject/From/To |
+> | **T1** (`privacy`) | `src/Spec.v` | gen | Generator renders only ciphertext + fixed template; `parse_eml` discards Subject/From/To (public posts render the signed plaintext body — a deliberate, frontmatter-`*`-gated exception) |
 > | `html_escape_char` (6 cases) | `src/Spec.v` | gen | Every HTML-special character is replaced; passthrough for safe chars |
 > | `esm_specifier_valid` (4 thms) | `src/PageModel.v` | 1 | Every ES module specifier starts with `./`/`../`/`/`; bare-`static/` proven invalid |
 > | `ids_unique` (3 thms) | `src/PageModel.v` | 1 | No element-id collisions in per-page ID lists |

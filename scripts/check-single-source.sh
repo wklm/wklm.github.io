@@ -17,6 +17,7 @@ while IFS= read -r f; do
   case "$f" in
     *.v) ;;                                                  # ROCQ — the source of truth
     *.h|*.md|*.yml|*.yaml|*.json|*.sh|*.eml) ;;              # FFI-shim headers, docs, CI/ops config, data
+    keys/author-signing.pub) ;;                              # D-C5 build-time trust anchor (public key data, NOT behavioral logic)
     dune|*/dune|dune-project|Dockerfile|*/Dockerfile) ;;    # dune + container build config
     .dockerignore|.gitignore|.gitkeep|*/.gitkeep) ;;        # vcs/keep markers
     .githooks/*|.vscode/*|.devcontainer/*) ;;               # hook / editor / devcontainer config

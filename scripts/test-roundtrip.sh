@@ -53,6 +53,7 @@ cleanup() {
     rm -rf "$scratch"
     rm -f posts/fixture.md posts/fixture.bin posts-encrypted/fixture.eml
     rm -f posts-encrypted/fixture-tampered.eml
+    rm -f posts/public-hostile.md posts-encrypted/public-hostile.eml
     rm -f "keys/${key_id:-}.pub" "keys/${sign_key_id:-}.sign.pub" \
         .roundtrip-key-id .roundtrip-sign-key-id
 }
@@ -243,6 +244,272 @@ fi
 rm -f "$tampered"
 echo "tamper rejection OK"
 
+# ===========================================================================
+# Public (keyless) post leg — feature 2 (Public-Keys: *)
+# ===========================================================================
+mkdir -p posts
+cat > posts/public-fixture.md <<'EOF'
+---
+title: Public round-trip fixture
+date: 2026-04-24
+slug: public-fixture
+recipients: *
+---
+Hello from a PUBLIC post. No key needed.
+EOF
+orig_public_md="$(cat posts/public-fixture.md)"
+
+# ---- Encrypt (public branch: no keys/<kid>.pub resolution) ----
+"$enc" posts/public-fixture.md
+public_eml="posts-encrypted/public-fixture.eml"
+test -f "$public_eml"
+clean_eml="$(tr -d '\r' < "$public_eml")"
+outer_head="$(sed -n '1,/^$/p' <<<"$clean_eml")"
+
+# ---- Envelope shape (D1): same container, Public-Keys: *, no wraps/aes-gcm ----
+grep -q 'multipart/hpke+wrapped' "$public_eml" \
+  || { echo "FAIL: public envelope missing multipart/hpke+wrapped"; exit 1; }
+grep -qx 'Public-Keys: \*' <<<"$outer_head" \
+  || { echo "FAIL: public envelope missing exactly 'Public-Keys: *'"; exit 1; }
+if grep -q 'application/wrapped-keys' "$public_eml"; then
+    echo "FAIL: public envelope must not carry a wrapped-keys part"; exit 1
+fi
+if grep -q 'application/aes-gcm' "$public_eml"; then
+    echo "FAIL: public envelope must not carry an aes-gcm part"; exit 1
+fi
+grep -q 'application/x-crane-public' "$public_eml" \
+  || { echo "FAIL: public envelope missing application/x-crane-public part"; exit 1; }
+# C4/A3: scope the metadata grep to the OUTER header block — the inner MIME's
+# protected From/To/Date headers sit at line starts INSIDE the part body.
+if grep -E '^(From|To|Date): ' <<<"$outer_head" >/dev/null; then
+    echo "FAIL: public envelope outer header exposes sender, recipient, or date metadata" >&2
+    exit 1
+fi
+
+# ---- Public decrypt with NO private key ----
+rm -f posts/public-fixture.md
+unset CRANE_BLOG_PRIVATE_KEY
+public_out="$("$dec" "$public_eml" 2>&1)" || { echo "FAIL: public decrypt failed: $public_out"; exit 1; }
+grep -q 'Verified public post' <<<"$public_out" \
+  || { echo "FAIL: public decrypt did not report 'Verified public post': $public_out"; exit 1; }
+roundtripped_public="$(cat posts/public-fixture.md)"
+if [[ "$orig_public_md" != "$roundtripped_public" ]]; then
+    echo "FAIL: public markdown mismatch after round-trip" >&2
+    diff <(printf '%s' "$orig_public_md") <(printf '%s' "$roundtripped_public") || true
+    exit 1
+fi
+rm -f posts/public-fixture.md
+# Restore the private key for any later encrypted-leg assertions.
+export CRANE_BLOG_PRIVATE_KEY="$priv_hex"
+echo "public round-trip OK"
+
+# ---- Public tamper (body byte flip -> canonical digest changes) ----
+tampered_public="posts-encrypted/public-tampered.eml"
+cp "$public_eml" "$tampered_public"
+perl -0pi -e 's/Hello from a PUBLIC post\./Hello from a PUBLIC post?/' "$tampered_public"
+if ! "$dec" "$tampered_public" >"$scratch/pub-tamper.out" 2>&1; then
+    grep -q 'author signature verification failed' "$scratch/pub-tamper.out" \
+      || { echo "FAIL: tampered public envelope rejected without signature error:"; cat "$scratch/pub-tamper.out"; exit 1; }
+else
+    echo "FAIL: tampered public envelope was accepted"; exit 1
+fi
+rm -f "$tampered_public"
+echo "public tamper rejection OK"
+
+# ---- Rename attack (slug binding): same bytes, different slug -> reject ----
+renamed="posts-encrypted/public-renamed.eml"
+cp "$public_eml" "$renamed"
+if "$dec" "$renamed" >"$scratch/pub-rename.out" 2>&1; then
+    echo "FAIL: renamed public envelope accepted (slug binding broken)"; exit 1
+fi
+grep -q 'author signature verification failed' "$scratch/pub-rename.out" \
+  || { echo "FAIL: rename attack rejected without signature error:"; cat "$scratch/pub-rename.out"; exit 1; }
+rm -f "$renamed"
+echo "public rename-attack rejection OK"
+
+# ---- Kind-flip (D-Q7/A12): Public-Keys: * -> a kid => fail closed ----
+kindflip="posts-encrypted/public-kindflip.eml"
+sed 's/^Public-Keys: \*/Public-Keys: 0123456789ab/' "$public_eml" | tr -d '\r' > "$kindflip"
+if "$dec" "$kindflip" >"$scratch/pub-kind.out" 2>&1; then
+    echo "FAIL: kind-flipped envelope accepted"; exit 1
+fi
+rm -f "$kindflip"
+echo "public kind-flip rejection OK"
+
+# ---- Mixed "*" + named readers (D3/D-M2) -> encrypt must reject ----
+cat > posts/public-mixed.md <<'EOF'
+---
+title: Mixed
+slug: public-mixed
+recipients: 0123456789ab, *
+---
+Mixed content.
+EOF
+if "$enc" posts/public-mixed.md >"$scratch/mixed.out" 2>&1; then
+    echo "FAIL: mixed recipients accepted"; exit 1
+fi
+rm -f posts/public-mixed.md posts-encrypted/public-mixed.eml
+echo "public mixed rejection OK"
+
+# ---- Trailing-comma "*," (R1 B9) -> rejected, never silently public ----
+cat > posts/public-starcomma.md <<'EOF'
+---
+title: Star comma
+slug: public-starcomma
+recipients: *,
+---
+Nope.
+EOF
+if "$enc" posts/public-starcomma.md >"$scratch/sc.out" 2>&1; then
+    echo "FAIL: '*,' accepted"; exit 1
+fi
+rm -f posts/public-starcomma.md posts-encrypted/public-starcomma.eml
+echo "public '*' trailing-comma rejection OK"
+
+# ---- M11/A16: REAL signature verification (openssl, DER-wrapped r||s) ----
+# digest = sha256(sign_info_public || slug || normalize_crlf(inner_mime)); the
+# FFI hashes that 32-byte digest once more (e = SHA-256(digest)) before ECDSA,
+# so openssl dgst receives the pre-hash as its message.  The Signature header
+# is raw 64-byte r||s; wrap it in a DER ECDSA-Sig-Value before verifying.
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$public_eml" "$scratch" <<'PYEOF'
+import hashlib, re, sys
+eml_path, scratch = sys.argv[1], sys.argv[2]
+raw = open(eml_path, 'rb').read()
+# Recover the inner MIME from the application/x-crane-public part body: the
+# wire body is inner_mime (ending CRLF) + CRLF + closing boundary; capture the
+# bytes up to the boundary's preceding CRLF.
+m = re.search(rb'Content-Type: application/x-crane-public\r\n(?:[^\r\n]*\r\n)*?\r\n(.*?)\r\n--=_cb_outer_0_=--', raw, re.S)
+if not m:
+    print('FAIL: could not locate public part'); sys.exit(1)
+inner = m.group(1)
+norm = inner.replace(b'\r\n', b'\n').replace(b'\r', b'\n')
+digest = hashlib.sha256(b'crane-blog-sign-public-v1' + b'public-fixture' + norm).digest()
+open(scratch + '/pub-digest.bin', 'wb').write(digest)
+sig_hex = re.search(rb'^Signature: ([0-9a-f]{128})\r?$', raw, re.M).group(1)
+rs = bytes.fromhex(sig_hex.decode())
+r, s = rs[:32], rs[32:]
+def der_int(b):
+    b = b.lstrip(b'\x00') or b'\x00'
+    if b[0] & 0x80:
+        b = b'\x00' + b
+    return b'\x02' + bytes([len(b)]) + b
+body = der_int(r) + der_int(s)
+der = b'\x30' + bytes([len(body)]) + body
+open(scratch + '/pub-sig.der', 'wb').write(der)
+# SPKI DER for the P-256 uncompressed point from the Signing-Key header.
+pk_hex = re.search(rb'^Signing-Key: ([0-9a-f]{130})\r?$', raw, re.M).group(1)
+spki = bytes.fromhex('3059301306072a8648ce3d020106082a8648ce3d030107034200') + bytes.fromhex(pk_hex.decode())
+open(scratch + '/pub-pk.der', 'wb').write(spki)
+PYEOF
+    if [[ -f "$scratch/pub-digest.bin" ]]; then
+        openssl pkey -pubin -inform DER -in "$scratch/pub-pk.der" -out "$scratch/pub-pk.pem" 2>/dev/null
+        if openssl dgst -sha256 -verify "$scratch/pub-pk.pem" \
+              -signature "$scratch/pub-sig.der" "$scratch/pub-digest.bin" 2>/dev/null | grep -q 'Verified OK'; then
+            echo "public signature externally verified (M11/A16)"
+        else
+            echo "FAIL: public signature did not verify under openssl" >&2
+            exit 1
+        fi
+    fi
+fi
+
+# ---- Feature 1 regression rows (D-R7/R8) ----
+# R7: empty/absent recipients: -> encrypted to the AUTHOR ONLY.
+cat > posts/author-only.md <<'EOF'
+---
+title: Author only
+slug: author-only
+recipients:
+---
+For the author's eyes only.
+EOF
+"$enc" posts/author-only.md
+ao_eml="posts-encrypted/author-only.eml"
+ao_head="$(tr -d '\r' < "$ao_eml" | sed -n '1,/^$/p')"
+grep -qx "Public-Keys: $key_id" <<<"$ao_head" \
+  || { echo "FAIL: author-only post not encrypted to the author"; exit 1; }
+rm -f posts/author-only.md "$ao_eml"
+echo "author-only default OK"
+
+# R8: SMTP-extract -> CLI-re-encrypt reader-preservation row.  Two readers
+# (kid1 = the author, kid2 = one extra ECDH keypair): encrypt with
+# `recipients: kid1, kid2`, decrypt as the author (always the first
+# recipient), then assert the readers survive both the round-tripped
+# frontmatter and the re-encrypted envelope's Public-Keys header.
+openssl ecparam -name prime256v1 -genkey -noout -out "$scratch/extra.pem" 2>/dev/null
+extra_pub_hex=$(openssl ec -in "$scratch/extra.pem" -pubout -conv_form uncompressed 2>/dev/null |
+  openssl pkey -pubin -outform DER 2>/dev/null |
+  tail -c 65 | xxd -p -c 999 | tr -d '\n')
+extra_priv_hex=$(openssl ec -in "$scratch/extra.pem" -text -noout 2>/dev/null |
+  awk '/priv:/{f=1;next}/pub:/{f=0}f' | tr -d ' :\n')
+if [ ${#extra_priv_hex} -eq 66 ]; then extra_priv_hex=${extra_priv_hex#00}; fi
+if [ ${#extra_priv_hex} -ne 64 ] || [ ${#extra_pub_hex} -ne 130 ]; then
+    echo "FAIL: extra reader key extraction wrong (priv_len=${#extra_priv_hex} want 64, pub_len=${#extra_pub_hex} want 130)" >&2
+    exit 1
+fi
+extra_kid=$(printf '%s' "$extra_pub_hex" | xxd -r -p | shasum -a 256 | cut -c 1-12)
+printf '%s' "$extra_pub_hex" > "keys/$extra_kid.pub"
+
+cat > posts/two-readers.md <<EOF
+---
+title: Two readers
+slug: two-readers
+recipients: $key_id, $extra_kid
+---
+For the author and one extra reader.
+EOF
+"$enc" posts/two-readers.md
+tr_eml="posts-encrypted/two-readers.eml"
+test -f "$tr_eml"
+tr_head="$(tr -d '\r' < "$tr_eml" | sed -n '1,/^$/p')"
+grep -qx "Public-Keys: $key_id, $extra_kid" <<<"$tr_head" \
+  || { echo "FAIL: two-reader envelope missing both kids"; exit 1; }
+
+# Decrypt as the author (CRANE_BLOG_PRIVATE_KEY is the author's key; the
+# author is always the first recipient).
+rm -f posts/two-readers.md
+"$dec" "$tr_eml"
+grep -qx "recipients: $key_id, $extra_kid" posts/two-readers.md \
+  || { echo "FAIL: round-tripped two-reader post lost recipients frontmatter"; exit 1; }
+
+# Re-encrypt the round-tripped post: both kids must survive into the new
+# envelope's Public-Keys header.
+"$enc" posts/two-readers.md
+re_head="$(tr -d '\r' < "$tr_eml" | sed -n '1,/^$/p')"
+grep -qx "Public-Keys: $key_id, $extra_kid" <<<"$re_head" \
+  || { echo "FAIL: re-encrypted two-reader envelope lost a kid"; exit 1; }
+rm -f posts/two-readers.md "$tr_eml" "keys/$extra_kid.pub"
+echo "two-reader SMTP-extract re-encrypt OK"
+
+# ---- F3/NIT-3 (D-D7.2): hostile-body PUBLIC fixture for site-lint vacuity ----
+# The markdown body carries literal <script>/<img>; the site generator escapes
+# the envelope body (PageModel.html_escape), so the deploy lint
+# `grep -R -l '<img' _site` must stay vacuous.  Keep the EML so the site-gen
+# leg renders it; the HOST site-lint section asserts the escaped forms.
+cat > posts/public-hostile.md <<'EOF'
+---
+title: Hostile body fixture
+date: 2026-04-25
+slug: public-hostile
+recipients: *
+---
+<script>alert(1)</script> <img src=x onerror=alert(1)>
+EOF
+"$enc" posts/public-hostile.md
+hostile_eml="posts-encrypted/public-hostile.eml"
+test -f "$hostile_eml"
+grep -qx 'Public-Keys: \*' <<<"$(tr -d '\r' < "$hostile_eml" | sed -n '1,/^$/p')" \
+  || { echo "FAIL: hostile fixture not a public post"; exit 1; }
+rm -f posts/public-hostile.md
+echo "public hostile-body fixture staged"
+
+# Clean the public fixture so the site-gen leg only renders the encrypted
+# fixture (whose lints are unchanged).
+rm -f "$public_eml"
+
+echo "public leg passed"
+
 # Hand the key ids back to the host (for its cleanup trap) via the bind mount.
 printf '%s' "$key_id" > .roundtrip-key-id
 printf '%s' "$sign_key_id" > .roundtrip-sign-key-id
@@ -289,6 +556,26 @@ docker_step "$run_timeout" docker run --name "$container" --rm \
 container=""
 if grep -R -l '<img' _site >/dev/null 2>&1; then
     echo "FAIL: <img tag present in site" >&2
+    exit 1
+fi
+# F3/NIT-3 (D-D7.2): the hostile public body must render HTML-escaped — its
+# raw <script>/<img> literals never become real tags, so the deploy lint above
+# stays vacuous even though a public post's body carries them.
+hostile_page="_site/public-hostile/index.html"
+if ! grep -q '&lt;script&gt;' "$hostile_page" 2>/dev/null; then
+    echo "FAIL: hostile public body not HTML-escaped (missing &lt;script&gt;)" >&2
+    exit 1
+fi
+if ! grep -q '&lt;img' "$hostile_page" 2>/dev/null; then
+    echo "FAIL: hostile public body not HTML-escaped (missing &lt;img)" >&2
+    exit 1
+fi
+if grep -q '<script>' "$hostile_page" 2>/dev/null; then
+    echo "FAIL: raw <script> leaked into rendered public post" >&2
+    exit 1
+fi
+if grep -q '<img' "$hostile_page" 2>/dev/null; then
+    echo "FAIL: raw <img leaked into rendered public post" >&2
     exit 1
 fi
 if grep -E '>Subject: [^.<]' _site/index.html >/dev/null 2>&1; then

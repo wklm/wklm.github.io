@@ -43,6 +43,7 @@ Import ListNotations.
 Require Import StringLib.
 Require Import MimeLib.
 Require Import MimeBuild.        (* split_parts, split_headers_body2, hex_decode, strip_ws... *)
+Require Import PublicEnvelope.   (* is_public_eml / find_public_body — single source with DecryptPost.v *)
 Require Import InnerMime.        (* extract_inner_text / md_to_html / images_label *)
 Require Import CryptoSpec.       (* unwrap_cek / decrypt_body (pure ROCQ, unchanged) *)
 Require Import BrowserCrypto.    (* re-points the 9 axioms to browser_helpers.h *)
@@ -105,18 +106,23 @@ Fixpoint find_ct_b64 (parts : list string) : string :=
   end.
 
 (* The parsed envelope: the Wraps triples (kid, ek_bytes, wrapped_bytes), the
-   raw ciphertext package (nonce||ct||tag), and the authorship signature. *)
+   raw ciphertext package (nonce||ct||tag), the authorship signature — plus,
+   for PUBLIC (keyless) envelopes (feature 2), whether it is public and the
+   recovered application/x-crane-public body (the byte-identical inner MIME,
+   single-trim canonical contract from PublicEnvelope.v). *)
 Record parsed_envelope := mkEnv {
   env_triples : list (string * string * string);
   env_ct_package : string;
   env_signature : string;
-  env_signing_key : string
+  env_signing_key : string;
+  env_public : bool;
+  env_public_body : string
 }.
 
-(* Boundary scan fallback.  render_eml_page (Logic.v) writes only the multipart
-   BODY into #ciphertext, dropping the outer
-   "Content-Type: multipart/hpke+wrapped; boundary=..." header.  So when no
-   header boundary is present, recover it from the first "--<boundary>"
+(* Boundary scan fallback.  render_eml_page (Logic.v) writes the FULL outer
+   envelope (including the "Content-Type: multipart/hpke+wrapped; boundary=..."
+   header) into #ciphertext; this fallback handles the legacy case where no
+   header boundary is present, recovering it from the first "--<boundary>"
    delimiter line (as the old crane_bridge.js _scanBoundary did).  Returns the
    bare boundary token (without the leading "--"); "" if no delimiter found. *)
 Definition scan_boundary (body : string) : string :=
@@ -154,8 +160,10 @@ Definition parse_envelope (eml_body : string) : parsed_envelope :=
   let ct_b64 := find_ct_b64 parts in
   let sig_hex := header_lookup "Signature" hdrs in
   let sign_key_hex := header_lookup "Signing-Key" hdrs in
+  let public := is_public_eml eml_body in
   mkEnv triples (base64_decode (strip_ws ct_b64))
-        (hex_decode (trim sig_hex)) (hex_decode (trim sign_key_hex)).
+        (hex_decode (trim sig_hex)) (hex_decode (trim sign_key_hex))
+        public (if public then find_public_body parts else "").
 
 (* ================= Recipient / wrap selection ===================== *)
 Fixpoint wrap_for_kid (kid : string) (triples : list (string * string * string))
@@ -571,6 +579,37 @@ Fixpoint try_keys_aux
         end
   end.
 
+(* ================= Public (keyless) post render — feature 2 ======== *)
+(* A PUBLIC envelope (the star marker) renders WITHOUT any reader key, but its
+   author signature is verified against the BUILD-TIME-PINNED author signing
+   key — the <meta name="crane-author-signing-key"> the site generator emits
+   from the committed keys/author-signing.pub — and the browser FAILS CLOSED
+   when the meta is missing or does not match the envelope's own Signing-Key
+   (D-C5/A5).  This is what rejects a FORGED envelope: an attacker minting
+   their own keypair signs with a key that cannot match the pinned one.  The
+   canonical signed form (verify_post_public over
+   sha256(sign_info_public || slug || normalize_crlf body)) matches the
+   encrypt side exactly (C2/A1); the slug binds the post to its URL. *)
+Definition do_public (env : parsed_envelope) : BIO unit :=
+  pinned <- dom_get_meta "crane-author-signing-key" ;;
+  let pinned_hex := trim pinned in
+  if is_empty pinned_hex then
+    show_decrypt_error
+      "Public post: no pinned author signing key on this page; refusing to render."
+  else if negb (string_eqb pinned_hex (hex_encode (env_signing_key env))) then
+    show_decrypt_error
+      "Public post: envelope signing key does not match the pinned author key."
+  else if is_empty (env_signature env) then
+    show_decrypt_error "No author signature found in envelope."
+  else if is_empty (env_public_body env) then
+    show_decrypt_error "Public post: no public body part found in envelope."
+  else
+    slug <- dom_path_slug ;;
+    if negb (verify_post_public (env_signing_key env) slug (env_public_body env)
+                                (env_signature env)) then
+      show_decrypt_error "Author signature verification failed."
+    else render_decrypted (env_public_body env).
+
 (* ================= Decrypt action ================================= *)
 Definition do_decrypt : BIO unit :=
   (* Clear any stale error from a previous attempt FIRST (re-decrypt must not
@@ -580,7 +619,10 @@ Definition do_decrypt : BIO unit :=
   _ <- dom_set_text id_decrypt_status "Decrypting..." ;;
   eml <- dom_get_text id_ciphertext ;;
   let env := parse_envelope eml in
-  if is_empty (env_ct_package env) then
+  (* The public branch runs FIRST (before the empty-ciphertext gate — a public
+     envelope has no aes-gcm part, so its ct_package is empty by design). *)
+  if env_public env then do_public env
+  else if is_empty (env_ct_package env) then
     show_decrypt_error "No ciphertext found in envelope."
   else if is_empty (env_signature env) then
     show_decrypt_error "No author signature found in envelope."
@@ -618,10 +660,13 @@ Definition on_load : BIO unit :=
   cipher <- dom_get_text id_ciphertext ;;
   if is_empty cipher then init_inbox_page
   else
-    keys_json <- idb_get_all "reader-keys" ;;
-    let kn := json_array_len keys_json in
-    if leb kn 0%int63 then init_post_page
-    else do_decrypt.
+    let env := parse_envelope cipher in
+    if env_public env then do_public env
+    else
+      keys_json <- idb_get_all "reader-keys" ;;
+      let kn := json_array_len keys_json in
+      if leb kn 0%int63 then init_post_page
+      else do_decrypt.
 
 (* ================= Entry point: dispatch on the click flag ======== *)
 Definition run : BIO unit :=

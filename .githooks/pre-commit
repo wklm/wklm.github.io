@@ -110,11 +110,18 @@ if [[ ${#emls[@]} -gt 0 ]]; then
             echo "pre-commit: refusing $eml; missing 65-byte uncompressed hex Signing-Key header (130 hex chars) -- signed envelopes only" >&2
             exit 1
         fi
-        if ! git show ":$eml" | tr -d '\r' | grep 'Public-Keys: ' >/dev/null; then
-            echo "pre-commit: refusing $eml; missing Public-Keys header" >&2
+        # D3/A7 exactness: the Public-Keys value must be exactly "*" (public)
+        # or a comma+space list of 12-hex kids — a mixed "*, <kid>" marker or a
+        # trailing comma must never ship (the CLI/SMTP writers already reject
+        # them; this is the belt-and-braces commit gate).
+        if ! git show ":$eml" | tr -d '\r' | grep -E '^Public-Keys: (\*|[0-9a-f]{12}(, [0-9a-f]{12})*)$' >/dev/null; then
+            echo "pre-commit: refusing $eml; Public-Keys must be exactly '*' or a 12-hex kid list" >&2
             exit 1
         fi
-        if git show ":$eml" | tr -d '\r' | grep -E '^(From|To|Date): ' >/dev/null; then
+        # C4/A3: scope the metadata grep to the OUTER header block.  A PUBLIC
+        # envelope (Public-Keys: *) embeds the inner MIME's protected
+        # From/To/Date headers at line starts INSIDE the part body.
+        if git show ":$eml" | tr -d '\r' | sed -n '1,/^$/p' | grep -E '^(From|To|Date): ' >/dev/null; then
             echo "pre-commit: refusing $eml; outer envelope exposes sender, recipient, or date metadata" >&2
             exit 1
         fi

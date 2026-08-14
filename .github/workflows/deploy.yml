@@ -165,8 +165,30 @@ jobs:
               echo "$eml is missing the 65-byte uncompressed hex Signing-Key header (130 hex chars) -- signed envelopes only" >&2
               exit 1
             fi
-            if grep -Eq '^(From|To|Date): ' <<<"$clean"; then
+            # C4/A3: scope to the outer header block -- public envelopes
+            # (Public-Keys: *) embed the inner MIME's From/To/Date at line
+            # starts inside the part body.
+            outer_head="$(sed -n '1,/^$/p' <<<"$clean")"
+            if grep -Eq '^(From|To|Date): ' <<<"$outer_head"; then
               echo "$eml exposes sender, recipient, or date metadata" >&2
+              exit 1
+            fi
+            # D-C5/A5: every committed envelope must be signed with the pinned
+            # author key (keys/author-signing.pub) -- the browser's public-post
+            # trust anchor.  A forged envelope carries its own keypair and is
+            # rejected here, before it can ever reach a reader.
+            if ! grep -Eq '^Signing-Key: [0-9a-f]{130}$' <<<"$outer_head"; then
+              echo "$eml missing Signing-Key in outer header block" >&2
+              exit 1
+            fi
+            if [[ ! -f keys/author-signing.pub ]]; then
+              echo "keys/author-signing.pub missing -- the public-post trust anchor must be committed" >&2
+              exit 1
+            fi
+            eml_sign_key="$(grep -E '^Signing-Key: ' <<<"$outer_head" | sed 's/^Signing-Key: *//')"
+            pinned="$(tr -d '\r\n ' < keys/author-signing.pub)"
+            if [[ "$eml_sign_key" != "$pinned" ]]; then
+              echo "$eml Signing-Key does not match the pinned keys/author-signing.pub" >&2
               exit 1
             fi
           done
@@ -206,6 +228,7 @@ jobs:
            docker run --rm \
              -v "$PWD/posts-encrypted:/site/posts-encrypted:ro" \
              -v "$PWD/static:/site/static:ro" \
+             -v "$PWD/keys:/site/keys:ro" \
              -v "$PWD/_site:/site/_site" \
              "$image"
 

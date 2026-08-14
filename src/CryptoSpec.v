@@ -124,6 +124,11 @@ Axiom base64_decode : string -> string.
 Definition hpke_encrypt_info : string := "crane-blog-hpke-v1".
 Definition wrap_cek_info   : string := "crane-blog-wrap-v1".
 Definition sign_info       : string := "crane-blog-sign-v1".
+(* Domain-separated info string for PUBLIC (keyless) envelopes (D2): disjoint
+   from [sign_info] as byte strings (shared 16-byte prefix, diverge at bytes
+   17-20), so a public envelope's signature can never replay against a
+   ciphertext envelope's verification and vice versa. *)
+Definition sign_info_public : string := "crane-blog-sign-public-v1".
 
 (* HPKE base-mode encrypt for a single recipient.
    Returns (encapsulated_ephemeral_pubkey, ciphertext_package).
@@ -242,6 +247,90 @@ Definition verify_post (pk : pubkey) (ct_package sig : string) : bool :=
   let digest := sha256 (cat sign_info ct_package) in
   ecdsa_p256_verify pk digest sig.
 
+(* ======== Public Post Signing / Verification (feature 2) ============= *)
+
+(* Canonical newline normalization for the public signed form (D-C2, A1).
+   Browser HTML input-stream preprocessing and arbitrary writer CRLF/LF
+   habits make the raw inner-MIME bytes non-deterministic, so the writer and
+   BOTH verifiers reduce CRLF and lone CR to LF before hashing.  Total
+   (fuel-bounded), non-corrupting (identity on LF-only input) and idempotent
+   — pinned by the eq_refl Examples below.  The byte constants use distinct
+   names (MimeBuild defines its own lf/cr/crlf; importing both modules must
+   not make the names ambiguous). *)
+Definition cr_byte : string := PrimString.make 1%int63 ch_cr.
+Definition lf_byte : string := PrimString.make 1%int63 ch_newline.
+
+Fixpoint normalize_crlf_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
+  match fuel with
+  | O => acc
+  | S f' =>
+      let n := PrimString.length s in
+      if leb n pos then acc
+      else
+        let c := PrimString.get s pos in
+        if int_eqb c ch_cr
+        then
+          let acc' := cat acc lf_byte in
+          if andb (ltb (add pos 1%int63) n)
+                  (int_eqb (PrimString.get s (add pos 1%int63)) ch_newline)
+          then normalize_crlf_aux s (add pos 2%int63) f' acc'
+          else normalize_crlf_aux s (add pos 1%int63) f' acc'
+        else normalize_crlf_aux s (add pos 1%int63) f' (cat acc (PrimString.make 1%int63 c))
+  end.
+
+Definition normalize_crlf (s : string) : string :=
+  normalize_crlf_aux s 0%int63 mime_fuel "".
+
+(* Sign/verify a PUBLIC post envelope (D-C2, A10, M3).  The signed message is
+   sha256(sign_info_public || slug || normalize_crlf inner_mime) — 4-arg
+   arity everywhere.  DERIVED from the existing sign_post/verify_post
+   primitives (no new axioms); the realized double-hash at the FFI
+   (crypto_helpers.h:296-301) applies unchanged through
+   ecdsa_p256_sign/ecdsa_p256_verify — do NOT hash again.
+
+   G3/A fix (fail-closed): normalize_crlf is fuel-bounded at mime_fuel
+   (65536 iterations), and each iteration consumes >=1 byte, so any
+   inner_mime of byte length <= mime_fuel normalizes WITHOUT truncation.
+   Both sign and verify therefore REJECT an inner_mime longer than
+   mime_fuel bytes rather than silently authenticating only the normalized
+   prefix (which would let two bodies sharing a 64KB prefix collide). *)
+Definition sign_post_public (sk : privkey) (slug inner_mime : string) : string :=
+  if leb (PrimString.length inner_mime) 65536%int63
+  then
+    let digest := sha256 (cat sign_info_public (cat slug (normalize_crlf inner_mime))) in
+    ecdsa_p256_sign sk digest
+  else "".
+
+Definition verify_post_public (pk : pubkey) (slug inner_mime sig : string) : bool :=
+  if leb (PrimString.length inner_mime) 65536%int63
+  then
+    let digest := sha256 (cat sign_info_public (cat slug (normalize_crlf inner_mime))) in
+    ecdsa_p256_verify pk digest sig
+  else false.
+
+(* Machine-checked pins for normalize_crlf (D-C2, A1; eq_refl house style).
+   Coq string literals carry no \r / \n escapes, so the CR/LF bytes are
+   built with cr_byte / lf_byte exactly as the runtime strings contain them. *)
+Example normalize_crlf_lf_identity :
+  normalize_crlf (cat "a" (cat lf_byte (cat "b" (cat lf_byte "c"))))
+  = cat "a" (cat lf_byte (cat "b" (cat lf_byte "c"))) := eq_refl.
+
+Example normalize_crlf_crlf :
+  normalize_crlf (cat "a" (cat cr_byte (cat lf_byte "b")))
+  = cat "a" (cat lf_byte "b") := eq_refl.
+
+Example normalize_crlf_lone_cr :
+  normalize_crlf (cat "a" (cat cr_byte "b"))
+  = cat "a" (cat lf_byte "b") := eq_refl.
+
+Example normalize_crlf_crlf_cr :
+  normalize_crlf (cat "a" (cat cr_byte (cat lf_byte (cat cr_byte "b"))))
+  = cat "a" (cat lf_byte (cat lf_byte "b")) := eq_refl.
+
+Example normalize_crlf_idempotent :
+  normalize_crlf (normalize_crlf (cat "a" (cat cr_byte (cat lf_byte "b"))))
+  = normalize_crlf (cat "a" (cat cr_byte (cat lf_byte "b"))) := eq_refl.
+
 (* ======== Wrapped Key Map ========================================== *)
 
 (* A wrapped key entry in the .eml format: key_id + encapsulated key
@@ -280,6 +369,26 @@ Axiom ecdsa_roundtrip : forall (sk : privkey) (msg : string),
   let pk := ecdh_p256_public_key sk in
   let sig := ecdsa_p256_sign sk msg in
   ecdsa_p256_verify pk msg sig = true.
+
+(* Derived round-trip for the PUBLIC variant (A10): sign then verify under
+   the same keypair succeeds.  eapply the EXISTING ecdsa_roundtrip axiom
+   (defined above) — no new axiom. *)
+Lemma sign_public_verify_roundtrip : forall (sk : privkey) (slug inner_mime : string),
+  let pk := ecdh_p256_public_key sk in
+  leb (PrimString.length inner_mime) 65536%int63 = true ->
+  verify_post_public pk slug inner_mime (sign_post_public sk slug inner_mime) = true.
+Proof.
+  intros sk slug inner_mime pk H.
+  unfold sign_post_public, verify_post_public.
+  destruct (leb (PrimString.length inner_mime) 65536%int63) eqn:E.
+  - (* guard = true: both [if]s reduce to their then-branches (cbv zeta/beta
+       only — never [cbn]/[simpl], which would unfold [normalize_crlf] over the
+       variable [inner_mime] and hang O(fuel^2)). *)
+    cbv zeta beta.
+    eapply ecdsa_roundtrip.
+  - (* guard = false: contradicts H. *)
+    congruence.
+Qed.
 
 (* ======== Crane C++ Extraction Directives ========================== *)
 

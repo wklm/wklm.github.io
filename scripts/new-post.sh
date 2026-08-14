@@ -26,7 +26,8 @@ cat > "$path" <<EOF
 title: 
 date: $(date +%Y-%m-%d)
 slug: $slug
-# public-keys: keyid1, keyid2
+# recipients: keyid1, keyid2
+# recipients: *   (public — readable without any key)
 ---
 EOF
 echo "wrote $path"

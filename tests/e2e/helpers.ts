@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -275,22 +275,41 @@ function resolveSigningKey(keysDir: string): { signKid: string; signPrivHex: str
  */
 export function encryptFixturePost(args: {
   kid: string;
-  uncompressedPubHex: string;
+  uncompressedPubHex?: string;
   slug: string;
   markdown: string;
+  public?: boolean;
 }): string {
-  const { kid, uncompressedPubHex, slug, markdown } = args;
+  const { kid, uncompressedPubHex, slug, markdown, public: isPublic } = args;
 
   const keysDir = join(repoRoot, 'keys');
   const postsDir = join(repoRoot, 'posts');
   mkdirSync(keysDir, { recursive: true });
   mkdirSync(postsDir, { recursive: true });
-  writeFileSync(join(keysDir, `${kid}.pub`), uncompressedPubHex);
   writeFileSync(join(postsDir, `${slug}.md`), markdown);
+  if (isPublic) {
+    // Feature 2: PUBLIC posts (frontmatter `recipients: *`) need no recipient
+    // key at all — the keyless branch never reads keys/<kid>.pub.  The author
+    // ECDSA signing key below is still required (public posts are signed).
+  } else {
+    if (!uncompressedPubHex) {
+      throw new Error('uncompressedPubHex is required for encrypted (non-public) fixtures');
+    }
+    writeFileSync(join(keysDir, `${kid}.pub`), uncompressedPubHex);
+  }
 
   // The fixture envelope must be signed: encrypt_post fails without the signing
   // env, and the browser decrypt gate rejects an unsigned envelope.
   const { signKid, signPrivHex } = resolveSigningKey(keysDir);
+  if (isPublic) {
+    // G4/D-C5: the generator emits the trust-anchor meta from
+    // keys/author-signing.pub (NOT the envelope's own Signing-Key).  Pin the
+    // ephemeral signing key so the browser verifies the public post against an
+    // INDEPENDENT build-time constant — the caller restores the committed pin
+    // in its afterEach.
+    const pin = readFileSync(join(keysDir, `${signKid}.sign.pub`), 'utf8').trim();
+    writeFileSync(join(keysDir, 'author-signing.pub'), pin); // no trailing newline
+  }
 
   // Run the native encrypt_post from the runtime image.  DinD-safe: the
   // self-hosted runner mounts only docker.sock, so -v bind mounts resolve
@@ -364,6 +383,9 @@ export function reRenderSite(): void {
   try {
     execFileSync('docker', ['cp', join(repoRoot, 'posts-encrypted'), `${cid}:/site/posts-encrypted`], { stdio: 'ignore' });
     execFileSync('docker', ['cp', join(repoRoot, 'static'), `${cid}:/site/static`], { stdio: 'ignore' });
+    if (existsSync(join(repoRoot, 'keys', 'author-signing.pub'))) {
+      execFileSync('docker', ['cp', join(repoRoot, 'keys'), `${cid}:/site/keys`], { stdio: 'ignore' });
+    }
     execFileSync('docker', ['start', '-a', cid], { stdio: 'inherit' });
     // Copy from a SIBLING temp dir.  (A plain `mv dir` onto an existing dir
     // silently MERGES and keeps stale files, so a second re-render would serve

@@ -9,7 +9,7 @@
 
    build_md(author, subject, body, date, public_keys, author_kid):
      ---\n title: <subject>\n slug: <slug>\n author: <author>\n date: <date>\n
-     [public-keys: <pk or author_kid>\n] ---\n\n <body> (+\n iff body lacks a
+     [recipients: <pk or author_kid>\n] ---\n\n <body> (+\n iff body lacks a
      trailing newline). *)
 
 From Corelib Require Import PrimString PrimInt63.
@@ -69,11 +69,14 @@ Definition slug_from_subject (subject ts : string) : string :=
 Definition fm_line (k v : string) : string :=
   cat k (cat ": " (cat v lf)).
 
-(* Choose the public-keys value: the email/env public_keys if non-empty, else
-   the author key id if non-empty, else omit the line entirely. *)
+(* Choose the recipients value: the email/env public_keys if non-empty, else
+   the author key id if non-empty, else omit the line entirely.  Emitted as
+   the canonical `recipients:` field (D6) — the CLI honors `recipients:`
+   (EncryptPost.v) and a public post carries `recipients: *`, re-encryptable
+   round-trip. *)
 Definition public_keys_line (public_keys author_kid : string) : string :=
-  if negb (is_empty public_keys) then fm_line "public-keys" public_keys
-  else if negb (is_empty author_kid) then fm_line "public-keys" author_kid
+  if negb (is_empty public_keys) then fm_line "recipients" public_keys
+  else if negb (is_empty author_kid) then fm_line "recipients" author_kid
   else "".
 
 (* Append a trailing LF iff [body] does not already end in one. *)

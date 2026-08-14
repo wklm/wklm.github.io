@@ -27,6 +27,53 @@ Open Scope pstring_scope.
    reflexivity fast in CI. *)
 Notation page_fuel := 16384.
 
+(* Escaping fuel for pp_body: a full envelope body can be ~24KB (the largest
+   committed .eml is ~23.5KB); the scanner burns one fuel step per char, so a
+   short fuel would TRUNCATE the escaped body and corrupt #ciphertext.  Mirror
+   Logic.v's fuel (2,000,000) exactly. *)
+Notation escape_fuel := 2000000.
+
+(* ---- HTML escaping (C1/A2) --------------------------------------- *)
+(* Escape the five HTML-significant characters before embedding the post body
+   into <pre id='ciphertext'>.  The browser's DOM entity-decoding restores the
+   exact bytes on textContent read-back, so the decryptor's verifier sees the
+   byte-identical envelope (byte-equality is pinned by the e2e hostile-body
+   row).  Mirrors Logic.v's html_escape (same five entities); lives here so the
+   serializer itself can never emit an unescaped body. *)
+Definition html_escape_char (s : string) (pos : int) : string :=
+  let ch := PrimString.get s pos in
+  if int_eqb ch ch_amp then "&amp;"
+  else if int_eqb ch ch_lt then "&lt;"
+  else if int_eqb ch ch_gt then "&gt;"
+  else if int_eqb ch ch_quote then "&quot;"
+  else if int_eqb ch ch_apos then "&#39;"
+  else PrimString.sub s pos 1%int63.
+
+(* Accumulator-passing so the self-call is in TAIL position: the naive
+   [cat (escape_char) (html_escape_aux ...)] form nests the recursive call
+   inside [cat], which under em++ -O2 + Asyncify grows one native WASM frame
+   per input byte and overflows the stack on a large body.  check-tail-position.sh
+   enforces this.  [acc] is built left-to-right (append), so the result is
+   byte-identical to the naive form. *)
+Fixpoint html_escape_aux (s : string) (pos : int) (remaining : nat) (acc : string) : string :=
+  match remaining with
+  | O => acc
+  | S remaining' =>
+      if leb (PrimString.length s) pos then acc
+      else html_escape_aux s (add pos 1%int63) remaining' (cat acc (html_escape_char s pos))
+  end.
+
+Definition html_escape (s : string) : string :=
+  html_escape_aux s 0%int63 escape_fuel "".
+
+(* The pinned author-signing-key meta tag for a post page (D-C5/A5): empty
+   when no pin is configured (encrypted-only sites); otherwise the
+   <meta name='crane-author-signing-key' content='<130-hex>'> emitted into the
+   page head, which the browser verifies public-post signatures against. *)
+Definition sign_key_meta (hex : string) : string :=
+  if is_empty hex then ""
+  else cat "<meta name='crane-author-signing-key' content='" (cat hex "'>").
+
 (* =================================================================== *)
 (* 1. Shared element ID constants — single source of truth              *)
 (*    Every dom_* call in DecryptApp.v / EnrollApp.v MUST reference     *)
@@ -213,9 +260,10 @@ Definition spec_bare_static_invalid : esm_specifier_valid spec_bare_static = fal
 (* =================================================================== *)
 
 Record post_page := mk_post_page {
-  pp_body    : string;  (* encrypted ciphertext body *)
+  pp_body    : string;  (* encrypted ciphertext body (or public inner MIME) *)
   pp_prefix  : string;  (* depth prefix for asset URLs *)
   pp_version : string;  (* cache-busting version parameter *)
+  pp_sign_key : string  (* pinned author signing pubkey hex (130 chars; "" = none) *)
 }.
 
 Record inbox_page := mk_inbox_page {
@@ -247,9 +295,11 @@ Definition rel_index_v (depth : string) : string :=
 
 Definition serialize_page_shell (depth page_title body_class
                                   nav_label nav_href
+                                  head_meta
                                   body_content version : string) : string :=
   concat_all (
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><meta name='color-scheme' content='light dark'><meta http-equiv='Cache-Control' content='no-store'>" ::
+    head_meta ::
     "<title>" :: cat page_title
       (if string_eqb page_title "wklm.online" then "" else " — wklm.online") ::
     "</title>" ::
@@ -274,7 +324,10 @@ Definition serialize_post_page (p : post_page) : string :=
       "<header class='post-header'>" ::
       "<h1>" :: public_subject :: "</h1>" ::
       "</header>" ::
-      "<pre class='eml-body' id='ciphertext'>" :: pp_body p :: "</pre>" ::
+      (* C1/A2: pp_body is HTML-escaped here — a hostile public body containing
+         <script>/<img> renders as inert text; the DOM entity-decodes it on
+         textContent read-back, so the decryptor still sees the exact bytes. *)
+      "<pre class='eml-body' id='ciphertext'>" :: html_escape (pp_body p) :: "</pre>" ::
       "</div>" ::
       "<div id='decrypt-ui'>" ::
       "<p class='decrypt-hint'>You need a reader key enrolled on this device to decrypt this post.</p>" ::
@@ -295,7 +348,9 @@ Definition serialize_post_page (p : post_page) : string :=
       "<noscript><p class='decrypt-fallback'>To read, you need JavaScript enabled for client-side decryption.</p></noscript>" ::
       "<script type='module'>import M from '" :: pp_prefix p :: "static/crane_decrypt.mjs?v=" :: pp_version p :: "';M().then(function(m){m.callMain([]);});</script>" ::
       "</main>" :: nil) in
-  serialize_page_shell "../" public_subject "essay eml-page" "index" "../index.html" body (pp_version p).
+  serialize_page_shell "../" public_subject "essay eml-page" "index" "../index.html"
+                      (sign_key_meta (pp_sign_key p))
+                      body (pp_version p).
 
 (* ---- Inbox page serializer ---- *)
 
@@ -311,7 +366,7 @@ Definition serialize_inbox_page (p : inbox_page) : string :=
       "<p id='inbox-status-msg' class='inbox-status-msg'></p>" ::
       "<p class='enroll-cta'><a class='enroll-link' href='enroll/'>Enroll a reader key to decrypt posts</a></p>" ::
       "<script type='module'>import D from './static/crane_decrypt.mjs?v=" :: ip_version p :: "';D().then(function(m){m.callMain([]);});</script>" :: nil) in
-  serialize_page_shell "" "wklm.online" "home" "" "" body (ip_version p).
+  serialize_page_shell "" "wklm.online" "home" "" "" "" body (ip_version p).
 
 (* ---- Enroll page serializer ---- *)
 
@@ -344,7 +399,7 @@ Definition serialize_enroll_page (p : enroll_page) : string :=
       "</div>" ::
       "<script type='module'>import E from '" :: ep_prefix p :: "static/crane_enroll.mjs?v=" :: ep_version p :: "';E().then(function(m){m.callMain([]);});</script>" ::
       "</main>" :: nil) in
-  serialize_page_shell "../" "Reader Enrollment" "enroll-page" "index" "../index.html" body (ep_version p).
+  serialize_page_shell "../" "Reader Enrollment" "enroll-page" "index" "../index.html" "" body (ep_version p).
 
 (* =================================================================== *)
 (* 8. Well-formedness theorems                                        *)
@@ -380,17 +435,36 @@ Definition enroll_page_ids_unique : id_list_unique enroll_page_ids = true . Proo
 
 (* The page shell includes a mandatory HTML fragment *)
 Example page_shell_has_closing_html :
-  let s := serialize_page_shell "../" "T" "b" "" "" "<p>x</p>" "v2" in
+  let s := serialize_page_shell "../" "T" "b" "" "" "" "<p>x</p>" "v2" in
   is_empty s = false . Proof. vm_compute. reflexivity. Qed.
 
 Example page_shell_has_stylesheet_link :
-  str_contains (serialize_page_shell "" "wklm.online" "home" "" "" "<p>x</p>" "v2")
+  str_contains (serialize_page_shell "" "wklm.online" "home" "" "" "" "<p>x</p>" "v2")
                "styles/site.v2.css" = true . Proof. vm_compute. reflexivity. Qed.
 
 (* Post-page serializer uses the correct prefix and version *)
 Example post_page_uses_asset_version :
-  let p := mk_post_page "x" "../" "v9" in
+  let p := mk_post_page "x" "../" "v9" "" in
   str_contains (serialize_post_page p) "crane_decrypt.mjs?v=v9" = true . Proof. vm_compute. reflexivity. Qed.
+
+(* C1/A2: a hostile body (script/img literals) is HTML-escaped inside
+   #ciphertext, so it can never execute as markup. *)
+Example post_page_escapes_hostile_body :
+  let p := mk_post_page "<script>alert(1)</script><img src=x>" "../" "v9" "" in
+  str_contains (serialize_post_page p)
+    "<pre class='eml-body' id='ciphertext'>&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=x&gt;</pre>"
+  = true . Proof. vm_compute. reflexivity. Qed.
+
+(* D-C5/A5: the post page emits the pinned author-signing-key meta when a
+   signing key hex is configured. *)
+Example post_page_emits_sign_key_meta :
+  let p := mk_post_page "x" "../" "v9" "abcd" in
+  str_contains (serialize_post_page p)
+    "<meta name='crane-author-signing-key' content='abcd'>" = true . Proof. vm_compute. reflexivity. Qed.
+
+Example post_page_omits_sign_key_meta_when_empty :
+  let p := mk_post_page "x" "../" "v9" "" in
+  str_contains (serialize_post_page p) "crane-author-signing-key" = false . Proof. vm_compute. reflexivity. Qed.
 
 (* Inbox page contains the decrypt script tag *)
 Example inbox_page_has_decrypt_script :
