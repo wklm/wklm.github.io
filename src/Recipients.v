@@ -171,6 +171,12 @@ Definition contains_public_marker (s : string) : bool :=
       (mem_str "*" (collect_kids (split_on_char_fuel s ch_comma 0%int63 mime_fuel)
                                  mime_fuel)).
 
+(* Public inner From: a non-address token.  Cloudflare Email Address
+   Obfuscation rewrites user@domain in the live #ciphertext DOM; this
+   token cannot match that pattern.  Encrypted (HPKE) posts keep
+   CRANE_BLOG_AUTHOR_EMAIL — it stays inside ciphertext. *)
+Definition public_from_token : string := "wklm".
+
 (* Build the PUBLIC outer envelope: NO CEK, NO wrapped-keys part; the
    signature is sign_post_public over slug || normalize_crlf inner_mime
    (D-C2), hex-encoded into the Signature header.  Single source of truth
@@ -180,6 +186,9 @@ Definition build_public_envelope (slug inner_mime sign_sk sign_pk_hex : string) 
   build_public_outer_envelope inner_mime (hex_encode sig_raw) sign_pk_hex.
 
 (* ---- machine-checked pins (A11, D-M2, F4, R1-B9) -------------------- *)
+
+Example public_from_token_not_an_address :
+  public_from_token = "wklm" := eq_refl.
 
 Example public_marker_exact : is_public_marker "*" = true := eq_refl.
 Example public_marker_trimmed : is_public_marker " * " = true := eq_refl.

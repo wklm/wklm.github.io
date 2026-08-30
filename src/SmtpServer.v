@@ -119,17 +119,19 @@ Definition build_eml
   build_envelope cek recipients_pk slug inner_mime sign_sk sign_pk_hex.
 
 (* Build the PUBLIC .eml from the post markdown + author identity (feature 2):
-   no CEK, no wraps, no keys/<kid>.pub resolution.  The inner MIME is
-   byte-identical to an author-only post (To: reader: <kid>) and the envelope
-   signs the canonical form
+   no CEK, no wraps, no keys/<kid>.pub resolution.  To: is still
+   reader: <kid>; From is [public_from_token] (not [author] — that may be
+   an email and CF Email Address Obfuscation would rewrite it in the live
+   #ciphertext DOM).  The envelope signs
    sha256(sign_info_public || slug || normalize_crlf inner_mime) — the same
    build_public_envelope single source of truth as EncryptPost.v.  [kid] is
-   passed explicitly (SPEC-NIT 1; sibling build_eml's author pattern). *)
+   passed explicitly (SPEC-NIT 1; sibling build_eml's author pattern).
+   [author] is unused on this path (kept for the existing signature). *)
 Definition build_public_eml
   (kid author slug title md_body sign_sk sign_pk_hex : string) : string :=
   let recipients_str := recipients_to (kid :: nil) in
   let protected_headers :=
-    ("From", author) ::
+    ("From", public_from_token) ::
     ("To", recipients_str) ::
     ("Date", fixed_date) ::
     ("Subject", title) :: nil in

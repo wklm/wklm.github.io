@@ -326,8 +326,15 @@ Definition serialize_post_page (p : post_page) : string :=
       "</header>" ::
       (* C1/A2: pp_body is HTML-escaped here — a hostile public body containing
          <script>/<img> renders as inert text; the DOM entity-decodes it on
-         textContent read-back, so the decryptor still sees the exact bytes. *)
+         textContent read-back, so the decryptor still sees the exact bytes.
+         Cloudflare <!--email_off--> … <!--/email_off--> skip Email Address
+         Obfuscation over the envelope so a From: user@domain (or any
+         email-shaped string in a public body) is not rewritten in the live
+         DOM; #ciphertext textContent must stay byte-identical to the signed
+         envelope. *)
+      "<!--email_off-->" ::
       "<pre class='eml-body' id='ciphertext'>" :: html_escape (pp_body p) :: "</pre>" ::
+      "<!--/email_off-->" ::
       "</div>" ::
       "<div id='decrypt-ui'>" ::
       "<p class='decrypt-hint'>You need a reader key enrolled on this device to decrypt this post.</p>" ::
@@ -453,6 +460,14 @@ Example post_page_escapes_hostile_body :
   let p := mk_post_page "<script>alert(1)</script><img src=x>" "../" "v9" "" in
   str_contains (serialize_post_page p)
     "<pre class='eml-body' id='ciphertext'>&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=x&gt;</pre>"
+  = true . Proof. vm_compute. reflexivity. Qed.
+
+(* Cloudflare Email Address Obfuscation skip: the official comments wrap
+   #ciphertext so CF does not rewrite email-shaped bytes in the envelope. *)
+Example post_page_email_off_wraps_ciphertext :
+  let p := mk_post_page "BODY" "../" "v9" "" in
+  str_contains (serialize_post_page p)
+    "<!--email_off--><pre class='eml-body' id='ciphertext'>BODY</pre><!--/email_off-->"
   = true . Proof. vm_compute. reflexivity. Qed.
 
 (* D-C5/A5: the post page emits the pinned author-signing-key meta when a

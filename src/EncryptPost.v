@@ -162,13 +162,13 @@ Definition encrypt_one (md_path : string) : IO unit :=
       let recipients_meta := header_lookup "recipients" kv in
       if is_public_marker recipients_meta
       then
-        (* PUBLIC branch (D1/D4/D-C2): no CEK, no wraps.  The inner MIME is
-           byte-identical to an author-only post (To: reader: <author_kid>);
-           the envelope signs
+        (* PUBLIC branch (D1/D4/D-C2): no CEK, no wraps.  To: is still
+           reader: <author_kid>; From is [public_from_token] (not an email
+           address — CF Email Address Obfuscation).  The envelope signs
            sha256(sign_info_public || slug || normalize_crlf inner_mime). *)
         let recipients_str := recipients_to (kid :: nil) in
         let protected_headers :=
-          ("From", email) ::
+          ("From", public_from_token) ::
           ("To", recipients_str) ::
           ("Date", fixed_date) ::
           ("Subject", title) :: nil in
