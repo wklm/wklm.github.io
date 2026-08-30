@@ -1,0 +1,42 @@
+Subject: ...
+MIME-Version: 1.0
+Public-Keys: *
+Signature: 0d41b6f91d9e090785c905c8c9d61e7f73bbae351aaa149f5fa1a08b3915f6f425a3927469b238bd5cb599f3fd66e27ba6f04aac05c4c54aa6d3257d0426075c
+Signing-Key: 04357cb095d52a7609d987a64545575154990273525bcd7deeb1d4d2486bc1f03b291292d8ab4e914c2a67668dfcd29d9108a108a1f6c0a2361c9617b88df8d967
+Content-Type: multipart/hpke+wrapped; boundary="=_cb_outer_0_="
+
+This is an HPKE encrypted message for Crane Blog readers.
+--=_cb_outer_0_=
+Content-Type: application/x-crane-public
+Content-Transfer-Encoding: 8bit
+
+From: wojtekkulma@gmail.com
+To: reader:037ec7640f06
+Date: Thu, 01 Jan 1970 00:00:00 +0000
+Subject: A public note
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=_cb_inner_0_="
+
+This is a multi-part message in MIME format.
+--=_cb_inner_0_=
+Content-Type: text/markdown; charset=utf-8
+Content-Disposition: inline; filename="public-cleartext-test.md"
+Content-Transfer-Encoding: 8bit
+
+---
+title: A public note
+date: 2026-08-30
+slug: public-cleartext-test
+recipients: *
+---
+
+This post is addressed to everyone.
+
+It is signed by the author and published as clear text: no reader
+key, no unwrap. The marker below is here so the live page can be
+checked without decrypting anything.
+
+public-cleartext-probe-2026-08-30
+--=_cb_inner_0_=--
+
+--=_cb_outer_0_=--
