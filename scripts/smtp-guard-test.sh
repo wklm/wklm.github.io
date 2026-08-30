@@ -33,13 +33,19 @@ mkdir -p "$S/keys" "$S/posts-encrypted"
 # ---- author ECDSA signing keypair (the publish pipeline reads the public
 #      half back from keys/<kid>.sign.pub before the public branch) ----
 openssl ecparam -name prime256v1 -genkey -noout -out "$S/sign.pem" 2>/dev/null
+# od, not xxd: the Forgejo DinD job image (catthehacker/ubuntu:act-latest /
+# node:lts) has no vim-common.  Same encoding as tests/e2e/helpers.ts.
 SIGN_PUB=$(openssl ec -in "$S/sign.pem" -pubout -conv_form uncompressed 2>/dev/null \
-  | openssl pkey -pubin -outform DER 2>/dev/null | tail -c 65 | xxd -p -c 999 | tr -d '\n')
+  | openssl pkey -pubin -outform DER 2>/dev/null | tail -c 65 | od -An -tx1 -v | tr -d ' \n')
 SIGN_PRIV=$(openssl ec -in "$S/sign.pem" -text -noout 2>/dev/null \
   | awk '/priv:/{f=1;next}/pub:/{f=0}f' | tr -d ' :\n')
 if [ ${#SIGN_PRIV} -eq 66 ]; then SIGN_PRIV=${SIGN_PRIV#00}; fi
 [ ${#SIGN_PRIV} -eq 64 ] && [ ${#SIGN_PUB} -eq 130 ] || { echo "signing key extraction failed"; exit 1; }
-SIGN_KID=$(printf '%s' "$SIGN_PUB" | xxd -r -p | shasum -a 256 | cut -c1-12)
+# Hex-decode + SHA-256 via python3 (no xxd -r).  openssl enc -d -hex does not
+# consume a raw 130-char hex string; python3 is on act-latest and node:lts.
+SIGN_KID=$(printf '%s' "$SIGN_PUB" | python3 -c \
+  'import sys,hashlib; print(hashlib.sha256(bytes.fromhex(sys.stdin.read().strip())).hexdigest()[:12])')
+[ ${#SIGN_KID} -eq 12 ] || { echo "signing key id derivation failed"; exit 1; }
 printf '%s' "$SIGN_PUB" > "$S/keys/$SIGN_KID.sign.pub"
 
 # ---- C6/M9 startup guard: env BLOG_PUBLIC_KEYS=* without the opt-in refuses ----
