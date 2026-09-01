@@ -494,8 +494,11 @@ Definition stylesheet_decrypt : string :=
     "#decrypted-content{display:none;margin-top:2rem;animation:reader-fade .5s ease-out both}" ::
     "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
     "#real-body img{max-width:100%;height:auto}" ::
-    "#real-body p:has(> img){display:flex;gap:1rem;align-items:flex-start}" ::
-    "#real-body p:has(> img) img{flex:1;min-width:0;max-width:50%;height:auto}" ::
+    (* Photo pair: break out of the 36rem literary column so two landscape
+       images are readable side by side, not ~260px thumbnails. *)
+    "#real-body p:has(> img){display:flex;gap:1.25rem;align-items:flex-start;width:min(calc(100vw - 2.5rem),90rem);max-width:none;position:relative;left:50%;transform:translateX(-50%);margin:0}" ::
+    "#real-body p:has(> img) img{flex:1 1 0;min-width:0;max-width:none;width:50%;height:auto;object-fit:contain}" ::
+    "@media (max-width:40rem){#real-body p:has(> img){flex-direction:column;width:100%;left:auto;transform:none}#real-body p:has(> img) img{width:100%}}" ::
     "#decrypted-content:has(#real-body img) #reader-canvas{display:none}" ::
     "#decrypted-content:has(#real-body img) #real-body{position:static;width:auto;height:auto;margin:0 0 1rem;clip:auto;overflow:visible;white-space:normal}" ::
     (* Verified-Reader canvas is the visible reading surface; sized to its CSS
