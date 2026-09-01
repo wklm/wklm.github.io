@@ -494,6 +494,10 @@ Definition stylesheet_decrypt : string :=
     "#decrypted-content{display:none;margin-top:2rem;animation:reader-fade .5s ease-out both}" ::
     "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.55}" ::
     "#real-body img{max-width:100%;height:auto}" ::
+    "#real-body p:has(> img){display:flex;gap:1rem;align-items:flex-start}" ::
+    "#real-body p:has(> img) img{flex:1;min-width:0;max-width:50%;height:auto}" ::
+    "#decrypted-content:has(#real-body img) #reader-canvas{display:none}" ::
+    "#decrypted-content:has(#real-body img) #real-body{position:static;width:auto;height:auto;margin:0 0 1rem;clip:auto;overflow:visible;white-space:normal}" ::
     (* Verified-Reader canvas is the visible reading surface; sized to its CSS
        box (reader_begin reads clientWidth/Height * devicePixelRatio). *)
     "#reader-canvas{display:block;width:100%;max-width:38rem;height:32rem;margin:0 0 1rem;animation:reader-resolve .7s ease-out both}" ::

@@ -1,0 +1,36 @@
+Subject: ...
+MIME-Version: 1.0
+Public-Keys: *
+Signature: 2cd6c4efa8ce09c5c24ec8c0bcaf879095897236872ea7cffc878cab06b4625a9fa7a3b645c0b66f714c044a3f9814cce3790dd9f2afea292aa5ace2850edc6e
+Signing-Key: 04357cb095d52a7609d987a64545575154990273525bcd7deeb1d4d2486bc1f03b291292d8ab4e914c2a67668dfcd29d9108a108a1f6c0a2361c9617b88df8d967
+Content-Type: multipart/hpke+wrapped; boundary="=_cb_outer_0_="
+
+This is an HPKE encrypted message for Crane Blog readers.
+--=_cb_outer_0_=
+Content-Type: application/x-crane-public
+Content-Transfer-Encoding: 8bit
+
+From: wklm
+To: reader:037ec7640f06
+Date: Thu, 01 Jan 1970 00:00:00 +0000
+Subject: Neusiedlersee
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=_cb_inner_0_="
+
+This is a multi-part message in MIME format.
+--=_cb_inner_0_=
+Content-Type: text/markdown; charset=utf-8
+Content-Disposition: inline; filename="neusiedlersee.md"
+Content-Transfer-Encoding: 8bit
+
+---
+title: Neusiedlersee
+date: 2026-09-01
+slug: neusiedlersee
+recipients: *
+---
+
+![](https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:6ktbmp6qpb6azldg4bk5lzxi/bafkreih5zczkwypzgts6wymxwjpq6ztmnkdywoyvjsij6s62mybcxixrcq) ![](https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:6ktbmp6qpb6azldg4bk5lzxi/bafkreibgbffg6eqifkq3wuhourqnj3p3jxfy34eyl5otyol7gls75emcuy)
+--=_cb_inner_0_=--
+
+--=_cb_outer_0_=--

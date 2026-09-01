@@ -68,6 +68,32 @@ Example md_link_escapes_apos_in_url : md_to_html "[x](https://x/a'b)"
 Example md_unmatched_star_stays_literal :
   md_to_html "a * b" = "<p>a * b</p>" := eq_refl.
 
+(* ---- images (https/http only; relative stays bang+link) -------------- *)
+
+Example md_image_https :
+  md_to_html "![lake](https://cdn.example/a.jpg)"
+  = "<p><img src='https://cdn.example/a.jpg' alt='lake'></p>" := eq_refl.
+Example md_image_http :
+  md_to_html "![x](http://x/a.jpg)"
+  = "<p><img src='http://x/a.jpg' alt='x'></p>" := eq_refl.
+Example md_image_empty_alt :
+  md_to_html "![](https://x/1)"
+  = "<p><img src='https://x/1' alt=''></p>" := eq_refl.
+Example md_image_escapes_url :
+  md_to_html "![x](https://x/?a=1&b=2)"
+  = "<p><img src='https://x/?a=1&amp;b=2' alt='x'></p>" := eq_refl.
+Example md_image_escapes_apos_in_url :
+  md_to_html "![x](https://x/a'b)"
+  = "<p><img src='https://x/a&#39;b' alt='x'></p>" := eq_refl.
+Example md_two_https_images :
+  md_to_html "![a](https://x/1) ![b](https://x/2)"
+  = "<p><img src='https://x/1' alt='a'> <img src='https://x/2' alt='b'></p>" := eq_refl.
+Example md_relative_image_stays_bang_link :
+  md_to_html "![x](photo.jpg)"
+  = "<p>!<a href='photo.jpg'>x</a></p>" := eq_refl.
+Example md_strip_https_image :
+  md_strip_inline "![lake](https://cdn.example/a.jpg)" = "" := eq_refl.
+
 (* ---- lists ----------------------------------------------------------- *)
 
 Example md_ul :

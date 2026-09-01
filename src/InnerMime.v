@@ -5,10 +5,11 @@
 
    [body_to_html] was replaced by the markdown renderer [md_to_html]
    (InnerMime.v below): the accessible #real-body view now honours headings,
-   bold/emphasis/code spans, links, lists, blockquotes, rules and fenced code
-   blocks, while every input byte still flows through [escape_byte]/[escape_url_byte]
-   and all emitted tags are fixed literals, so the T1 escaping discipline holds
-   for the new renderer exactly as it did for the escape-only one.
+   bold/emphasis/code spans, links, https/http images, lists, blockquotes, rules
+   and fenced code blocks, while every input byte still flows through
+   [escape_byte]/[escape_url_byte] and all emitted tags are fixed literals, so
+   the T1 escaping discipline holds for the new renderer exactly as it did for
+   the escape-only one.
 
    Reuses StringLib.v (string primitives) and MimeLib.v / MimeBuild.v (header /
    body split, boundary extraction, multipart split, part-filename, terminator
@@ -259,11 +260,11 @@ Fixpoint find_rparen (s : string) (pos : int) (fuel : nat) : int :=
 
 (* ---- Inline renderer ------------------------------------------------ *)
 (* Render the inline markdown of one line: escapes every byte, and expands
-   **bold**, *italic*, `code` and [text](url) to fixed-literal tags whose
-   CONTENT is escaped by [escape_run] (URLs included).  Unmatched delimiters
-   stay literal.  No nesting (span content is escaped flat) so the whole
-   function is tail-recursive — one frame per byte, TCO-able by em++ -O2, and
-   fuel-bounded. *)
+   **bold**, *italic*, `code`, [text](url) and ![alt](http(s)://...) to
+   fixed-literal tags whose CONTENT is escaped by [escape_run] (URLs included).
+   Relative image refs stay bang+link.  Unmatched delimiters stay literal.
+   No nesting (span content is escaped flat) so the whole function is
+   tail-recursive — one frame per byte, TCO-able by em++ -O2, and fuel-bounded. *)
 Fixpoint md_inline_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
   let n := PrimString.length s in
   match fuel with
@@ -300,6 +301,35 @@ Fixpoint md_inline_aux (s : string) (pos : int) (fuel : nat) (acc : string) : st
             md_inline_aux s (add closer 1%int63) f'
               (cat acc (cat "<code>"
                  (cat (escape_run s (add pos 1%int63) closer f' "") "</code>")))
+        else if int_eqb c 33%int63 then (* '!' — ![alt](http(s)://url) *)
+          if andb (ltb (add pos 1%int63) n)
+                  (int_eqb (PrimString.get s (add pos 1%int63)) 91%int63)
+          then
+            let lb := add pos 1%int63 in
+            let dm := find_rbracket s (add lb 1%int63) f' in
+            let has_open := andb (ltb dm n) (ltb (add dm 1%int63) n) in
+            let is_bang_link := andb has_open
+               (int_eqb (PrimString.get s (add dm 1%int63)) 40%int63) in
+            if is_bang_link then
+              let url_start := add dm 2%int63 in
+              let rp := find_rparen s url_start f' in
+              if leb n rp then
+                md_inline_aux s (add pos 1%int63) f' (cat acc "!")
+              else
+                let url := PrimString.sub s url_start (sub rp url_start) in
+                if orb (starts_with url "https://") (starts_with url "http://")
+                then
+                  md_inline_aux s (add rp 1%int63) f'
+                    (cat acc (cat "<img src='"
+                       (cat (escape_url_run s url_start rp f' "")
+                         (cat "' alt='"
+                           (cat (escape_run s (add lb 1%int63) dm f' "") "'>")))))
+                else
+                  md_inline_aux s (add pos 1%int63) f' (cat acc "!")
+            else
+              md_inline_aux s (add pos 1%int63) f' (cat acc "!")
+          else
+            md_inline_aux s (add pos 1%int63) f' (cat acc "!")
         else if int_eqb c 91%int63 then (* [text](url) *)
           let dm := find_rbracket s (add pos 1%int63) f' in
           let has_open := andb (ltb dm n) (ltb (add dm 1%int63) n) in
@@ -332,7 +362,8 @@ Definition md_slice (s : string) (a b : int) : string :=
 
 (* ---- Inline stripper (plain text, for the canvas path) -------------- *)
 (* Drop the markdown delimiters so the Verified-Reader canvas reads cleanly:
-   **bold** -> bold, *em* -> em, `code` -> code, [label](url) -> label.
+   **bold** -> bold, *em* -> em, `code` -> code, [label](url) -> label,
+   ![alt](http(s)://...) -> (dropped; photos live in #real-body).
    Same scanners as [md_inline_aux]; emits RAW bytes (no HTML escaping).
    Tail-recursive, fuel-bounded. *)
 Fixpoint md_strip_aux (s : string) (pos : int) (fuel : nat) (acc : string) : string :=
@@ -367,6 +398,29 @@ Fixpoint md_strip_aux (s : string) (pos : int) (fuel : nat) (acc : string) : str
           else
             md_strip_aux s (add closer 1%int63) f'
               (cat acc (md_slice s (add pos 1%int63) closer))
+        else if int_eqb c 33%int63 then (* '!' — drop https/http images *)
+          if andb (ltb (add pos 1%int63) n)
+                  (int_eqb (PrimString.get s (add pos 1%int63)) 91%int63)
+          then
+            let lb := add pos 1%int63 in
+            let dm := find_rbracket s (add lb 1%int63) f' in
+            let has_open := andb (ltb dm n) (ltb (add dm 1%int63) n) in
+            let is_bang_link := andb has_open
+               (int_eqb (PrimString.get s (add dm 1%int63)) 40%int63) in
+            if is_bang_link then
+              let url_start := add dm 2%int63 in
+              let rp := find_rparen s url_start f' in
+              if leb n rp then
+                md_strip_aux s (add pos 1%int63) f' (cat acc "!")
+              else
+                let url := PrimString.sub s url_start (sub rp url_start) in
+                if orb (starts_with url "https://") (starts_with url "http://")
+                then md_strip_aux s (add rp 1%int63) f' acc
+                else md_strip_aux s (add pos 1%int63) f' (cat acc "!")
+            else
+              md_strip_aux s (add pos 1%int63) f' (cat acc "!")
+          else
+            md_strip_aux s (add pos 1%int63) f' (cat acc "!")
         else if int_eqb c 91%int63 then (* [label](url) *)
           let dm := find_rbracket s (add pos 1%int63) f' in
           let has_open := andb (ltb dm n) (ltb (add dm 1%int63) n) in
