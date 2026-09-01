@@ -1,7 +1,7 @@
 Subject: ...
 MIME-Version: 1.0
 Public-Keys: *
-Signature: 2cd6c4efa8ce09c5c24ec8c0bcaf879095897236872ea7cffc878cab06b4625a9fa7a3b645c0b66f714c044a3f9814cce3790dd9f2afea292aa5ace2850edc6e
+Signature: fa4912d135c91fefe972912034e3f5e3acf576bf229d710fdc366b7002b470fa3b5687049b6b11b3bb8b3e073113a3e2e72468eece2e8dc61dcee9d3cca80792
 Signing-Key: 04357cb095d52a7609d987a64545575154990273525bcd7deeb1d4d2486bc1f03b291292d8ab4e914c2a67668dfcd29d9108a108a1f6c0a2361c9617b88df8d967
 Content-Type: multipart/hpke+wrapped; boundary="=_cb_outer_0_="
 
@@ -30,7 +30,7 @@ slug: neusiedlersee
 recipients: *
 ---
 
-![](https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:6ktbmp6qpb6azldg4bk5lzxi/bafkreih5zczkwypzgts6wymxwjpq6ztmnkdywoyvjsij6s62mybcxixrcq) ![](https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:6ktbmp6qpb6azldg4bk5lzxi/bafkreibgbffg6eqifkq3wuhourqnj3p3jxfy34eyl5otyol7gls75emcuy)
+![](https://wklm.online/static/neusiedlersee-1.webp) ![](https://wklm.online/static/neusiedlersee-2.webp)
 --=_cb_inner_0_=--
 
 --=_cb_outer_0_=--

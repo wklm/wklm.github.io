@@ -23,6 +23,7 @@ while IFS= read -r f; do
     .githooks/*|.vscode/*|.devcontainer/*) ;;               # hook / editor / devcontainer config
     tests/e2e/*.ts|tests/e2e/*.mjs|playwright.config.ts) ;; # Playwright e2e harness (TS/MJS required)
     static/*.mjs|static/*.wasm) ;;                          # WASM build artifacts (Crane-extracted, em++-linked)
+    static/*.webp|static/*.jpg|static/*.jpeg|static/*.png) ;; # public post image data (not behavioral logic)
     *)
       [ "$rc" = 0 ] && echo "R8 single-source contract violation — non-.v file(s) outside the allowlist:" >&2
       echo "  $f" >&2
