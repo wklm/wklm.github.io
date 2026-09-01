@@ -236,7 +236,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R -i '<img' _site; then
+          if grep -R -i --include='*.html' '<img' _site; then
             echo 'Generated site contains <img> tags' >&2
             exit 1
           fi

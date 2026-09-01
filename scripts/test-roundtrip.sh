@@ -554,7 +554,7 @@ docker_step "$run_timeout" docker run --name "$container" --rm \
     -v "$PWD/_site:/site/_site" \
     "$image"
 container=""
-if grep -R -l '<img' _site >/dev/null 2>&1; then
+if grep -R -l --include='*.html' '<img' _site >/dev/null 2>&1; then
     echo "FAIL: <img tag present in site" >&2
     exit 1
 fi

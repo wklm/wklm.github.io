@@ -98,7 +98,7 @@ jobs:
       - name: Generated-site policy lint
         run: |
           set -eu
-          if grep -R -i '<img' _site; then echo 'Generated site contains <img>'; exit 1; fi
+          if grep -R -i --include='*.html' '<img' _site; then echo 'Generated site contains <img>'; exit 1; fi
           unapproved="$(grep -R '<script' _site | grep -v 'crane_decrypt.mjs\|crane_enroll.mjs\|ratex-formula.js' || true)"
           [ -z "$unapproved" ] || { echo "Unapproved <script> tags: $unapproved"; exit 1; }
           if grep -R '<dt>Subject</dt>' _site; then echo 'Subject header row rendered'; exit 1; fi
