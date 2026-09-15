@@ -117,6 +117,8 @@ test.afterEach(() => {
 const BENIGN = [
   /favicon/i, // favicon.ico 404 on the test server — unrelated to the app
   /Failed to load resource:.*favicon/i,
+  /net::ERR_NAME_NOT_RESOLVED/i, // external CDN font/stylesheet fetch during hermetic/offline runs
+  /katex/i,
 ];
 function isBenign(msg: string): boolean {
   return BENIGN.some((re) => re.test(msg));

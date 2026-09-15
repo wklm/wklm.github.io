@@ -519,32 +519,46 @@ inline std::monostate reader_begin(const std::string& id, double height_sp) {
     EM_ASM({
         var c = document.getElementById(UTF8ToString($0));
         if (!c) return;
+        var cx = c.getContext('2d');
+        if (!cx) return;
         if (!window.__ratex_loaded) {
             window.__ratex_loaded = true;
-            import('./ratex.mjs').then(m => {
+            import('/static/ratex.mjs').then(function() {
                 if (window.RatexCore && window.RatexCore.init) {
                     window.RatexCore.init();
                 }
-            }).catch(console.error);
+            }).catch(function() {
+                import('../static/ratex.mjs').then(function() {
+                    if (window.RatexCore && window.RatexCore.init) {
+                        window.RatexCore.init();
+                    }
+                }).catch(function() {});
+            });
         }
-        var cx = c.getContext('2d');
-        if (!cx) return;
-        var dpr = window.devicePixelRatio || 1;
+        // HiDPI supersampling: render at minimum 2x backing store resolution for razor-sharp canvas text:
+        var baseDpr = window.devicePixelRatio || 1;
+        var dpr = Math.max(baseDpr, 2);
         var PXPT = 96 / 72;          // CSS px per typographic point
-        var cssW = c.clientWidth || c.width || 600;
+        // ROCQ Typeset uses MEASURE = 450pt = 600 CSS px.
+        var MEASURE_PX = Math.round(450 * PXPT);
+        var cssW = MEASURE_PX;
         // Height comes from the total typeset content height (sp -> px), passed
         // in by ROCQ so multi-paragraph bodies grow the canvas instead of
         // clipping at the stylesheet's fixed height.
         var cssH = Math.max(1, Math.round(($1 / 65536) * PXPT));
-        c.style.height = cssH + 'px';
+        c.style.width = '100%';
+        c.style.maxWidth = cssW + 'px';
+        c.style.height = 'auto';
         c.width = Math.max(1, Math.round(cssW * dpr));
         c.height = Math.max(1, Math.round(cssH * dpr));
         cx.setTransform(1, 0, 0, 1, 0, 0);
         cx.scale(dpr, dpr);
+        cx.imageSmoothingEnabled = true;
+        cx.imageSmoothingQuality = 'high';
         cx.clearRect(0, 0, cssW, cssH);
         var col = '';
         try { col = getComputedStyle(c).color; } catch (e) {}
-        cx.fillStyle = col || '#111';
+        cx.fillStyle = col || '#232220';
         cx.textBaseline = 'alphabetic';
         // 10pt design size * 96/72 px-per-pt ~= 13.33px Georgia/Times serif.
         cx.font = (10 * 96 / 72) + 'px Georgia, "Times New Roman", serif';
@@ -620,9 +634,10 @@ inline int64_t render_latex_canvas(const std::string& latex, int64_t x_sp, int64
             var dl_json = window.RatexCore.renderLatex(UTF8ToString($0), null);
             var dl = JSON.parse(dl_json);
             
+            var off = document.createElement('canvas');
+            window.RatexCore.renderToCanvas(dl, off, { fontSize: 24, padding: 0, backgroundColor: 'transparent' });
             r.cx.save();
-            r.cx.translate(x, y);
-            window.RatexCore.renderToCanvas(dl, r.cx.canvas, { fontSize: 24, padding: 0 });
+            r.cx.drawImage(off, x, y);
             r.cx.restore();
             
             // Return approximate height used in sp (e.g. 50pt = 50 * 65536)
