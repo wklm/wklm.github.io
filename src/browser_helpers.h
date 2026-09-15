@@ -535,9 +535,7 @@ inline std::monostate reader_begin(const std::string& id, double height_sp) {
                 }).catch(function() {});
             });
         }
-        // HiDPI supersampling: render at minimum 2x backing store resolution for razor-sharp canvas text:
-        var baseDpr = window.devicePixelRatio || 1;
-        var dpr = Math.max(baseDpr, 2);
+        var dpr = window.devicePixelRatio || 1;
         var PXPT = 96 / 72;          // CSS px per typographic point
         // ROCQ Typeset uses MEASURE = 450pt = 600 CSS px.
         var MEASURE_PX = Math.round(450 * PXPT);
@@ -546,8 +544,8 @@ inline std::monostate reader_begin(const std::string& id, double height_sp) {
         // in by ROCQ so multi-paragraph bodies grow the canvas instead of
         // clipping at the stylesheet's fixed height.
         var cssH = Math.max(1, Math.round(($1 / 65536) * PXPT));
-        c.style.width = '100%';
-        c.style.maxWidth = cssW + 'px';
+        c.style.width = cssW + 'px';
+        c.style.maxWidth = '100%';
         c.style.height = 'auto';
         c.width = Math.max(1, Math.round(cssW * dpr));
         c.height = Math.max(1, Math.round(cssH * dpr));
@@ -555,14 +553,25 @@ inline std::monostate reader_begin(const std::string& id, double height_sp) {
         cx.scale(dpr, dpr);
         cx.imageSmoothingEnabled = true;
         cx.imageSmoothingQuality = 'high';
-        cx.clearRect(0, 0, cssW, cssH);
+        var bg = '';
+        try { bg = getComputedStyle(document.body).backgroundColor; } catch (e) {}
+        if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+            try { bg = getComputedStyle(document.documentElement).backgroundColor; } catch (e) {}
+        }
+        if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+            bg = '#faf8f5';
+        }
+        cx.fillStyle = bg;
+        cx.fillRect(0, 0, cssW, cssH);
         var col = '';
         try { col = getComputedStyle(c).color; } catch (e) {}
         cx.fillStyle = col || '#232220';
         cx.textBaseline = 'alphabetic';
         // 10pt design size * 96/72 px-per-pt ~= 13.33px Georgia/Times serif.
         cx.font = (10 * 96 / 72) + 'px Georgia, "Times New Roman", serif';
-        Module.__rdr = { cx: cx };
+        Module.__rdr = {};
+        Module.__rdr.cx = cx;
+        Module.__rdr.dpr = dpr;
     }, id.data(), height_sp);
     return std::monostate{};
 }
@@ -572,8 +581,12 @@ inline std::monostate reader_glyph(double x_sp, double y_sp, int cp) {
         var r = Module.__rdr;
         if (!r || !r.cx) return;
         var PXPT = 96 / 72;          // CSS px per typographic point
-        var x = ($0 / 65536) * PXPT; // sp -> pt -> px
-        var y = ($1 / 65536) * PXPT;
+        var dpr = r.dpr || (window.devicePixelRatio || 1);
+        var rawX = ($0 / 65536) * PXPT; // sp -> pt -> px
+        var rawY = ($1 / 65536) * PXPT;
+        // Snap pen to physical device pixels to prevent subpixel stem blurring
+        var x = Math.round(rawX * dpr) / dpr;
+        var y = Math.round(rawY * dpr) / dpr;
         // #4: fromCodePoint, not fromCharCode — $2 is a Unicode codepoint, and
         // fromCharCode would mangle anything outside the BMP (>0xFFFF) into a
         // lone/incorrect UTF-16 unit.

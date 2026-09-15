@@ -514,16 +514,16 @@ Definition stylesheet_decrypt : string :=
     "#decrypted-content:has(#real-body img) #reader-canvas{display:none}" ::
     "#decrypted-content:has(#real-body img) #real-body{position:static;width:auto;height:auto;margin:0 0 1rem;clip:auto;overflow:visible;white-space:normal}" ::
     (* Verified-Reader canvas: unified, crisp HiDPI canvas reading surface *)
-    "#reader-canvas{display:block;width:100%;max-width:37.5rem;height:auto;margin:0 auto 1.5rem;color:var(--ink);border-radius:2px;animation:reader-resolve .7s ease-out both}" ::
+    "#reader-canvas{display:block;width:100%;max-width:37.5rem;height:auto;margin:0 auto 1.5rem;color:var(--ink);background:var(--paper);border-radius:2px;animation:reader-resolve .5s ease-out both}" ::
     (* #real-body kept in the DOM for accessibility but visually hidden (the
        canvas is the visual surface).  Standard clip-rect sr-only — textContent
        stays readable to assistive tech AND to the e2e text assertion. *)
     ".sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}" ::
-    (* decrypt-resolve: the content + canvas fade/blur in when revealed (the
-       ciphertext->set-prose moment).  Pure presentation; the canvas backing
-       store is painted synchronously, so getImageData (e2e) is unaffected. *)
+    (* decrypt-resolve: the content + canvas fade in smoothly when revealed.
+       Pure presentation; the canvas backing store is painted synchronously,
+       so getImageData (e2e) is unaffected. *)
     "@keyframes reader-fade{from{opacity:0}to{opacity:1}}" ::
-    "@keyframes reader-resolve{from{opacity:0;filter:blur(6px)}to{opacity:1;filter:blur(0)}}" ::
+    "@keyframes reader-resolve{from{opacity:0}to{opacity:1}}" ::
     (* a11y comfortable-spacing toggle (pure CSS).  Hide the raw checkbox; style
        the label as a button; when checked, hide the canvas and reveal #real-body
        as full-flow text with Zorzi-style increased letter/word spacing. *)
