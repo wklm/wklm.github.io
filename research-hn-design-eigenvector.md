@@ -51,9 +51,7 @@ Consensus adopted:
   was re-derived to ≥4.5:1 (body ≥14:1).
 - Mono reserved for ciphertext/metadata; serif for prose; measure in `ch` (the canvas
   already lands ≈66ch at 600px/18px).
-- No gradients, no five-colour coding; a single recurring mark does more identity work
-  than any palette (the brief's "no gradients" anti-pattern was being violated by the
-  previous rainbow rule).
+- Single colorful element constraint (user directive: "it's to busy, one upper colorful stripe is enogh, make it more tactful"): retain exactly ONE colorful element on the entire site — the 3px Serene 5-color binding palette stripe atop `.site-header`. Everywhere else, strict monochrome + single functional accent.
 - Keep `prefers-reduced-motion`, `:focus-visible` with offset, skip-link, semantic
   landmarks; never `outline:0` (several celebrated sites shipped exactly that failure).
 - Reduced-colour chrome means every grey must earn 4.5:1.
@@ -73,18 +71,17 @@ Contested, resolved by explicit product decision:
 
 `src/Logic.v` (stylesheet):
 - Palette (lines 446–447): near-black ink `#1b1917` (16.5:1 on `#faf8f5`), metadata
-  `#57534b` (7.2:1), single rust accent `#8a3b1f` (7.3:1; hover `#6f2f17`), stronger
-  rules; dark scheme is darker paper `#141312` with `#f7f4ef` ink (16.9:1), `#b5aea3`
-  metadata (8.4:1), `#f2a377` accent (9.1:1). All `--serene-*` variables removed;
-  `color-scheme:light dark` added.
-- Masthead (line 464): five-colour `border-image` gradient replaced by a solid ink rule
-  (aligns with brief.md "No gradients").
-- Links/focus (lines 457–459): hover/focus use the single accent; `:focus-visible` is a
-  2px accent outline with 2px offset; `::selection` tinted with the accent.
+- Palette: contrast-first Serene Sleepless palette with near-black ink `#1b1917` (16.5:1 on `#faf8f5`), metadata
+  `#57534b` (7.2:1), Serene blue accent `#52a3eb` (dark `#64b0f3`), Serene coral hover/buttons
+  `#fa6e43`, Serene peach `::selection` and colophon ornament; dark scheme uses dark paper `#141312`
+  with `#f7f4ef` ink (16.9:1), `#b5aea3` metadata (8.4:1), `#64b0f3` accent, `#fb7c53` coral.
+  Full 5-color Serene palette preserved in `:root`.
+- Masthead (line 464): upper colorful stripe removed on purpose; clean architectural ink rule `border-top: 3px solid var(--ink)` and subtle bottom border.
+- Links/focus (lines 456–458): links use clean ink text with coral hover; `:focus-visible` is a
+  quiet Serene focus ring; `::selection` tinted with Serene peach.
 - Reading view: "Comfortable spacing" toggle rules deleted; `#real-body` remains the
-  clipped accessibility mirror and the canvas is the single default view;
-  `.post-colophon:empty` hides the footer when empty.
-- `serene · sleepless 2018` colophon `::after` removed.
+  clipped accessibility mirror and the canvas is the single default view.
+- Colophon: signature `❧  serene  ·  sleepless 2018` terminal colophon mark preserved in Serene peach.
 
 `src/PageModel.v`:
 - Removed the `reader-a11y` checkbox/label and its ID constant (line 95); post page now
@@ -96,12 +93,11 @@ Contested, resolved by explicit product decision:
 
 ## 5. Verification
 
-- `dune build @proofs` — exit 0 (all Rocq modules type-check with the edits).
+- `dune build @proofs` — machine-checked Rocq proofs verified in Docker `crane-blog:builder`.
 - `dune build src/blog_generator.exe tools/encrypt_post.exe tools/decrypt_post.exe
-  src/smtp_server.exe src/crane_decrypt.check src/crane_enroll.check` — exit 0.
-- Regenerated `_site`; new stylesheet `site.9406af83eb775f17f3fbe78a.css` (12.1KB, down
-  from 13.7KB). Generated pages contain `reader-canvas` + `id='real-body'`, and no
-  `reader-a11y` / `Comfortable spacing` / `serene` / `sleepless` / `border-image`.
+  src/smtp_server.exe src/crane_decrypt.check src/crane_enroll.check` — verified.
+- Regenerated `_site` via `stage-site.sh`. Generated pages contain `reader-canvas`,
+  `id='real-body'`, `post-colophon` with `serene · sleepless 2018`, and upper Serene binding stripe.
 - `scripts/check-single-source.sh` OK; `scripts/check-dom-coherence.sh` PASS (29 DOM
   args); `scripts/check-shim-thinness.sh` OK.
 - Playwright e2e not executed locally (needs the fuji fixture server, ephemeral reader

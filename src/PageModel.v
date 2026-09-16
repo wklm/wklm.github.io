@@ -290,7 +290,7 @@ Definition rel_stylesheet_v (depth version : string) : string :=
   cat depth (cat "styles/site." (cat version ".css")).
 
 Definition rel_index_v (depth : string) : string :=
-  cat depth "index.html".
+  if string_eqb depth "" then "/" else depth.
 
 Definition serialize_page_shell (depth page_title body_class
                                   nav_label nav_href
@@ -352,7 +352,7 @@ Definition serialize_post_page (p : post_page) : string :=
       "<noscript><p class='decrypt-fallback'>To read, you need JavaScript enabled for client-side decryption.</p></noscript>" ::
       "<script type='module'>import M from '" :: pp_prefix p :: "static/crane_decrypt.mjs?v=" :: pp_version p :: "';M().then(function(m){m.callMain([]);});</script>" ::
       "</main>" :: nil) in
-  serialize_page_shell "../" public_subject "essay eml-page" "index" "../index.html"
+  serialize_page_shell "../" public_subject "essay eml-page" "index" "../"
                       (sign_key_meta (pp_sign_key p))
                       body (pp_version p).
 
@@ -403,7 +403,7 @@ Definition serialize_enroll_page (p : enroll_page) : string :=
       "</div>" ::
       "<script type='module'>import E from '" :: ep_prefix p :: "static/crane_enroll.mjs?v=" :: ep_version p :: "';E().then(function(m){m.callMain([]);});</script>" ::
       "</main>" :: nil) in
-  serialize_page_shell "../" "Reader Enrollment" "enroll-page" "index" "../index.html" "" body (ep_version p).
+  serialize_page_shell "../" "Reader Enrollment" "enroll-page" "index" "../" "" body (ep_version p).
 
 (* =================================================================== *)
 (* 8. Well-formedness theorems                                        *)
