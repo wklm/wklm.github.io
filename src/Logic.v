@@ -443,122 +443,113 @@ Definition enroll_dir_output_path (output_dir : string) : string :=
 Definition stylesheet_core : string :=
   concat_all (
     "@import url('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css');" ::
-    ":root{--paper:#faf8f5;--paper-card:#ffffff;--paper-subtle:#f4f0e8;--ink:#232220;--ink-light:#3d3a36;--muted:#7c7770;--rule:#e5dfd5;--rule-subtle:#eeeae3;--serene-blue:#52a3eb;--serene-lilac:#f2c4e2;--serene-coral:#fa6e43;--serene-peach:#f7c196;--serene-yellow:#fbc52d;--serene-charcoal:#232220;--accent:var(--serene-blue);--accent-hover:#3b8cd2;--btn-bg:var(--serene-coral);--btn-hover:#e55a2f;--btn-text:#ffffff;--focus-ring:0 0 0 3px rgba(82,163,235,0.45)}" ::
-    "@media (prefers-color-scheme: dark){:root{--paper:#1d1c1a;--paper-card:#242320;--paper-subtle:#2a2825;--ink:#f5f2ec;--ink-light:#ded9ce;--muted:#a0998f;--rule:#383531;--rule-subtle:#2e2c28;--serene-blue:#64b0f3;--serene-lilac:#f5cde6;--serene-coral:#fb7c53;--serene-peach:#f9cca6;--serene-yellow:#fcd048;--serene-charcoal:#171615;--accent:var(--serene-blue);--accent-hover:#82c0f7;--btn-bg:var(--serene-coral);--btn-hover:#fa6e43;--btn-text:#1d1c1a;--focus-ring:0 0 0 3px rgba(100,176,243,0.45)}}" ::
+    ":root{--paper:#faf8f5;--paper-card:#ffffff;--paper-subtle:#f5f0e6;--ink:#232220;--ink-light:#3d3a36;--muted:#7c7770;--rule:#e5dfd5;--rule-subtle:#eeeae3;--serene-blue:#52a3eb;--serene-lilac:#f2c4e2;--serene-coral:#fa6e43;--serene-peach:#f7c196;--serene-yellow:#fbc52d;--serene-charcoal:#232220;--accent:var(--serene-blue);--accent-hover:#3b8cd2;--btn-bg:var(--serene-coral);--btn-hover:#e55a2f;--btn-text:#ffffff;--focus-ring:0 0 0 3px rgba(82,163,235,0.45)}" ::
+    "@media (prefers-color-scheme: dark){:root{--paper:#1d1c1a;--paper-card:#242320;--paper-subtle:#272522;--ink:#f5f2ec;--ink-light:#ded9ce;--muted:#a0998f;--rule:#383531;--rule-subtle:#2e2c28;--serene-blue:#64b0f3;--serene-lilac:#f5cde6;--serene-coral:#fb7c53;--serene-peach:#f9cca6;--serene-yellow:#fcd048;--serene-charcoal:#171615;--accent:var(--serene-blue);--accent-hover:#82c0f7;--btn-bg:var(--serene-coral);--btn-hover:#fa6e43;--btn-text:#1d1c1a;--focus-ring:0 0 0 3px rgba(100,176,243,0.45)}}" ::
     "*,*::before,*::after{box-sizing:border-box}" ::
     "html{-webkit-text-size-adjust:100%;hanging-punctuation:first last}" ::
-    "body{margin:0;background:var(--paper);color:var(--ink);font:18px/1.62 Georgia,'Times New Roman',serif;font-variant-numeric:oldstyle-nums proportional-nums;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}" ::
-    "p{margin:0 0 1.2em;text-wrap:pretty;orphans:2;widows:2}" ::
-    "h1,h2,h3{font-weight:normal;line-height:1.25;text-wrap:balance;margin:1.8em 0 .5em;color:var(--ink)}" ::
-    "h1{font-size:1.85rem;margin-top:0;letter-spacing:-.01em}" ::
-    "h2{font-size:1.35rem}" ::
-    "h3{font-size:1.1rem;font-style:italic;color:var(--muted)}" ::
-    "a{color:var(--serene-blue);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:.22em;transition:color .15s ease,text-decoration-thickness .15s ease}" ::
-    "a:hover{color:var(--accent-hover);text-decoration-thickness:2px}" ::
+    "body{margin:0;background:var(--paper);color:var(--ink);font:18px/1.68 Georgia,'Times New Roman',serif;font-feature-settings:'kern' 1,'liga' 1,'onum' 1;font-variant-numeric:oldstyle-nums proportional-nums;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}" ::
+    "p{margin:0 0 1.4em;text-wrap:pretty;orphans:2;widows:2}" ::
+    "h1,h2,h3{font-weight:normal;line-height:1.22;text-wrap:balance;color:var(--ink)}" ::
+    "h1{font-size:2.15rem;margin:0 0 1.2rem;letter-spacing:-.02em}" ::
+    "h2{font-size:1.45rem;margin:2.2em 0 .6em;letter-spacing:-.01em}" ::
+    "h3{font-size:1.15rem;font-style:italic;color:var(--muted);margin:1.8em 0 .5em}" ::
+    "a{color:var(--serene-blue);text-decoration:underline;text-decoration-color:rgba(82,163,235,0.4);text-decoration-thickness:1.5px;text-underline-offset:.22em;transition:color .15s ease,text-decoration-color .15s ease}" ::
+    "a:hover{color:var(--accent-hover);text-decoration-color:var(--accent-hover)}" ::
     "a:focus-visible{outline:none;box-shadow:var(--focus-ring);border-radius:2px}" ::
     "time{font-variant-numeric:tabular-nums oldstyle-nums}" ::
     ".skip-link{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}" ::
     ".skip-link:focus{position:static;width:auto;height:auto;padding:.35rem .75rem;background:var(--serene-charcoal);color:var(--paper);border-radius:3px;box-shadow:var(--focus-ring)}" ::
-    ".page-shell{max-width:42rem;margin:0 auto;padding:2.5rem 1.5rem 5rem;position:relative}" ::
-    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:3.5rem;padding-top:1.2rem;border-top:4px solid transparent;border-image:linear-gradient(90deg,var(--serene-blue) 0%,var(--serene-blue) 20%,var(--serene-lilac) 20%,var(--serene-lilac) 40%,var(--serene-coral) 40%,var(--serene-coral) 60%,var(--serene-peach) 60%,var(--serene-peach) 80%,var(--serene-yellow) 80%,var(--serene-yellow) 100%) 1;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.85rem;letter-spacing:.03em}" ::
-    ".site-mark{text-decoration:none;font-weight:600;letter-spacing:.05em;color:var(--ink);transition:color .15s ease}" ::
+    ".page-shell{max-width:42rem;margin:0 auto;padding:0 1.5rem 6rem;position:relative}" ::
+    ".site-header{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:3.6rem;padding:1.4rem 0 1.1rem;border-top:3px solid transparent;border-image:linear-gradient(90deg,var(--serene-blue) 0%,var(--serene-blue) 20%,var(--serene-lilac) 20%,var(--serene-lilac) 40%,var(--serene-coral) 40%,var(--serene-coral) 60%,var(--serene-peach) 60%,var(--serene-peach) 80%,var(--serene-yellow) 80%,var(--serene-yellow) 100%) 1;border-bottom:1px solid var(--rule-subtle);font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif}" ::
+    ".site-mark{text-decoration:none;font-weight:600;font-size:.95rem;letter-spacing:.06em;color:var(--ink);transition:color .15s ease}" ::
     ".site-mark:hover{color:var(--serene-coral);text-decoration:none}" ::
-    ".site-nav a{color:var(--muted);text-decoration:none;transition:color .15s ease}" ::
-    ".site-nav a:hover{color:var(--serene-coral);text-decoration:underline}" ::
-    ".post-header{margin-bottom:2.2rem}" ::
-    ".post-header h1{margin:.2em 0 0;font-size:1.85rem}" ::
-    ".post-meta{margin:0;color:var(--muted);font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.82rem;letter-spacing:.03em}" ::
-    ".eml-body{margin:1.4em 0 0;padding:1.25rem 1.4rem;background:var(--paper-subtle);color:var(--ink);border:1px solid var(--rule);border-left:3px solid var(--serene-peach);border-radius:4px;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.74rem;line-height:1.55;box-shadow:0 1px 3px rgba(0,0,0,0.03)}" ::
-    ".index .posts{list-style:none;padding:0;margin:0}" ::
-    ".index .posts li{margin:.5em 0;padding:.45em 0;border-bottom:1px dashed var(--rule-subtle);display:flex;align-items:baseline;justify-content:space-between;transition:background-color .15s ease}" ::
-    ".index .posts a{color:var(--ink);text-decoration:none;transition:color .15s ease,padding-left .15s ease}" ::
-    ".index .posts a:hover{color:var(--serene-coral);text-decoration:none;padding-left:4px}" ::
-    ".inbox-subject{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.76rem;letter-spacing:.02em}" ::
-    "@media (max-width:34rem){.page-shell{padding:1.5rem 1rem 3.5rem}.site-header{margin-bottom:2.2rem}.index .posts li{margin:.7em 0}}" ::
+    ".site-nav a{color:var(--muted);font-size:.78rem;font-weight:500;letter-spacing:.08em;text-transform:uppercase;text-decoration:none;padding-bottom:2px;border-bottom:1.5px solid transparent;transition:all .15s ease}" ::
+    ".site-nav a:hover{color:var(--serene-blue);border-bottom-color:var(--serene-blue);text-decoration:none}" ::
+    ".post-header{margin-bottom:2.4rem}" ::
+    ".post-header h1{margin:.2em 0 0;font-size:2rem}" ::
+    ".post-meta{margin:0;color:var(--muted);font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.78rem;font-weight:500;letter-spacing:.06em;text-transform:uppercase}" ::
+    ".eml-body{margin:1.6em 0 0;padding:1.35rem 1.6rem;background:var(--paper-subtle);color:var(--ink);border:1px solid var(--rule);border-left:3px solid var(--serene-peach);border-radius:5px;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.74rem;line-height:1.58;box-shadow:0 1px 4px rgba(0,0,0,0.02)}" ::
+    ".index::before{content:'DISPATCHES';display:block;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.72rem;font-weight:600;letter-spacing:.12em;color:var(--muted);margin-bottom:1.2rem}" ::
+    ".index .posts{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}" ::
+    ".index .posts li{margin:0;padding:.95rem .8rem;border-bottom:1px solid var(--rule-subtle);display:flex;align-items:center;justify-content:space-between;gap:1rem;border-radius:4px;transition:background-color .15s ease,border-color .15s ease,padding-left .15s ease}" ::
+    ".index .posts li:hover{background-color:var(--paper-subtle);border-bottom-color:var(--rule);padding-left:1.1rem}" ::
+    ".index .posts a{display:inline-flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.84rem;letter-spacing:.03em;font-weight:500;transition:color .15s ease}" ::
+    ".index .posts a::before{content:'•';color:var(--serene-peach);font-size:1.2em;line-height:1;transition:color .15s ease,transform .15s ease}" ::
+    ".index .posts li:hover a{color:var(--serene-coral);text-decoration:none}" ::
+    ".index .posts li:hover a::before{color:var(--serene-coral);transform:scale(1.3)}" ::
+    ".inbox-subject{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.84rem;letter-spacing:.03em}" ::
+    "@media (max-width:34rem){.page-shell{padding:0 1rem 3.5rem}.site-header{margin-bottom:2.2rem}.index .posts li{padding:.85rem .5rem}}" ::
     "@media print{.site-nav{display:none}body{background:#fff;color:#000}a{text-decoration:none;color:#000}}" :: nil).
 
 Definition stylesheet_decrypt : string :=
   concat_all (
-    "#decrypt-ui{margin:2.5rem 0;padding:1.2rem 1.4rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:5px;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.84rem}" ::
-    ".decrypt-hint{color:var(--muted);margin-bottom:.85rem;line-height:1.5}" ::
-    "#decrypt-button{margin-top:.35rem;padding:.45rem 1.25rem;font-family:inherit;font-size:.84rem;font-weight:500;border:none;border-radius:3px;background:var(--btn-bg);color:var(--btn-text);cursor:pointer;box-shadow:0 2px 6px rgba(250,110,67,0.28);transition:background-color .15s ease,transform .1s ease}" ::
-    "#decrypt-button:hover{background:var(--btn-hover);transform:translateY(-1px)}" ::
-    "#decrypt-button:active{transform:translateY(0)}" ::
+    ".inbox-status{display:inline-flex;align-items:center;gap:.35rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.68rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:.22rem .65rem;border-radius:12px;background:var(--paper-card);border:1px solid var(--rule);white-space:nowrap}" ::
+    ".inbox-status::after{content:'encrypted';color:var(--muted)}" ::
+    ".inbox-status::before{content:'●';color:var(--serene-yellow);font-size:.8em;margin-right:.25rem}" ::
+    ".inbox-status.unlocked{border-color:rgba(250,110,67,0.4);background:rgba(250,110,67,0.08)}" ::
+    ".inbox-status.unlocked::after{content:'unlocked';color:var(--serene-coral);font-weight:600}" ::
+    ".inbox-status.unlocked::before{content:'✓';color:var(--serene-coral);font-size:.8em;margin-right:.25rem}" ::
+    ".inbox-status-msg{color:var(--muted);font-size:.82rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif}" ::
+    "#decrypt-ui{margin:2.8rem 0;padding:1.4rem 1.6rem;background:var(--paper-subtle);border:1px solid var(--rule);border-left:3px solid var(--serene-coral);border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.86rem;box-shadow:0 2px 8px rgba(0,0,0,0.02)}" ::
+    ".decrypt-hint{color:var(--muted);margin:0 0 1rem;line-height:1.55}" ::
+    "#decrypt-button{padding:.55rem 1.5rem;font-family:inherit;font-size:.86rem;font-weight:600;letter-spacing:.03em;border:none;border-radius:4px;background:var(--btn-bg);color:var(--btn-text);cursor:pointer;box-shadow:0 2px 6px rgba(250,110,67,0.32);transition:background-color .15s ease,transform .12s ease,box-shadow .15s ease}" ::
+    "#decrypt-button:hover{background:var(--btn-hover);transform:translateY(-1px);box-shadow:0 4px 12px rgba(250,110,67,0.42)}" ::
+    "#decrypt-button:active{transform:translateY(1px);box-shadow:0 1px 3px rgba(250,110,67,0.3)}" ::
     "#decrypt-button:focus-visible{outline:none;box-shadow:var(--focus-ring)}" ::
-    "#decrypt-status{margin-top:.5rem;color:var(--muted);font-size:.82rem}" ::
-    "#clear-key-button{display:none;margin-top:.5rem;margin-left:.5rem;padding:.45rem 1rem;font-family:inherit;font-size:.84rem;border:1px solid var(--rule);background:var(--paper);color:var(--muted);border-radius:3px;cursor:pointer;transition:color .15s ease,border-color .15s ease}" ::
+    "#decrypt-status{margin-top:.75rem;color:var(--muted);font-size:.82rem;line-height:1.4}" ::
+    "#clear-key-button{display:none;margin-top:.6rem;margin-left:.6rem;padding:.5rem 1rem;font-family:inherit;font-size:.84rem;border:1px solid var(--rule);background:var(--paper);color:var(--muted);border-radius:4px;cursor:pointer;transition:color .15s ease,border-color .15s ease}" ::
     "#clear-key-button:hover{color:var(--ink);border-color:var(--muted)}" ::
-    (* :empty so the error auto-shows the moment ROCQ sets its textContent and
-       stays hidden while empty (the success path leaves it empty).  The decrypt
-       app only ever sets #decrypt-error's TEXT (dom_set_text), never its
-       display — so visibility MUST be driven by content here, not by a
-       dom_show.  Was `.decrypt-error{display:none}`, which hid it
-       unconditionally => every decrypt failure was silent. *)
-    ".decrypt-error{margin-top:.6rem;color:#d9432e;font-size:.84rem;font-weight:500}" ::
+    "(* :empty so the error auto-shows the moment ROCQ sets its textContent and" ::
+    "   stays hidden while empty (the success path leaves it empty). *)" ::
+    ".decrypt-error{margin-top:.75rem;color:#d9432e;font-size:.84rem;font-weight:500}" ::
     ".decrypt-error:empty{display:none}" ::
     ".decrypt-fallback{color:var(--muted);font-size:.84rem}" ::
-    "#decrypted-content{display:none;margin-top:2.5rem;animation:reader-fade .5s ease-out both}" ::
-    "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.62;color:var(--ink)}" ::
+    "#decrypted-content{display:none;margin-top:2.8rem;animation:reader-fade .5s ease-out both}" ::
+    "#real-body{font-family:Georgia,'Times New Roman',serif;font-size:1.125rem;line-height:1.68;color:var(--ink)}" ::
     "#real-body h1,#real-body h2,#real-body h3{font-family:Georgia,'Times New Roman',serif;font-weight:normal;color:var(--ink)}" ::
-    "#real-body blockquote{margin:1.5em 0;padding:.6em 1.2em;border-left:3px solid var(--serene-coral);background:var(--paper-subtle);border-radius:0 4px 4px 0;color:var(--ink-light);font-style:italic}" ::
+    "#real-body blockquote{margin:1.8em 0;padding:.8em 1.4em;border-left:3px solid var(--serene-coral);background:var(--paper-subtle);border-radius:0 6px 6px 0;color:var(--ink-light);font-style:italic;font-size:1.05em;line-height:1.6}" ::
     "#real-body code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.88em;background:var(--paper-subtle);border:1px solid var(--rule-subtle);padding:.15em .35em;border-radius:3px}" ::
-    "#real-body pre code{display:block;padding:1rem;overflow-x:auto;border-left:3px solid var(--serene-blue);border-radius:4px}" ::
-    "#real-body ul,#real-body ol{padding-left:1.5rem;margin:1em 0}" ::
-    "#real-body li{margin:.35em 0}" ::
-    "#real-body img{max-width:100%;height:auto;border-radius:3px}" ::
-    (* Photo pair: break out of the 36rem literary column so two landscape
-       images are readable side by side, not ~260px thumbnails. *)
+    "#real-body pre code{display:block;padding:1.1rem;overflow-x:auto;border-left:3px solid var(--serene-blue);border-radius:5px}" ::
+    "#real-body ul,#real-body ol{padding-left:1.5rem;margin:1.2em 0}" ::
+    "#real-body li{margin:.45em 0}" ::
+    "#real-body img{max-width:100%;height:auto;border-radius:4px}" ::
     "#real-body p:has(> img){display:flex;gap:1.25rem;align-items:flex-start;width:min(calc(100vw - 2.5rem),90rem);max-width:none;position:relative;left:50%;transform:translateX(-50%);margin:0}" ::
     "#real-body p:has(> img) img{flex:1 1 0;min-width:0;max-width:none;width:50%;height:auto;object-fit:contain}" ::
     "@media (max-width:40rem){#real-body p:has(> img){flex-direction:column;width:100%;left:auto;transform:none}#real-body p:has(> img) img{width:100%}}" ::
     "#decrypted-content:has(#real-body img) #reader-canvas{display:none}" ::
     "#decrypted-content:has(#real-body img) #real-body{position:static;width:auto;height:auto;margin:0 0 1rem;clip:auto;overflow:visible;white-space:normal}" ::
-    (* Verified-Reader canvas: unified, crisp HiDPI canvas reading surface *)
-    "#reader-canvas{display:block;width:100%;max-width:37.5rem;height:auto;margin:0 auto 1.5rem;color:var(--ink);background:var(--paper);border-radius:2px;animation:reader-resolve .5s ease-out both}" ::
-    (* #real-body kept in the DOM for accessibility but visually hidden (the
-       canvas is the visual surface).  Standard clip-rect sr-only — textContent
-       stays readable to assistive tech AND to the e2e text assertion. *)
+    "#reader-canvas{display:block;width:100%;max-width:37.5rem;height:auto;margin:0 auto 1.8rem;color:var(--ink);background:var(--paper);border-radius:2px;animation:reader-resolve .5s ease-out both}" ::
     ".sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}" ::
-    (* decrypt-resolve: the content + canvas fade in smoothly when revealed.
-       Pure presentation; the canvas backing store is painted synchronously,
-       so getImageData (e2e) is unaffected. *)
     "@keyframes reader-fade{from{opacity:0}to{opacity:1}}" ::
     "@keyframes reader-resolve{from{opacity:0}to{opacity:1}}" ::
-    (* a11y comfortable-spacing toggle (pure CSS).  Hide the raw checkbox; style
-       the label as a button; when checked, hide the canvas and reveal #real-body
-       as full-flow text with Zorzi-style increased letter/word spacing. *)
     ".reader-a11y-toggle{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}" ::
-    ".reader-a11y-label{display:inline-block;margin:0 0 1.2rem;padding:.35rem .9rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.8rem;color:var(--muted);border:1px solid var(--rule);border-radius:3px;cursor:pointer;transition:all .15s ease}" ::
-    ".reader-a11y-label:hover{color:var(--ink);border-color:var(--serene-peach)}" ::
+    ".reader-a11y-label{display:inline-flex;align-items:center;gap:.4rem;margin:0 0 1.5rem;padding:.35rem .95rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.78rem;font-weight:500;letter-spacing:.04em;color:var(--muted);background:var(--paper);border:1px solid var(--rule);border-radius:20px;cursor:pointer;transition:all .15s ease;box-shadow:0 1px 2px rgba(0,0,0,0.02)}" ::
+    ".reader-a11y-label:hover{color:var(--ink);border-color:var(--serene-peach);transform:translateY(-1px)}" ::
     ".reader-a11y-toggle:focus-visible ~ .reader-a11y-label{outline:none;box-shadow:var(--focus-ring)}" ::
     "#reader-a11y:checked ~ .reader-a11y-label{background:var(--serene-charcoal);color:var(--paper);border-color:var(--serene-charcoal)}" ::
     "#reader-a11y:checked ~ #reader-canvas{display:none}" ::
     "#reader-a11y:checked ~ #real-body{position:static;width:auto;height:auto;margin:0 0 1rem;clip:auto;overflow:visible;white-space:normal;letter-spacing:.12em;word-spacing:.18em;line-height:1.8}" ::
-    ".post-colophon{margin-top:3.5rem;padding-top:1.2rem;border-top:1px solid var(--rule);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.68rem;color:var(--muted);white-space:pre-wrap;line-height:1.6}" ::
-    ".post-colophon::after{content:' ~ serene';display:block;font-style:italic;color:var(--serene-peach);margin-top:.4rem;letter-spacing:.08em}" ::
-    ".inbox-status::after{content:' ✉';color:var(--serene-yellow);font-size:.85em}" ::
-    ".inbox-status.unlocked::after{content:' 📜';color:var(--serene-coral);font-size:.85em}" ::
-    ".inbox-status-msg{color:var(--muted);font-size:.82rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif}" :: nil).
+    ".post-colophon{margin-top:4.5rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.74rem;color:var(--muted);white-space:pre-wrap;line-height:1.6;letter-spacing:.02em}" ::
+    ".post-colophon::after{content:'❧  serene  ·  sleepless 2018';display:block;font-family:Georgia,serif;font-style:italic;font-size:.82rem;color:var(--serene-peach);margin-top:.75rem;letter-spacing:.08em}" :: nil).
 
 Definition stylesheet_enroll : string :=
   concat_all (
-    (* Inbox enrollment call-to-action: a quiet link to /enroll/ (the inbox no
-       longer runs crane_enroll; see render_inbox_page). *)
-    ".enroll-cta{margin:2.5rem 0 1rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.84rem}" ::
-    ".enroll-link{color:var(--serene-blue);text-decoration:none;border-bottom:1px dotted var(--serene-blue);padding-bottom:1px;transition:all .15s ease}" ::
-    ".enroll-link:hover{color:var(--serene-coral);border-bottom-color:var(--serene-coral)}" ::
-    "#enroll-ui{margin:2rem 0;padding:1.2rem 1.4rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:5px}" ::
-    "#enroll-button{padding:.55rem 1.4rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.88rem;font-weight:500;border:none;background:var(--btn-bg);color:var(--btn-text);cursor:pointer;border-radius:4px;box-shadow:0 2px 6px rgba(250,110,67,0.28);transition:background-color .15s ease,transform .1s ease}" ::
-    "#enroll-button:hover{background:var(--btn-hover);transform:translateY(-1px)}" ::
-    "#enroll-button:active{transform:translateY(0)}" ::
+    ".enroll-cta{margin:3.5rem 0 1.5rem;padding:1.4rem 1.6rem;background:var(--paper-subtle);border:1px solid var(--rule);border-left:3px solid var(--serene-blue);border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.86rem;box-shadow:0 1px 4px rgba(0,0,0,0.02);display:flex;align-items:center;justify-content:space-between}" ::
+    ".enroll-link{display:inline-flex;align-items:center;gap:.4rem;color:var(--serene-blue);font-weight:500;text-decoration:none;border-bottom:1.5px solid rgba(82,163,235,0.4);padding-bottom:2px;transition:all .15s ease}" ::
+    ".enroll-link:hover{color:var(--serene-coral);border-bottom-color:var(--serene-coral);text-decoration:none}" ::
+    ".enroll-link::after{content:' →';font-weight:600}" ::
+    "#enroll-ui{margin:2.2rem 0;padding:1.5rem 1.8rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.02)}" ::
+    "#enroll-button{padding:.6rem 1.6rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.88rem;font-weight:600;letter-spacing:.03em;border:none;background:var(--btn-bg);color:var(--btn-text);cursor:pointer;border-radius:4px;box-shadow:0 2px 6px rgba(250,110,67,0.32);transition:background-color .15s ease,transform .12s ease,box-shadow .15s ease}" ::
+    "#enroll-button:hover{background:var(--btn-hover);transform:translateY(-1px);box-shadow:0 4px 12px rgba(250,110,67,0.42)}" ::
+    "#enroll-button:active{transform:translateY(1px);box-shadow:0 1px 3px rgba(250,110,67,0.3)}" ::
     "#enroll-button:focus-visible{outline:none;box-shadow:var(--focus-ring)}" ::
-    "#enroll-status{margin-top:.6rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.84rem;color:var(--muted)}" ::
-    "#enroll-result{margin:2rem 0;padding:1.2rem 1.4rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:5px}" ::
-    "#enroll-result code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.88rem;background:var(--paper);border:1px solid var(--rule);padding:.2rem .45rem;border-radius:3px;color:var(--serene-coral)}" ::
-    ".pubkey-display{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.72rem;line-height:1.5;background:var(--paper);padding:1rem;overflow-x:auto;word-break:break-all;border:1px solid var(--rule);border-left:3px solid var(--serene-blue);border-radius:3px;color:var(--ink)}" ::
-    ".enroll-note{color:var(--muted);font-size:.82rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;margin-top:1.5rem;line-height:1.5}" ::
-    "#enroll-existing{margin:2rem 0;padding:1.2rem 1.4rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:5px;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.84rem}" ::
-    "#enroll-existing-info{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.74rem;background:var(--paper);padding:.85rem;overflow-x:auto;border:1px solid var(--rule);border-radius:3px;color:var(--ink)}" :: nil).
+    "#enroll-status{margin-top:.75rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.84rem;color:var(--muted)}" ::
+    "#enroll-result{margin:2.2rem 0;padding:1.5rem 1.8rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:6px}" ::
+    "#enroll-result code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.88rem;background:var(--paper);border:1px solid var(--rule);padding:.2rem .5rem;border-radius:3px;color:var(--serene-coral);font-weight:500}" ::
+    ".pubkey-display{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.74rem;line-height:1.55;background:var(--paper);padding:1.1rem 1.25rem;overflow-x:auto;word-break:break-all;border:1px solid var(--rule);border-left:3px solid var(--serene-blue);border-radius:4px;color:var(--ink)}" ::
+    ".enroll-note{color:var(--muted);font-size:.82rem;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;margin-top:1.5rem;line-height:1.55}" ::
+    "#enroll-existing{margin:2.2rem 0;padding:1.5rem 1.8rem;background:var(--paper-subtle);border:1px solid var(--rule);border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:.84rem}" ::
+    "#enroll-existing-info{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:.74rem;background:var(--paper);padding:.95rem;overflow-x:auto;border:1px solid var(--rule);border-radius:4px;color:var(--ink)}" :: nil).
 
 Definition stylesheet : string :=
   cat stylesheet_core (cat stylesheet_decrypt stylesheet_enroll).
