@@ -92,7 +92,6 @@ Definition id_clear_key_button   := "clear-key-button".
 Definition id_decrypted_content  := "decrypted-content".
 Definition id_real_title         := "real-title".
 Definition id_real_meta          := "real-meta".
-Definition id_reader_a11y        := "reader-a11y".
 Definition id_reader_canvas      := "reader-canvas".
 Definition id_real_body          := "real-body".
 Definition id_real_images        := "real-images".
@@ -140,7 +139,7 @@ Definition post_page_ids : list string :=
   id_encrypted_shell :: id_ciphertext :: id_decrypt_ui ::
   id_decrypt_button :: id_decrypt_status :: id_decrypt_error ::
   id_clear_key_button :: id_decrypted_content :: id_real_title ::
-  id_real_meta :: id_reader_a11y :: id_reader_canvas ::
+  id_real_meta :: id_reader_canvas ::
   id_real_body :: id_real_images :: id_main :: nil.
 
 (* The inbox page shares #ciphertext (present in DOM, always empty on load)
@@ -345,8 +344,6 @@ Definition serialize_post_page (p : post_page) : string :=
       "</div>" ::
       "<article id='decrypted-content'>" ::
       "<header><h1 id='real-title'></h1><p id='real-meta'></p></header>" ::
-      "<input type='checkbox' id='reader-a11y' class='reader-a11y-toggle'>" ::
-      "<label for='reader-a11y' class='reader-a11y-label'>Comfortable spacing</label>" ::
       "<canvas id='reader-canvas' role='img' aria-label='Decrypted post body (rendered)'></canvas>" ::
       "<div id='real-body' class='sr-only'></div>" ::
       "<div id='real-images'></div>" ::
