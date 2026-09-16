@@ -1,7 +1,7 @@
 Subject: ...
 MIME-Version: 1.0
 Public-Keys: *
-Signature: fa4912d135c91fefe972912034e3f5e3acf576bf229d710fdc366b7002b470fa3b5687049b6b11b3bb8b3e073113a3e2e72468eece2e8dc61dcee9d3cca80792
+Signature: 39b706ddd3a2c6b9ba98464bf1c4eca71a1f519760b45878a74a31384fd92b5ba52b6fad55c9645d9a5dde87eb8e36b62fc02db89339cf32f0f334303ed8301e
 Signing-Key: 04357cb095d52a7609d987a64545575154990273525bcd7deeb1d4d2486bc1f03b291292d8ab4e914c2a67668dfcd29d9108a108a1f6c0a2361c9617b88df8d967
 Content-Type: multipart/hpke+wrapped; boundary="=_cb_outer_0_="
 
@@ -30,7 +30,7 @@ slug: neusiedlersee
 recipients: *
 ---
 
-![](https://wklm.online/static/neusiedlersee-1.webp) ![](https://wklm.online/static/neusiedlersee-2.webp)
+![](https://wklm.online/static/neusiedlersee-1.webp)
 --=_cb_inner_0_=--
 
 --=_cb_outer_0_=--
